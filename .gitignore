@@ -59,6 +59,17 @@ Desktop.ini
 logs/
 *.log.*
 
+# Secrets and Credentials
+service-key.json
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!vite.config.js
+ga4_token.json
+.env
+.env.*
+
 # Testing
 .pytest_cache/
 .coverage
