@@ -33,8 +33,10 @@ function AgencyAnalytics() {
   const [campaigns, setCampaigns] = useState([])
   const [selectedCampaign, setSelectedCampaign] = useState(null)
   const [rankings, setRankings] = useState([])
+  const [keywordRankings, setKeywordRankings] = useState([])
   const [campaignLinks, setCampaignLinks] = useState([])
   const [loading, setLoading] = useState(false)
+  const [loadingKeywords, setLoadingKeywords] = useState(false)
   const [error, setError] = useState(null)
   const theme = useTheme()
 
@@ -46,6 +48,7 @@ function AgencyAnalytics() {
   useEffect(() => {
     if (selectedCampaign) {
       loadRankings(selectedCampaign)
+      loadKeywordRankings(selectedCampaign)
     }
   }, [selectedCampaign])
 
@@ -75,6 +78,19 @@ function AgencyAnalytics() {
       setError(err.response?.data?.detail || 'Failed to load rankings')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadKeywordRankings = async (campaignId) => {
+    try {
+      setLoadingKeywords(true)
+      const response = await agencyAnalyticsAPI.getCampaignKeywordRankingSummaries(campaignId)
+      setKeywordRankings(response.summaries || [])
+    } catch (err) {
+      console.error('Failed to load keyword rankings:', err)
+      setKeywordRankings([])
+    } finally {
+      setLoadingKeywords(false)
     }
   }
 
@@ -258,6 +274,111 @@ function AgencyAnalytics() {
                         <TableCell align="right" sx={{ fontSize: '13px' }}>{formatNumber(row.ranking_average)}</TableCell>
                         <TableCell align="right" sx={{ fontSize: '13px' }}>{formatNumber(row.search_volume)}</TableCell>
                         <TableCell align="right" sx={{ fontSize: '13px' }}>{formatNumber(row.competition)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {selectedCampaign && (
+        <Card sx={{ mt: 3 }}>
+          <CardContent sx={{ p: 3 }}>
+            <Typography 
+              variant="h6" 
+              fontWeight={600} 
+              mb={3}
+              sx={{ fontSize: '18px' }}
+            >
+              Keyword Rankings
+            </Typography>
+
+            {loadingKeywords ? (
+              <Box display="flex" justifyContent="center" py={4}>
+                <CircularProgress size={32} thickness={4} />
+              </Box>
+            ) : keywordRankings.length === 0 ? (
+              <Alert severity="info" sx={{ borderRadius: 2 }}>
+                No keyword ranking data available for this campaign. Please sync Agency Analytics data first.
+              </Alert>
+            ) : (
+              <TableContainer component={Paper} sx={{ borderRadius: 2 }}>
+                <Table>
+                  <TableHead>
+                    <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.08) }}>
+                      <TableCell sx={{ fontWeight: 700, fontSize: '13px' }}>Keyword</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700, fontSize: '13px' }}>Google Ranking</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700, fontSize: '13px' }}>Google Mobile</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700, fontSize: '13px' }}>Google Local</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700, fontSize: '13px' }}>Bing Ranking</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700, fontSize: '13px' }}>Search Volume</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700, fontSize: '13px' }}>Competition</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700, fontSize: '13px' }}>Ranking Change</TableCell>
+                      <TableCell sx={{ fontWeight: 700, fontSize: '13px' }}>Latest Date</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {keywordRankings.map((row, idx) => (
+                      <TableRow 
+                        key={row.keyword_id || idx}
+                        sx={{
+                          '&:nth-of-type(odd)': {
+                            bgcolor: alpha(theme.palette.primary.main, 0.02),
+                          },
+                          '&:hover': {
+                            bgcolor: alpha(theme.palette.primary.main, 0.05),
+                          },
+                        }}
+                      >
+                        <TableCell sx={{ fontSize: '13px', fontWeight: 500 }}>
+                          {row.keyword_phrase || `Keyword ${row.keyword_id}`}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '13px' }}>
+                          {row.google_ranking !== null && row.google_ranking !== undefined 
+                            ? row.google_ranking 
+                            : 'N/A'}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '13px' }}>
+                          {row.google_mobile_ranking !== null && row.google_mobile_ranking !== undefined 
+                            ? row.google_mobile_ranking 
+                            : 'N/A'}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '13px' }}>
+                          {row.google_local_ranking !== null && row.google_local_ranking !== undefined 
+                            ? row.google_local_ranking 
+                            : 'N/A'}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '13px' }}>
+                          {row.bing_ranking !== null && row.bing_ranking !== undefined 
+                            ? row.bing_ranking 
+                            : 'N/A'}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '13px' }}>
+                          {formatNumber(row.search_volume)}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '13px' }}>
+                          {row.competition !== null && row.competition !== undefined 
+                            ? Number(row.competition).toFixed(2)
+                            : 'N/A'}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontSize: '13px' }}>
+                          {row.ranking_change !== null && row.ranking_change !== undefined ? (
+                            <Box display="flex" alignItems="center" justifyContent="flex-end" gap={0.5}>
+                              {row.ranking_change > 0 ? (
+                                <TrendingUpIcon sx={{ fontSize: 16, color: 'success.main' }} />
+                              ) : row.ranking_change < 0 ? (
+                                <TrendingDownIcon sx={{ fontSize: 16, color: 'error.main' }} />
+                              ) : null}
+                              {row.ranking_change > 0 ? '+' : ''}{formatNumber(row.ranking_change)}
+                            </Box>
+                          ) : 'N/A'}
+                        </TableCell>
+                        <TableCell sx={{ fontSize: '13px' }}>
+                          {formatDate(row.date)}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
