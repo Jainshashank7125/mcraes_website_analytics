@@ -5,10 +5,12 @@ supabase==2.0.3
 httpx>=0.24.0,<0.25.0
 pydantic>=2.5.2
 pydantic-settings==2.1.0
+email-validator>=2.0.0
 python-multipart
 sqlalchemy==2.0.23
 alembic==1.12.1
 psycopg[binary]==3.1.18
+psycopg2-binary==2.9.9  # Fallback for SQLAlchemy compatibility
 google-analytics-data>=0.18.0
 google-analytics-admin>=0.18.0
 google-auth>=2.23.0

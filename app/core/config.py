@@ -45,13 +45,15 @@ class Settings(BaseSettings):
         if self.SUPABASE_DB_URL:
             return self.SUPABASE_DB_URL
         # Otherwise, construct from individual components
-        # Use psycopg (psycopg3) driver - properly URL encode password
+        # Use standard postgresql:// format (SQLAlchemy will use psycopg2 or psycopg3)
+        # Properly URL encode password to handle special characters
         password = quote_plus(self.SUPABASE_DB_PASSWORD)
-        return f"postgresql+psycopg://{self.SUPABASE_DB_USER}:{password}@{self.SUPABASE_DB_HOST}:{self.SUPABASE_DB_PORT}/{self.SUPABASE_DB_NAME}"
+        return f"postgresql://{self.SUPABASE_DB_USER}:{password}@{self.SUPABASE_DB_HOST}:{self.SUPABASE_DB_PORT}/{self.SUPABASE_DB_NAME}"
     
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"  # Ignore extra environment variables (like VITE_API_BASE_URL which is frontend-only)
 
 settings = Settings()
 
