@@ -180,13 +180,14 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
     const top10Count = sortedPrompts.reduce((sum, [, count]) => sum + count, 0)
     const percentage = responses.length > 0 ? (top10Count / responses.length) * 100 : 0
     
-    // Use analytics month_over_month if available, otherwise simulate
-    const change = analytics?.month_over_month?.top10_prompt_percentage_change || 
-                   (Math.random() * 3 - 0.5).toFixed(1)
+    // COMMENTED OUT: Change calculation is assumed/calculated, not pulled from source
+    // const change = analytics?.month_over_month?.top10_prompt_percentage_change || 
+    //                (Math.random() * 3 - 0.5).toFixed(1)
     
     return {
       value: percentage.toFixed(1),
-      change: parseFloat(change)
+      // change: parseFloat(change) // COMMENTED OUT: Change is assumed/calculated
+      change: null // No change shown as it's not from source
     }
   }
 
@@ -195,12 +196,14 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
     if (!responses.length) return { value: 0, change: 0 }
     
     const total = responses.length
-    const change = analytics?.month_over_month?.search_volume_change || 
-                   (Math.random() * 25 + 10).toFixed(1)
+    // COMMENTED OUT: Change calculation is assumed/calculated, not pulled from source
+    // const change = analytics?.month_over_month?.search_volume_change || 
+    //                (Math.random() * 25 + 10).toFixed(1)
     
     return {
       value: total.toLocaleString(),
-      change: parseFloat(change)
+      // change: parseFloat(change) // COMMENTED OUT: Change is assumed/calculated
+      change: null // No change shown as it's not from source
     }
   }
 
@@ -210,12 +213,14 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
     
     const presence = analytics.brand_presence?.present || 0
     const percentage = responses.length > 0 ? (presence / responses.length) * 100 : 0
-    const change = analytics?.month_over_month?.visibility_change || 
-                   (Math.random() * 10 + 3).toFixed(1)
+    // COMMENTED OUT: Change calculation is assumed/calculated, not pulled from source
+    // const change = analytics?.month_over_month?.visibility_change || 
+    //                (Math.random() * 10 + 3).toFixed(1)
     
     return {
       value: percentage.toFixed(1),
-      change: parseFloat(change)
+      // change: parseFloat(change) // COMMENTED OUT: Change is assumed/calculated
+      change: null // No change shown as it's not from source
     }
   }
 
@@ -283,10 +288,13 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
         const presenceCount = item.responses.filter(r => r.brand_present === true).length
         const presence = responseCount > 0 ? (presenceCount / responseCount) * 100 : 0
         
-        // Calculate changes (simulated - in production, compare with previous period)
-        const presenceChange = parseFloat((Math.random() * 10 - 2).toFixed(1))
-        const citationsChange = Math.floor(Math.random() * 20 - 5)
-        const competitorsChange = Math.floor(Math.random() * 7 - 3)
+        // COMMENTED OUT: Change calculations are simulated/assumed, not pulled from source
+        // const presenceChange = parseFloat((Math.random() * 10 - 2).toFixed(1))
+        // const citationsChange = Math.floor(Math.random() * 20 - 5)
+        // const competitorsChange = Math.floor(Math.random() * 7 - 3)
+        const presenceChange = null // No change shown as it's not from source
+        const citationsChange = null // No change shown as it's not from source
+        const competitorsChange = null // No change shown as it's not from source
         
         // Get category from topics or generate from prompt text
         const category = prompt.topics?.[0] || 
@@ -562,7 +570,8 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
               >
                 {top10Prompt.value}%
               </Typography>
-              <Box display="flex" alignItems="center" gap={0.5}>
+              {/* COMMENTED OUT: Change calculation is assumed/calculated, not pulled from source */}
+              {/* <Box display="flex" alignItems="center" gap={0.5}>
                 {top10Prompt.change >= 0 ? (
                   <TrendingUpIcon sx={{ fontSize: 14, color: 'success.main' }} />
                 ) : (
@@ -585,7 +594,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
                 >
                   vs last month
                 </Typography>
-              </Box>
+              </Box> */}
             </CardContent>
           </Card>
         </Grid>
@@ -620,7 +629,8 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
               >
                 {searchVolume.value}
               </Typography>
-              <Box display="flex" alignItems="center" gap={0.5}>
+              {/* COMMENTED OUT: Change calculation is assumed/calculated, not pulled from source */}
+              {/* <Box display="flex" alignItems="center" gap={0.5}>
                 <TrendingUpIcon sx={{ fontSize: 14, color: 'success.main' }} />
                 <Typography 
                   variant="body2" 
@@ -639,7 +649,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
                 >
                   vs last month
                 </Typography>
-              </Box>
+              </Box> */}
             </CardContent>
           </Card>
         </Grid>
@@ -674,7 +684,8 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
               >
                 {visibility.value}%
               </Typography>
-              <Box display="flex" alignItems="center" gap={0.5}>
+              {/* COMMENTED OUT: Change calculation is assumed/calculated, not pulled from source */}
+              {/* <Box display="flex" alignItems="center" gap={0.5}>
                 {visibility.change >= 0 ? (
                   <TrendingUpIcon sx={{ fontSize: 14, color: 'success.main' }} />
                 ) : (
@@ -697,7 +708,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
                 >
                   vs last month
                 </Typography>
-              </Box>
+              </Box> */}
             </CardContent>
           </Card>
         </Grid>
@@ -886,7 +897,8 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
                           {insight.presence}%
                         </Typography>
                         <Box display="flex" alignItems="center" gap={0.5}>
-                          {insight.presenceChange >= 0 ? (
+                          {/* COMMENTED OUT: Change calculation is assumed/calculated, not pulled from source */}
+                          {/* {insight.presenceChange >= 0 ? (
                             <TrendingUpIcon sx={{ fontSize: 12, color: 'success.main' }} />
                           ) : (
                             <TrendingDownIcon sx={{ fontSize: 12, color: 'error.main' }} />
@@ -900,7 +912,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
                             }}
                           >
                             {insight.presenceChange >= 0 ? '+' : ''}{insight.presenceChange.toFixed(1)}%
-                          </Typography>
+                          </Typography> */}
                         </Box>
                       </Box>
                     </TableCell>
@@ -914,7 +926,8 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
                           {insight.citations}
                         </Typography>
                         <Box display="flex" alignItems="center" gap={0.5}>
-                          {insight.citationsChange >= 0 ? (
+                          {/* COMMENTED OUT: Change calculation is assumed/calculated, not pulled from source */}
+                          {/* {insight.citationsChange >= 0 ? (
                             <TrendingUpIcon sx={{ fontSize: 12, color: 'success.main' }} />
                           ) : (
                             <TrendingDownIcon sx={{ fontSize: 12, color: 'error.main' }} />
@@ -928,7 +941,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
                             }}
                           >
                             {insight.citationsChange >= 0 ? '+' : ''}{insight.citationsChange}
-                          </Typography>
+                          </Typography> */}
                         </Box>
                       </Box>
                     </TableCell>
@@ -941,13 +954,14 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
                         >
                           {insight.competitors} active
                         </Typography>
-                        <Typography 
+                        {/* COMMENTED OUT: Change calculation is assumed/calculated, not pulled from source */}
+                        {/* <Typography 
                           variant="caption" 
                           color="text.secondary"
                           sx={{ fontSize: '11px' }}
                         >
                           {insight.competitorsChange >= 0 ? '+' : ''}{insight.competitorsChange}
-                        </Typography>
+                        </Typography> */}
                       </Box>
                     </TableCell>
                     <TableCell sx={{ py: 2 }}>

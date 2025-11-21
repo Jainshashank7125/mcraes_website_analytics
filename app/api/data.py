@@ -964,17 +964,26 @@ async def get_reporting_dashboard(
                 logger.info(f"Fetching GA4 data for property {property_id}")
                 traffic_overview = await ga4_client.get_traffic_overview(property_id, start_date, end_date)
                 
-                # Get conversions data
-                conversions_data = await ga4_client.get_conversions(property_id, start_date, end_date)
-                total_conversions = sum(c.get("count", 0) for c in conversions_data) if conversions_data else 0
-                
-                # Get revenue from purchase events (if available)
-                # Revenue is typically stored in purchase event value
+                # Get conversions using the same metric as the chart (standard GA4 conversions metric)
+                # This ensures consistency between KPI block and chart
+                total_conversions = 0
                 revenue = 0
                 try:
                     from google.analytics.data_v1beta import BetaAnalyticsDataClient
-                    from google.analytics.data_v1beta.types import RunReportRequest, DateRange, Dimension, Metric
+                    from google.analytics.data_v1beta.types import RunReportRequest, DateRange, Metric
                     client = ga4_client._get_data_client()
+                    
+                    # Get conversions using the standard GA4 conversions metric (same as chart)
+                    conversions_request = RunReportRequest(
+                        property=f"properties/{property_id}",
+                        date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
+                        metrics=[Metric(name="conversions")],
+                    )
+                    conversions_response = client.run_report(conversions_request)
+                    if conversions_response.rows:
+                        total_conversions = float(conversions_response.rows[0].metric_values[0].value)
+                    
+                    # Get revenue from purchase events (if available)
                     revenue_request = RunReportRequest(
                         property=f"properties/{property_id}",
                         date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
@@ -984,15 +993,33 @@ async def get_reporting_dashboard(
                     if revenue_response.rows:
                         revenue = float(revenue_response.rows[0].metric_values[0].value)
                 except Exception as e:
-                    logger.warning(f"Could not fetch revenue: {str(e)}")
+                    logger.warning(f"Could not fetch conversions/revenue: {str(e)}")
                 
                 # Calculate previous period for change comparison
-                prev_start = (datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=60)).strftime("%Y-%m-%d")
-                prev_end = (datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                period_duration = (end_dt - start_dt).days + 1
+                prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
                 
                 prev_traffic_overview = await ga4_client.get_traffic_overview(property_id, prev_start, prev_end)
-                prev_conversions_data = await ga4_client.get_conversions(property_id, prev_start, prev_end)
-                prev_total_conversions = sum(c.get("count", 0) for c in prev_conversions_data) if prev_conversions_data else 0
+                
+                # Get previous period conversions using the same metric
+                prev_total_conversions = 0
+                try:
+                    from google.analytics.data_v1beta import BetaAnalyticsDataClient
+                    from google.analytics.data_v1beta.types import RunReportRequest, DateRange, Metric
+                    client = ga4_client._get_data_client()
+                    prev_conversions_request = RunReportRequest(
+                        property=f"properties/{property_id}",
+                        date_ranges=[DateRange(start_date=prev_start, end_date=prev_end)],
+                        metrics=[Metric(name="conversions")],
+                    )
+                    prev_conversions_response = client.run_report(prev_conversions_request)
+                    if prev_conversions_response.rows:
+                        prev_total_conversions = float(prev_conversions_response.rows[0].metric_values[0].value)
+                except Exception as e:
+                    logger.warning(f"Could not fetch previous period conversions: {str(e)}")
                 
                 users_change = 0
                 sessions_change = traffic_overview.get("sessionsChange", 0) if traffic_overview else 0
@@ -1121,17 +1148,13 @@ async def get_reporting_dashboard(
                 campaign_ids = [link["campaign_id"] for link in campaign_links]
                 
                 # Get keyword ranking summaries for all campaigns
-                total_impressions = 0
-                total_clicks = 0
+                # NOTE: Only using 100% accurate data from Agency Analytics source - no estimations
                 total_rankings = 0
                 ranking_sum = 0
                 total_search_volume = 0
                 total_ranking_change = 0
                 ranking_change_count = 0
                 
-                # Calculate impressions and clicks based on search volume and ranking position
-                # Impressions: estimated based on search volume and ranking (higher rank = more impressions)
-                # Clicks: estimated based on CTR by position (position 1-3: ~30%, 4-10: ~10%, 11-20: ~5%, etc.)
                 for campaign_id in campaign_ids:
                     # Query keyword ranking summaries filtered by date range
                     # Use the date column or end_date column to filter
@@ -1151,47 +1174,18 @@ async def get_reporting_dashboard(
                         ranking = summary.get("google_ranking") or summary.get("google_mobile_ranking") or 999
                         
                         if ranking <= 100:  # Only count keywords ranking in top 100
-                            # Estimate impressions: search volume * impression rate by position
-                            if ranking <= 3:
-                                impression_rate = 0.95  # 95% of searches see top 3
-                            elif ranking <= 10:
-                                impression_rate = 0.75  # 75% see top 10
-                            elif ranking <= 20:
-                                impression_rate = 0.50  # 50% see top 20
-                            else:
-                                impression_rate = 0.25  # 25% see beyond top 20
-                            
-                            estimated_impressions = search_volume * impression_rate
-                            total_impressions += estimated_impressions
-                            
-                            # Estimate clicks based on CTR by position
-                            if ranking <= 3:
-                                ctr = 0.30  # ~30% CTR for top 3
-                            elif ranking <= 10:
-                                ctr = 0.10  # ~10% CTR for positions 4-10
-                            elif ranking <= 20:
-                                ctr = 0.05  # ~5% CTR for positions 11-20
-                            else:
-                                ctr = 0.01  # ~1% CTR for positions 21+
-                            
-                            estimated_clicks = estimated_impressions * ctr
-                            total_clicks += estimated_clicks
-                            
-                            # Calculate average ranking
+                            # Calculate average ranking (100% from source data)
                             ranking_sum += ranking
                             total_rankings += 1
                             
-                            # Track search volume
+                            # Track search volume (100% from source data)
                             total_search_volume += search_volume
                             
-                            # Track ranking change if available
+                            # Track ranking change if available (100% from source data)
                             ranking_change = summary.get("ranking_change")
                             if ranking_change is not None:
                                 total_ranking_change += ranking_change
                                 ranking_change_count += 1
-                
-                # Calculate CTR
-                ctr_percentage = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
                 
                 # Calculate average keyword rank
                 avg_keyword_rank = (ranking_sum / total_rankings) if total_rankings > 0 else 0
@@ -1203,45 +1197,77 @@ async def get_reporting_dashboard(
                 prev_start = (datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=60)).strftime("%Y-%m-%d")
                 prev_end = (datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
                 
-                prev_total_impressions = 0
-                prev_total_clicks = 0
+                # Calculate previous period metrics for comparison
+                prev_total_rankings = 0
+                prev_ranking_sum = 0
+                prev_total_ranking_change = 0
+                prev_ranking_change_count = 0
                 prev_total_search_volume = 0
-                prev_avg_rank = 0
                 
-                # Calculate previous period metrics (simplified - would need historical data)
-                # For now, we'll use 0 change
+                for campaign_id in campaign_ids:
+                    prev_summaries_query = supabase.client.table("agency_analytics_keyword_ranking_summaries").select("*").eq("campaign_id", campaign_id)
+                    prev_summaries_query = prev_summaries_query.gte("date", prev_start).lte("date", prev_end)
+                    prev_summaries_result = prev_summaries_query.execute()
+                    prev_summaries = prev_summaries_result.data if hasattr(prev_summaries_result, 'data') else []
+                    
+                    for summary in prev_summaries:
+                        ranking = summary.get("google_ranking") or summary.get("google_mobile_ranking") or 999
+                        if ranking <= 100:
+                            prev_ranking_sum += ranking
+                            prev_total_rankings += 1
+                        
+                        prev_total_search_volume += summary.get("search_volume", 0) or 0
+                        
+                        ranking_change = summary.get("ranking_change")
+                        if ranking_change is not None:
+                            prev_total_ranking_change += ranking_change
+                            prev_ranking_change_count += 1
                 
-                impressions_change = 0
-                clicks_change = 0
-                ctr_change = 0
-                avg_rank_change = 0
-                search_volume_change = 0
+                prev_avg_rank = (prev_ranking_sum / prev_total_rankings) if prev_total_rankings > 0 else 0
+                prev_avg_ranking_change = (prev_total_ranking_change / prev_ranking_change_count) if prev_ranking_change_count > 0 else 0
                 
+                # Calculate changes
+                def calculate_change(current, previous):
+                    if previous == 0 and current > 0:
+                        return 100.0
+                    if current == 0 and previous > 0:
+                        return -100.0
+                    if previous > 0:
+                        return ((current - previous) / previous) * 100
+                    return 0.0
+                
+                # Calculate changes for 100% accurate source data KPIs only
+                avg_rank_change = calculate_change(avg_keyword_rank, prev_avg_rank)
+                search_volume_change = calculate_change(total_search_volume, prev_total_search_volume)
+                ranking_count_change = calculate_change(total_rankings, prev_total_rankings)
+                ranking_change_change = calculate_change(avg_ranking_change, prev_avg_ranking_change)
+                
+                # Collect all keywords with their rankings for "All Keywords ranking" KPI
+                all_keywords_rankings = []
+                for campaign_id in campaign_ids:
+                    summaries_query = supabase.client.table("agency_analytics_keyword_ranking_summaries").select("*").eq("campaign_id", campaign_id)
+                    summaries_query = summaries_query.gte("date", start_date).lte("date", end_date)
+                    summaries_result = summaries_query.execute()
+                    summaries = summaries_result.data if hasattr(summaries_result, 'data') else []
+                    
+                    for summary in summaries:
+                        keyword_phrase = summary.get("keyword_phrase") or f"Keyword {summary.get('keyword_id', 'N/A')}"
+                        ranking = summary.get("google_ranking") or summary.get("google_mobile_ranking")
+                        if ranking is not None and ranking <= 100:
+                            all_keywords_rankings.append({
+                                "keyword": keyword_phrase,
+                                "ranking": ranking,
+                                "search_volume": summary.get("search_volume", 0) or 0,
+                                "ranking_change": summary.get("ranking_change"),
+                                "keyword_id": summary.get("keyword_id")
+                            })
+                
+                # Sort by ranking (best first)
+                all_keywords_rankings.sort(key=lambda x: x["ranking"] if x["ranking"] else 999)
+                
+                # NOTE: impressions, clicks, and CTR are NOT included as they require estimations
+                # Only KPIs with 100% accurate source data are included
                 agency_kpis = {
-                        "impressions": {
-                            "value": int(total_impressions),
-                            "change": impressions_change,
-                            "source": "AgencyAnalytics",
-                            "label": "Impressions",
-                            "icon": "Visibility",
-                            "format": "number"
-                        },
-                        "clicks": {
-                            "value": int(total_clicks),
-                            "change": clicks_change,
-                            "source": "AgencyAnalytics",
-                            "label": "Clicks",
-                            "icon": "TrendingUp",
-                            "format": "number"
-                        },
-                        "ctr": {
-                            "value": ctr_percentage,
-                            "change": ctr_change,
-                            "source": "AgencyAnalytics",
-                            "label": "CTR",
-                            "icon": "BarChart",
-                            "format": "percentage"
-                        },
                         "search_volume": {
                             "value": int(total_search_volume),
                             "change": search_volume_change,
@@ -1260,11 +1286,64 @@ async def get_reporting_dashboard(
                         },
                         "ranking_change": {
                             "value": round(avg_ranking_change, 1),
-                            "change": 0,  # This is already a change metric
+                            "change": ranking_change_change,
                             "source": "AgencyAnalytics",
                             "label": "Avg Ranking Change",
                             "icon": "TrendingUp",
                             "format": "number"
+                        },
+                        # New/Updated Google Ranking KPIs
+                        "google_ranking_count": {
+                            "value": total_rankings,
+                            "change": ranking_count_change,
+                            "source": "AgencyAnalytics",
+                            "label": "Google Ranking Count",
+                            "icon": "Search",
+                            "format": "number",
+                            "display": f"Total keywords ranking: {total_rankings}"
+                        },
+                        "google_ranking": {
+                            "value": round(avg_keyword_rank, 1),
+                            "change": avg_rank_change,
+                            "source": "AgencyAnalytics",
+                            "label": "Google Ranking",
+                            "icon": "Search",
+                            "format": "number",
+                            "display": f"Average position: {round(avg_keyword_rank, 1)}"
+                        },
+                        "google_ranking_change": {
+                            "value": round(avg_ranking_change, 1),
+                            "change": ranking_change_change,
+                            "source": "AgencyAnalytics",
+                            "label": "Google Ranking Change",
+                            "icon": "TrendingUp",
+                            "format": "number",
+                            "display": f"Average change: {round(avg_ranking_change, 1)} positions"
+                        },
+                        "all_keywords_ranking": {
+                            "value": all_keywords_rankings,
+                            "change": None,
+                            "source": "AgencyAnalytics",
+                            "label": "All Keywords Ranking",
+                            "icon": "List",
+                            "format": "custom",
+                            "display": f"{len(all_keywords_rankings)} keywords tracked"
+                        },
+                        "keyword_ranking_change_and_volume": {
+                            "value": {
+                                "avg_ranking_change": round(avg_ranking_change, 1),
+                                "total_search_volume": int(total_search_volume),
+                                "keywords_count": total_rankings
+                            },
+                            "change": {
+                                "ranking_change": ranking_change_change,
+                                "search_volume": search_volume_change
+                            },
+                            "source": "AgencyAnalytics",
+                            "label": "Keyword Ranking Change and Volume",
+                            "icon": "BarChart",
+                            "format": "custom",
+                            "display": f"Ranking change: {round(avg_ranking_change, 1)} positions | Search volume: {total_search_volume:,}"
                         }
                     }
         except Exception as e:
@@ -1330,21 +1409,44 @@ async def get_reporting_dashboard(
             prompts_result = prompts_query.execute()
             prompts = prompts_result.data if hasattr(prompts_result, 'data') else []
             
+            logger.info(f"Found {len(prompts)} Scrunch prompts for brand {brand_id}")
+            
+            # Check if brand has any Scrunch data at all (to determine if we should show Scrunch section)
+            # This ensures we show Scrunch section even if date range has no data
+            has_any_scrunch_data = len(responses) > 0 or len(prompts) > 0
+            if not has_any_scrunch_data:
+                # Check if brand has any Scrunch data (without date filter)
+                any_responses_query = supabase.client.table("responses").select("id").eq("brand_id", brand_id).limit(1)
+                any_responses_result = any_responses_query.execute()
+                any_responses = any_responses_result.data if hasattr(any_responses_result, 'data') else []
+                
+                any_prompts_query = supabase.client.table("prompts").select("id").eq("brand_id", brand_id).limit(1)
+                any_prompts_result = any_prompts_query.execute()
+                any_prompts = any_prompts_result.data if hasattr(any_prompts_result, 'data') else []
+                
+                if len(any_responses) > 0 or len(any_prompts) > 0:
+                    logger.info(f"Brand {brand_id} has Scrunch data but none in date range {start_date} to {end_date}. Will show Scrunch section with zero values.")
+                    has_any_scrunch_data = True
+                else:
+                    logger.warning(f"Brand {brand_id} has no Scrunch data at all. Skipping Scrunch KPIs.")
+            
             # Helper function to calculate metrics from responses
-            def calculate_scrunch_metrics(responses_list):
+            def calculate_scrunch_metrics(responses_list, prompts_list=None):
                 if not responses_list:
                     return {
                         "total_citations": 0,
-                        "total_interactions": 0,
-                        "influencer_reach": 0,
-                        "engagement_rate": 0,
+                        # NOTE: total_interactions, influencer_reach, engagement_rate, cost_per_engagement
+                        # are NOT included as they require assumptions
                         "brand_present_count": 0,
                         "brand_presence_rate": 0,
-                        "visibility_on_ai_platform": 0,
                         "sentiment_score": 0,
                         "prompt_search_volume": 0,
                         "top10_prompt_percentage": 0,
-                        "cost_per_engagement": 0,
+                        # New KPIs
+                        "competitive_benchmarking": {
+                            "brand_visibility_percent": 0,
+                            "competitor_avg_visibility_percent": 0
+                        },
                     }
                 
                 total_citations = 0
@@ -1352,12 +1454,34 @@ async def get_reporting_dashboard(
                 brand_present_count = 0
                 sentiment_scores = {"positive": 0, "neutral": 0, "negative": 0}
                 
+                # Track unique prompts across platforms for KPI 1: Prompt Reach Across Platforms
+                prompt_platform_map = {}  # {prompt_id: set(platforms)}
+                prompt_brand_present = set()  # Set of prompt_ids where brand appeared
+                
+                # Track competitor data for KPI 2: Competitive Benchmarking
+                competitor_visibility_count = {}  # {competitor_name: count of appearances}
+                total_responses_with_competitors = 0
+                
+                # Track citations per prompt for KPI 3 (if data available)
+                citations_by_prompt = {}  # {prompt_id: total_citations}
+                
                 # Calculate Top 10 Prompt Percentage
                 prompt_counts = {}
                 for r in responses_list:
                     prompt_id = r.get("prompt_id")
                     if prompt_id:
                         prompt_counts[prompt_id] = prompt_counts.get(prompt_id, 0) + 1
+                        
+                        # Track platforms per prompt
+                        platform = r.get("platform")
+                        if platform:
+                            if prompt_id not in prompt_platform_map:
+                                prompt_platform_map[prompt_id] = set()
+                            prompt_platform_map[prompt_id].add(platform)
+                        
+                        # Track if brand appeared in this prompt
+                        if r.get("brand_present"):
+                            prompt_brand_present.add(prompt_id)
                 
                 sorted_prompts = sorted(prompt_counts.items(), key=lambda x: x[1], reverse=True)[:10]
                 top10_count = sum(count for _, count in sorted_prompts)
@@ -1381,9 +1505,24 @@ async def get_reporting_dashboard(
                     
                     total_citations += citation_count
                     
+                    # Track citations per prompt
+                    prompt_id = r.get("prompt_id")
+                    if prompt_id:
+                        if prompt_id not in citations_by_prompt:
+                            citations_by_prompt[prompt_id] = 0
+                        citations_by_prompt[prompt_id] += citation_count
+                    
                     # Track brand presence
                     if r.get("brand_present"):
                         brand_present_count += 1
+                    
+                    # Track competitors for competitive benchmarking
+                    competitors_present = r.get("competitors_present", [])
+                    if isinstance(competitors_present, list) and len(competitors_present) > 0:
+                        total_responses_with_competitors += 1
+                        for comp in competitors_present:
+                            if comp:
+                                competitor_visibility_count[comp] = competitor_visibility_count.get(comp, 0) + 1
                     
                     # Track sentiment
                     sentiment = r.get("brand_sentiment")
@@ -1396,16 +1535,11 @@ async def get_reporting_dashboard(
                         else:
                             sentiment_scores["neutral"] += 1
                     
-                    # Estimate interactions
-                    interactions_per_citation = 100
-                    total_interactions += citation_count * interactions_per_citation
+                    # NOTE: total_interactions, influencer_reach, and engagement_rate are NOT calculated
+                    # as they require assumptions. Only 100% accurate source data is used.
                 
-                # Calculate metrics
-                avg_reach_per_citation = 10000
-                influencer_reach = total_citations * avg_reach_per_citation
-                engagement_rate = (total_interactions / influencer_reach * 100) if influencer_reach > 0 else 0
+                # Calculate metrics (100% from source data only)
                 brand_presence_rate = (brand_present_count / len(responses_list) * 100) if responses_list else 0
-                visibility_on_ai_platform = brand_presence_rate
                 
                 total_sentiment_responses = sum(sentiment_scores.values())
                 if total_sentiment_responses > 0:
@@ -1417,30 +1551,46 @@ async def get_reporting_dashboard(
                 else:
                     sentiment_score = 0
                 
-                estimated_cost_per_response = 0.50
-                total_cost = len(responses_list) * estimated_cost_per_response
-                cost_per_engagement = (total_cost / total_interactions) if total_interactions > 0 else 0
+                # NOTE: cost_per_engagement is NOT calculated as it requires assumptions
+                
+                # Competitive Benchmarking Metrics
+                # Calculate brand visibility % and competitor average visibility %
+                brand_visibility_percent = brand_presence_rate  # Already calculated above
+                
+                # Calculate competitor average visibility
+                competitor_avg_visibility_percent = 0
+                if total_responses_with_competitors > 0:
+                    # Count how many unique competitors appeared
+                    unique_competitors = len(competitor_visibility_count)
+                    if unique_competitors > 0:
+                        # Average visibility = (total competitor appearances / total responses with competitors) * 100
+                        total_competitor_appearances = sum(competitor_visibility_count.values())
+                        competitor_avg_visibility_percent = (total_competitor_appearances / total_responses_with_competitors) * 100
                 
                 return {
-                    "total_citations": total_citations,
-                    "total_interactions": total_interactions,
-                    "influencer_reach": influencer_reach,
-                    "engagement_rate": engagement_rate,
-                    "brand_present_count": brand_present_count,
-                    "brand_presence_rate": brand_presence_rate,
-                    "visibility_on_ai_platform": visibility_on_ai_platform,
-                    "sentiment_score": sentiment_score,
-                    "prompt_search_volume": len(responses_list),
-                    "top10_prompt_percentage": top10_prompt_percentage,
-                    "cost_per_engagement": cost_per_engagement,
+                    "total_citations": total_citations,  # 100% from source
+                    # NOTE: total_interactions, influencer_reach, engagement_rate, cost_per_engagement
+                    # are NOT included as they require assumptions
+                    "brand_present_count": brand_present_count,  # 100% from source
+                    "brand_presence_rate": brand_presence_rate,  # 100% from source
+                    "sentiment_score": sentiment_score,  # 100% from source
+                    "prompt_search_volume": len(responses_list),  # 100% from source
+                    "top10_prompt_percentage": top10_prompt_percentage,  # 100% from source
+                    # New KPIs
+                    "competitive_benchmarking": {
+                        "brand_visibility_percent": brand_visibility_percent,
+                        "competitor_avg_visibility_percent": competitor_avg_visibility_percent
+                    },
                 }
             
-            if responses:
-                # Calculate current period metrics
-                current_metrics = calculate_scrunch_metrics(responses)
+            # Calculate Scrunch KPIs if brand has any Scrunch data (prompts or responses)
+            # This ensures all brands with Scrunch data show the section (with zero values if no data in date range)
+            if has_any_scrunch_data:
+                # Calculate current period metrics (will be zero if no responses)
+                current_metrics = calculate_scrunch_metrics(responses, prompts)
                 
-                # Calculate previous period metrics
-                prev_metrics = calculate_scrunch_metrics(prev_responses)
+                # Calculate previous period metrics (will be zero if no responses)
+                prev_metrics = calculate_scrunch_metrics(prev_responses, prompts)
                 
                 # Calculate percentage changes
                 # Each KPI is compared to its own previous value
@@ -1468,26 +1618,31 @@ async def get_reporting_dashboard(
                     
                     return 0.0
                 
-                influencer_reach_change = calculate_change(current_metrics["influencer_reach"], prev_metrics["influencer_reach"], "influencer_reach")
+                # NOTE: influencer_reach, engagement_rate, total_interactions, cost_per_engagement are NOT calculated
+                # as they require assumptions. Only 100% accurate source data KPIs are calculated.
                 total_citations_change = calculate_change(current_metrics["total_citations"], prev_metrics["total_citations"], "total_citations")
                 brand_presence_rate_change = calculate_change(current_metrics["brand_presence_rate"], prev_metrics["brand_presence_rate"], "brand_presence_rate")
-                visibility_change = calculate_change(current_metrics["visibility_on_ai_platform"], prev_metrics["visibility_on_ai_platform"], "visibility_on_ai_platform")
                 sentiment_score_change = calculate_change(current_metrics["sentiment_score"], prev_metrics["sentiment_score"], "sentiment_score")
-                engagement_rate_change = calculate_change(current_metrics["engagement_rate"], prev_metrics["engagement_rate"], "engagement_rate")
-                total_interactions_change = calculate_change(current_metrics["total_interactions"], prev_metrics["total_interactions"], "total_interactions")
-                cost_per_engagement_change = calculate_change(current_metrics["cost_per_engagement"], prev_metrics["cost_per_engagement"], "cost_per_engagement")
                 top10_prompt_change = calculate_change(current_metrics["top10_prompt_percentage"], prev_metrics["top10_prompt_percentage"], "top10_prompt_percentage")
                 prompt_search_volume_change = calculate_change(current_metrics["prompt_search_volume"], prev_metrics["prompt_search_volume"], "prompt_search_volume")
                 
+                # Calculate changes for new KPIs
+                competitive_current = current_metrics.get("competitive_benchmarking", {})
+                competitive_prev = prev_metrics.get("competitive_benchmarking", {})
+                brand_visibility_change = calculate_change(
+                    competitive_current.get("brand_visibility_percent", 0),
+                    competitive_prev.get("brand_visibility_percent", 0),
+                    "brand_visibility"
+                )
+                competitor_avg_change = calculate_change(
+                    competitive_current.get("competitor_avg_visibility_percent", 0),
+                    competitive_prev.get("competitor_avg_visibility_percent", 0),
+                    "competitor_avg_visibility"
+                )
+                
+                # NOTE: influencer_reach, total_interactions, engagement_rate, cost_per_engagement
+                # are NOT included as they require assumptions. Only 100% accurate source data KPIs are included.
                 scrunch_kpis = {
-                    "influencer_reach": {
-                        "value": int(current_metrics["influencer_reach"]),
-                        "change": round(influencer_reach_change, 2),
-                        "source": "Scrunch",
-                        "label": "Influencer Reach",
-                        "icon": "People",
-                        "format": "number"
-                    },
                     "total_citations": {
                         "value": int(current_metrics["total_citations"]),
                         "change": round(total_citations_change, 2),
@@ -1512,30 +1667,8 @@ async def get_reporting_dashboard(
                         "icon": "SentimentSatisfied",
                         "format": "number"
                     },
-                    "scrunch_engagement_rate": {
-                        "value": round(current_metrics["engagement_rate"], 1),
-                        "change": round(engagement_rate_change, 2),
-                        "source": "Scrunch",
-                        "label": "Engagement Rate",
-                        "icon": "TrendingUp",
-                        "format": "percentage"
-                    },
-                    "total_interactions": {
-                        "value": int(current_metrics["total_interactions"]),
-                        "change": round(total_interactions_change, 2),
-                        "source": "Scrunch",
-                        "label": "Total Interactions",
-                        "icon": "Visibility",
-                        "format": "number"
-                    },
-                    "cost_per_engagement": {
-                        "value": round(current_metrics["cost_per_engagement"], 2),
-                        "change": round(cost_per_engagement_change, 2),
-                        "source": "Scrunch",
-                        "label": "Cost per Engagement",
-                        "icon": "TrendingUp",
-                        "format": "currency"
-                    },
+                    # NOTE: scrunch_engagement_rate, total_interactions, cost_per_engagement are NOT included
+                    # as they require assumptions. Only 100% accurate source data KPIs are included.
                     "top10_prompt_percentage": {
                         "value": round(current_metrics["top10_prompt_percentage"], 1),
                         "change": round(top10_prompt_change, 2),
@@ -1552,13 +1685,21 @@ async def get_reporting_dashboard(
                         "icon": "TrendingUp",
                         "format": "number"
                     },
-                    "visibility_on_ai_platform": {
-                        "value": round(current_metrics["visibility_on_ai_platform"], 1),
-                        "change": round(visibility_change, 2),
+                    # New KPIs
+                    "competitive_benchmarking": {
+                        "value": {
+                            "brand_visibility_percent": round(competitive_current.get("brand_visibility_percent", 0), 1),
+                            "competitor_avg_visibility_percent": round(competitive_current.get("competitor_avg_visibility_percent", 0), 1)
+                        },
+                        "change": {
+                            "brand_visibility": round(brand_visibility_change, 2),
+                            "competitor_avg_visibility": round(competitor_avg_change, 2)
+                        },
                         "source": "Scrunch",
-                        "label": "Visibility On AI Platform",
-                        "icon": "Visibility",
-                        "format": "percentage"
+                        "label": "Competitive Benchmarking",
+                        "icon": "BarChart",
+                        "format": "custom",
+                        "display": f"Your brand's AI visibility: {round(competitive_current.get('brand_visibility_percent', 0), 1)}% vs competitor average: {round(competitive_current.get('competitor_avg_visibility_percent', 0), 1)}%"
                     }
                 }
                 
@@ -1701,9 +1842,12 @@ async def get_reporting_dashboard(
                 # Get GA4 traffic overview for detailed metrics
                 try:
                     traffic_overview = await ga4_client.get_traffic_overview(property_id, start_date, end_date)
-                    # Calculate previous period for change comparison
-                    prev_start = (datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=60)).strftime("%Y-%m-%d")
-                    prev_end = (datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+                    # Calculate previous period for change comparison based on selected date range duration
+                    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                    period_duration = (end_dt - start_dt).days + 1
+                    prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                    prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
                     prev_traffic_overview = await ga4_client.get_traffic_overview(property_id, prev_start, prev_end)
                     
                     if traffic_overview:
@@ -1742,29 +1886,119 @@ async def get_reporting_dashboard(
                 except Exception as e:
                     logger.warning(f"Could not fetch GA4 traffic overview: {str(e)}")
                 
-                # Get users over time (daily breakdown)
+                # Get daily metrics over time for multiple KPIs (current period)
                 try:
                     from google.analytics.data_v1beta import BetaAnalyticsDataClient
                     from google.analytics.data_v1beta.types import RunReportRequest, DateRange, Dimension, Metric
                     client = ga4_client._get_data_client()
-                    users_request = RunReportRequest(
+                    
+                    # Calculate previous period dates
+                    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                    period_duration = (end_dt - start_dt).days + 1
+                    prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                    prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                    
+                    # Fetch current period daily metrics
+                    daily_metrics_request = RunReportRequest(
                         property=f"properties/{property_id}",
                         date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
                         dimensions=[Dimension(name="date")],
-                        metrics=[Metric(name="activeUsers")],
+                        metrics=[
+                            Metric(name="activeUsers"),
+                            Metric(name="sessions"),
+                            Metric(name="newUsers"),
+                            Metric(name="conversions"),
+                            Metric(name="totalRevenue")
+                        ],
                     )
-                    users_response = client.run_report(users_request)
+                    daily_metrics_response = client.run_report(daily_metrics_request)
+                    
+                    # Fetch previous period daily metrics for comparison
+                    prev_daily_metrics_request = RunReportRequest(
+                        property=f"properties/{property_id}",
+                        date_ranges=[DateRange(start_date=prev_start, end_date=prev_end)],
+                        dimensions=[Dimension(name="date")],
+                        metrics=[
+                            Metric(name="activeUsers"),
+                            Metric(name="sessions"),
+                            Metric(name="newUsers"),
+                            Metric(name="conversions"),
+                            Metric(name="totalRevenue")
+                        ],
+                    )
+                    prev_daily_metrics_response = client.run_report(prev_daily_metrics_request)
+                    
+                    # Process current period data
+                    daily_metrics = {}
+                    for row in daily_metrics_response.rows:
+                        date = row.dimension_values[0].value
+                        daily_metrics[date] = {
+                            "date": date,
+                            "users": int(row.metric_values[0].value),
+                            "sessions": int(row.metric_values[1].value),
+                            "new_users": int(row.metric_values[2].value),
+                            "conversions": float(row.metric_values[3].value) if len(row.metric_values) > 3 else 0,
+                            "revenue": float(row.metric_values[4].value) if len(row.metric_values) > 4 else 0
+                        }
+                    
+                    # Process previous period data and align dates by day of week/relative position
+                    prev_rows = list(prev_daily_metrics_response.rows)
+                    if prev_rows:
+                        # Create a map of previous period data by date
+                        prev_data_by_date = {}
+                        for row in prev_rows:
+                            prev_date = row.dimension_values[0].value
+                            prev_data_by_date[prev_date] = {
+                                "users": int(row.metric_values[0].value),
+                                "sessions": int(row.metric_values[1].value),
+                                "new_users": int(row.metric_values[2].value),
+                                "conversions": float(row.metric_values[3].value) if len(row.metric_values) > 3 else 0,
+                                "revenue": float(row.metric_values[4].value) if len(row.metric_values) > 4 else 0
+                            }
+                        
+                        # Align previous period to current period by relative position (day 1, day 2, etc.)
+                        prev_data_list = sorted(prev_data_by_date.items())
+                        prev_data_list = prev_data_list[-len(daily_metrics):] if len(prev_data_list) >= len(daily_metrics) else prev_data_list
+                        
+                        # Combine current and previous period data
+                        ga4_daily_comparison = []
+                        current_dates = sorted(daily_metrics.keys())
+                        
+                        for idx, date in enumerate(current_dates):
+                            current = daily_metrics[date]
+                            # Get corresponding previous period data by index
+                            prev_idx = idx if idx < len(prev_data_list) else len(prev_data_list) - 1
+                            previous = prev_data_list[prev_idx][1] if prev_data_list else {}
+                            
+                            ga4_daily_comparison.append({
+                                "date": date,
+                                "current_users": current["users"],
+                                "previous_users": previous.get("users", 0),
+                                "current_sessions": current["sessions"],
+                                "previous_sessions": previous.get("sessions", 0),
+                                "current_new_users": current["new_users"],
+                                "previous_new_users": previous.get("new_users", 0),
+                                "current_conversions": current["conversions"],
+                                "previous_conversions": previous.get("conversions", 0),
+                                "current_revenue": current["revenue"],
+                                "previous_revenue": previous.get("revenue", 0)
+                            })
+                        
+                        chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                    
+                    # Keep backward compatibility - users_over_time
                     users_over_time = []
-                    for row in users_response.rows:
+                    for date in sorted(daily_metrics.keys()):
                         users_over_time.append({
-                            "date": row.dimension_values[0].value,
-                            "users": int(row.metric_values[0].value)
+                            "date": date,
+                            "users": daily_metrics[date]["users"]
                         })
-                    # Sort by date in ascending order (oldest to newest)
-                    users_over_time.sort(key=lambda x: x["date"])
                     chart_data["users_over_time"] = users_over_time
+                    
                 except Exception as e:
-                    logger.warning(f"Could not fetch users over time: {str(e)}")
+                    logger.warning(f"Could not fetch GA4 daily metrics: {str(e)}")
+                    chart_data["ga4_daily_comparison"] = []
             except Exception as e:
                 logger.warning(f"Error fetching GA4 chart data: {str(e)}")
         
@@ -1783,65 +2017,17 @@ async def get_reporting_dashboard(
                 campaigns_result = supabase.client.table("agency_analytics_campaigns").select("*").in_("id", campaign_ids).execute()
                 campaigns = campaigns_result.data if hasattr(campaigns_result, 'data') else []
                 
-                impressions_vs_clicks = []
-                top_campaigns = []
+                # NOTE: impressions_vs_clicks and top_campaigns charts are NOT populated
+                # as they require estimated impressions/clicks calculations.
+                # Only 100% accurate source data is used for charts.
+                chart_data["impressions_vs_clicks"] = []  # Empty - requires estimations
+                chart_data["top_campaigns"] = []  # Empty - requires estimations
                 
-                for campaign_id in campaign_ids:
-                    # Query keyword ranking summaries filtered by date range for chart data
-                    summaries_query = supabase.client.table("agency_analytics_keyword_ranking_summaries").select("*").eq("campaign_id", campaign_id)
-                    summaries_query = summaries_query.gte("date", start_date).lte("date", end_date)
-                    
-                    summaries_result = summaries_query.execute()
-                    summaries = summaries_result.data if hasattr(summaries_result, 'data') else []
-                    
-                    campaign_impressions = 0
-                    campaign_clicks = 0
-                    
-                    for summary in summaries:
-                        search_volume = summary.get("search_volume", 0) or 0
-                        ranking = summary.get("google_ranking") or summary.get("google_mobile_ranking") or 999
-                        
-                        if ranking <= 100:
-                            if ranking <= 3:
-                                impression_rate = 0.95
-                                ctr = 0.30
-                            elif ranking <= 10:
-                                impression_rate = 0.75
-                                ctr = 0.10
-                            elif ranking <= 20:
-                                impression_rate = 0.50
-                                ctr = 0.05
-                            else:
-                                impression_rate = 0.25
-                                ctr = 0.01
-                            
-                            estimated_impressions = search_volume * impression_rate
-                            estimated_clicks = estimated_impressions * ctr
-                            campaign_impressions += estimated_impressions
-                            campaign_clicks += estimated_clicks
-                    
-                    campaign_name = next((c.get("company", f"Campaign {campaign_id}") for c in campaigns if c.get("id") == campaign_id), f"Campaign {campaign_id}")
-                    
-                    impressions_vs_clicks.append({
-                        "campaign": campaign_name,
-                        "impressions": int(campaign_impressions),
-                        "clicks": int(campaign_clicks)
-                    })
-                    
-                    top_campaigns.append({
-                        "campaign": campaign_name,
-                        "impressions": int(campaign_impressions),
-                        "engagement": int(campaign_clicks)  # Using clicks as engagement metric
-                    })
+                # Calculate keyword rankings performance metrics and collect all keywords
+                chart_total_rankings = 0
+                chart_total_search_volume = 0
+                chart_all_keywords_rankings = []
                 
-                # Sort by impressions descending
-                top_campaigns.sort(key=lambda x: x["impressions"], reverse=True)
-                chart_data["impressions_vs_clicks"] = impressions_vs_clicks[:5]  # Top 5
-                chart_data["top_campaigns"] = top_campaigns[:5]  # Top 5
-                
-                # Calculate keyword rankings performance metrics
-                total_rankings = 0
-                total_search_volume = 0
                 for campaign_id in campaign_ids:
                     summaries_query = supabase.client.table("agency_analytics_keyword_ranking_summaries").select("*").eq("campaign_id", campaign_id)
                     summaries_query = summaries_query.gte("date", start_date).lte("date", end_date)
@@ -1851,15 +2037,29 @@ async def get_reporting_dashboard(
                     for summary in campaign_summaries:
                         ranking = summary.get("google_ranking") or summary.get("google_mobile_ranking") or 999
                         if ranking <= 100:
-                            total_rankings += 1
-                        total_search_volume += summary.get("search_volume", 0) or 0
+                            chart_total_rankings += 1
+                        chart_total_search_volume += summary.get("search_volume", 0) or 0
+                        
+                        # Collect keyword data for "All Keywords ranking"
+                        keyword_phrase = summary.get("keyword_phrase") or f"Keyword {summary.get('keyword_id', 'N/A')}"
+                        if ranking is not None and ranking <= 100:
+                            chart_all_keywords_rankings.append({
+                                "keyword": keyword_phrase,
+                                "ranking": ranking,
+                                "search_volume": summary.get("search_volume", 0) or 0,
+                                "ranking_change": summary.get("ranking_change"),
+                                "keyword_id": summary.get("keyword_id")
+                            })
                 
-                # Get previous period for comparison (simplified - would need actual historical data)
+                # Sort by ranking (best first)
+                chart_all_keywords_rankings.sort(key=lambda x: x["ranking"] if x["ranking"] else 999)
+                
+                chart_data["all_keywords_ranking"] = chart_all_keywords_rankings
                 chart_data["keyword_rankings_performance"] = {
-                    "google_rankings": total_rankings,
-                    "google_rankings_change": 0,  # Would need historical comparison
-                    "volume": total_search_volume,
-                    "volume_change": 0  # Would need historical comparison
+                    "google_rankings": chart_total_rankings,
+                    "google_rankings_change": 0,  # Would need historical comparison in chart section
+                    "volume": chart_total_search_volume,
+                    "volume_change": 0  # Would need historical comparison in chart section
                 }
                     
             except Exception as e:
