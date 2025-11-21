@@ -1,25 +1,26 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { CircularProgress, Box, Alert } from '@mui/material'
+import { CircularProgress, Box } from '@mui/material'
 import BrandAnalyticsDetail from './BrandAnalyticsDetail'
 import { syncAPI } from '../services/api'
+import { useToast } from '../contexts/ToastContext'
+import { getErrorMessage } from '../utils/errorHandler'
 
 function BrandAnalyticsDetailWrapper() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [brand, setBrand] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const { showError } = useToast()
 
   useEffect(() => {
     const loadBrand = async () => {
       try {
         setLoading(true)
-        setError(null)
         
         const brandId = parseInt(id)
         if (isNaN(brandId)) {
-          setError('Invalid brand ID')
+          showError('Invalid brand ID')
           setLoading(false)
           return
         }
@@ -30,19 +31,19 @@ function BrandAnalyticsDetailWrapper() {
         const foundBrand = brands.find(b => b.id === brandId)
         
         if (!foundBrand) {
-          setError(`Brand with ID ${brandId} not found`)
+          showError(`Brand with ID ${brandId} not found`)
         } else {
           setBrand(foundBrand)
         }
       } catch (err) {
-        setError(err.response?.data?.detail || 'Failed to load brand')
+        showError(getErrorMessage(err))
       } finally {
         setLoading(false)
       }
     }
     
     loadBrand()
-  }, [id])
+  }, [id, showError])
 
   const handleBack = () => {
     navigate('/brands')
@@ -51,29 +52,13 @@ function BrandAnalyticsDetailWrapper() {
   if (loading) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
-        <CircularProgress />
-      </Box>
-    )
-  }
-
-  if (error) {
-    return (
-      <Box>
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
-        </Alert>
+        <CircularProgress size={40} thickness={4} />
       </Box>
     )
   }
 
   if (!brand) {
-    return (
-      <Box>
-        <Alert severity="warning" sx={{ mb: 3 }}>
-          Brand not found
-        </Alert>
-      </Box>
-    )
+    return null
   }
 
   return (

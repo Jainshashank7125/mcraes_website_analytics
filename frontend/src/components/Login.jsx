@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import {
   Box,
   Card,
@@ -7,12 +7,11 @@ import {
   TextField,
   Button,
   Typography,
-  Alert,
-  alpha,
   useTheme,
   Container,
   InputAdornment,
   IconButton,
+  CircularProgress,
 } from '@mui/material'
 import {
   Email as EmailIcon,
@@ -22,20 +21,20 @@ import {
 } from '@mui/icons-material'
 import { motion } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
+import { useToast } from '../contexts/ToastContext'
 
 function Login() {
   const theme = useTheme()
   const navigate = useNavigate()
   const { signin } = useAuth()
+  const { showError } = useToast()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-  const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    setError('')
     setLoading(true)
 
     const result = await signin(email, password)
@@ -43,7 +42,7 @@ function Login() {
     if (result.success) {
       navigate('/')
     } else {
-      setError(result.error || 'Sign in failed')
+      showError(result.error || 'Sign in failed')
     }
 
     setLoading(false)
@@ -94,12 +93,6 @@ function Login() {
               >
                 Sign in to access your dashboard
               </Typography>
-
-              {error && (
-                <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>
-                  {error}
-                </Alert>
-              )}
 
               <Box component="form" onSubmit={handleSubmit}>
                 <TextField
@@ -162,26 +155,15 @@ function Login() {
                     fontSize: '1rem',
                   }}
                 >
-                  {loading ? 'Signing in...' : 'Sign In'}
+                  {loading ? (
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <CircularProgress size={20} sx={{ color: 'white' }} />
+                      <span>Signing in...</span>
+                    </Box>
+                  ) : (
+                    'Sign In'
+                  )}
                 </Button>
-
-                <Typography
-                  variant="body2"
-                  textAlign="center"
-                  color="text.secondary"
-                >
-                  Don't have an account?{' '}
-                  <Link
-                    to="/signup"
-                    style={{
-                      color: theme.palette.primary.main,
-                      textDecoration: 'none',
-                      fontWeight: 600,
-                    }}
-                  >
-                    Sign up
-                  </Link>
-                </Typography>
               </Box>
             </CardContent>
           </Card>

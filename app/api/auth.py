@@ -1,8 +1,12 @@
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from app.core.database import get_supabase_client
+from app.core.exceptions import AuthenticationException, ValidationException, handle_exception
+from app.core.error_utils import handle_api_errors
+from app.services.audit_logger import audit_logger
+from app.db.models import AuditLogAction
 from supabase import Client
 import logging
 
@@ -46,18 +50,30 @@ async def get_current_user(
         # Verify token and get user
         user_response = client.auth.get_user(token)
         if not user_response.user:
-            raise HTTPException(status_code=401, detail="Invalid authentication token")
+            raise AuthenticationException(
+                user_message="Your session has expired. Please sign in again.",
+                technical_message="Invalid authentication token: user not found"
+            )
         return {
             "id": user_response.user.id,
             "email": user_response.user.email,
             "user_metadata": user_response.user.user_metadata or {}
         }
+    except AuthenticationException:
+        raise
     except Exception as e:
-        logger.error(f"Authentication error: {str(e)}")
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        raise AuthenticationException(
+            user_message="Your session has expired. Please sign in again.",
+            technical_message=f"Authentication error: {str(e)}"
+        )
 
 @router.post("/auth/signup", response_model=AuthResponse)
-async def signup(request: SignUpRequest, client: Client = Depends(get_auth_client)):
+@handle_api_errors(context="creating user account")
+async def signup(
+    request: SignUpRequest,
+    http_request: Request,
+    client: Client = Depends(get_auth_client)
+):
     """Sign up a new user"""
     try:
         sign_up_data = {
@@ -71,7 +87,24 @@ async def signup(request: SignUpRequest, client: Client = Depends(get_auth_clien
         response = client.auth.sign_up(sign_up_data)
         
         if not response.user:
-            raise HTTPException(status_code=400, detail="Failed to create user")
+            raise ValidationException(
+                user_message="Unable to create your account. Please try again.",
+                technical_message="User creation failed: no user returned"
+            )
+        
+        # Log user creation
+        # For signup endpoint, user is creating themselves (self-registration)
+        try:
+            await audit_logger.log(
+                action=AuditLogAction.USER_CREATED,
+                user_id=response.user.id,
+                user_email=response.user.email,
+                status="success",
+                details={"self_registration": True},
+                request=http_request
+            )
+        except Exception as log_error:
+            logger.warning(f"Failed to log user creation: {str(log_error)}")
         
         # Get session if available
         session = response.session
@@ -98,15 +131,24 @@ async def signup(request: SignUpRequest, client: Client = Depends(get_auth_clien
                 },
                 "expires_in": None
             }
+    except ValidationException:
+        raise
     except Exception as e:
-        logger.error(f"Signup error: {str(e)}")
-        error_msg = str(e)
-        if "already registered" in error_msg.lower():
-            raise HTTPException(status_code=400, detail="Email already registered")
-        raise HTTPException(status_code=400, detail=f"Signup failed: {error_msg}")
+        error_msg = str(e).lower()
+        if "already registered" in error_msg or "email exists" in error_msg or "already exists" in error_msg:
+            raise ValidationException(
+                user_message="An account with this email already exists. Please sign in instead.",
+                technical_message=f"Signup error: {str(e)}"
+            )
+        raise handle_exception(e, context="creating user account")
 
 @router.post("/auth/signin", response_model=AuthResponse)
-async def signin(request: SignInRequest, client: Client = Depends(get_auth_client)):
+@handle_api_errors(context="signing in")
+async def signin(
+    request: SignInRequest,
+    http_request: Request,
+    client: Client = Depends(get_auth_client)
+):
     """Sign in an existing user"""
     try:
         response = client.auth.sign_in_with_password({
@@ -115,7 +157,26 @@ async def signin(request: SignInRequest, client: Client = Depends(get_auth_clien
         })
         
         if not response.user or not response.session:
-            raise HTTPException(status_code=401, detail="Invalid email or password")
+            # Log failed login attempt
+            await audit_logger.log_login(
+                user_id="",
+                user_email=request.email,
+                status="error",
+                error_message="Invalid credentials",
+                request=http_request
+            )
+            raise AuthenticationException(
+                user_message="The email or password you entered is incorrect.",
+                technical_message="Sign in failed: invalid credentials"
+            )
+        
+        # Log successful login
+        await audit_logger.log_login(
+            user_id=response.user.id,
+            user_email=response.user.email,
+            status="success",
+            request=http_request
+        )
         
         return {
             "access_token": response.session.access_token,
@@ -127,25 +188,52 @@ async def signin(request: SignInRequest, client: Client = Depends(get_auth_clien
             },
             "expires_in": response.session.expires_in
         }
+    except AuthenticationException:
+        raise
     except Exception as e:
-        logger.error(f"Signin error: {str(e)}")
-        error_msg = str(e)
-        if "invalid" in error_msg.lower() or "credentials" in error_msg.lower():
-            raise HTTPException(status_code=401, detail="Invalid email or password")
-        raise HTTPException(status_code=401, detail=f"Signin failed: {error_msg}")
+        # Log failed login attempt
+        try:
+            await audit_logger.log_login(
+                user_id="",
+                user_email=request.email,
+                status="error",
+                error_message=str(e),
+                request=http_request
+            )
+        except:
+            pass
+        
+        error_msg = str(e).lower()
+        if "invalid" in error_msg or "credentials" in error_msg or "password" in error_msg:
+            raise AuthenticationException(
+                user_message="The email or password you entered is incorrect.",
+                technical_message=f"Sign in error: {str(e)}"
+            )
+        raise handle_exception(e, context="signing in")
 
 @router.post("/auth/signout")
+@handle_api_errors(context="signing out")
 async def signout(
     credentials: HTTPAuthorizationCredentials = Depends(security),
+    http_request: Request = None,
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_auth_client)
 ):
     """Sign out the current user"""
     try:
         token = credentials.credentials
         client.auth.sign_out(token)
+        
+        # Log logout
+        await audit_logger.log_logout(
+            user_id=current_user["id"],
+            user_email=current_user["email"],
+            request=http_request
+        )
+        
         return {"message": "Successfully signed out"}
     except Exception as e:
-        logger.error(f"Signout error: {str(e)}")
+        logger.warning(f"Signout error (non-critical): {str(e)}")
         # Even if signout fails, return success (token will expire anyway)
         return {"message": "Signed out"}
 
@@ -159,6 +247,7 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
     )
 
 @router.post("/auth/refresh")
+@handle_api_errors(context="refreshing authentication token")
 async def refresh_token(
     refresh_token: str = Header(..., alias="refresh-token"),
     client: Client = Depends(get_auth_client)
@@ -168,7 +257,10 @@ async def refresh_token(
         response = client.auth.refresh_session(refresh_token)
         
         if not response.user or not response.session:
-            raise HTTPException(status_code=401, detail="Invalid refresh token")
+            raise AuthenticationException(
+                user_message="Your session has expired. Please sign in again.",
+                technical_message="Invalid refresh token"
+            )
         
         return {
             "access_token": response.session.access_token,
@@ -180,7 +272,11 @@ async def refresh_token(
             },
             "expires_in": response.session.expires_in
         }
+    except AuthenticationException:
+        raise
     except Exception as e:
-        logger.error(f"Token refresh error: {str(e)}")
-        raise HTTPException(status_code=401, detail="Failed to refresh token")
+        raise AuthenticationException(
+            user_message="Your session has expired. Please sign in again.",
+            technical_message=f"Token refresh error: {str(e)}"
+        )
 

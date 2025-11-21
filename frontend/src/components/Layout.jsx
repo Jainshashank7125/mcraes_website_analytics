@@ -28,11 +28,13 @@ import {
   Assessment as AssessmentIcon,
   Computer as ComputerIcon,
   Logout as LogoutIcon,
-  AccountCircle as AccountCircleIcon
+  AccountCircle as AccountCircleIcon,
+  PersonAdd as PersonAddIcon,
 } from '@mui/icons-material'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
 import { Button, Menu, MenuItem } from '@mui/material'
+import SyncStatusIndicator from './SyncStatusIndicator'
 
 const drawerWidth = 240
 
@@ -289,6 +291,18 @@ function Layout({ children }) {
                   },
                 }}
               >
+                <MenuItem 
+                  onClick={() => {
+                    handleMenuClose()
+                    navigate('/create-user')
+                  }} 
+                  sx={{ py: 1.5 }}
+                >
+                  <ListItemIcon sx={{ minWidth: 36 }}>
+                    <PersonAddIcon fontSize="small" />
+                  </ListItemIcon>
+                  <Typography variant="body2">Create User</Typography>
+                </MenuItem>
                 <MenuItem onClick={handleLogout} sx={{ py: 1.5 }}>
                   <ListItemIcon sx={{ minWidth: 36 }}>
                     <LogoutIcon fontSize="small" />
@@ -364,6 +378,9 @@ function Layout({ children }) {
           </motion.div>
         </AnimatePresence>
       </Box>
+      
+      {/* Global sync status indicator */}
+      <SyncStatusIndicator />
     </Box>
   )
 }

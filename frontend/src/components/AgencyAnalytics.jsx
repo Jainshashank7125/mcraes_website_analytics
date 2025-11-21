@@ -126,7 +126,7 @@ function AgencyAnalytics() {
   if (loading && campaigns.length === 0) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
-        <CircularProgress size={32} thickness={4} />
+        <CircularProgress size={40} thickness={4} />
       </Box>
     )
   }
@@ -235,7 +235,7 @@ function AgencyAnalytics() {
 
             {loading ? (
               <Box display="flex" justifyContent="center" py={4}>
-                <CircularProgress size={32} thickness={4} />
+                <CircularProgress size={40} thickness={4} />
               </Box>
             ) : rankings.length === 0 ? (
               <Alert severity="info" sx={{ borderRadius: 2 }}>
@@ -319,7 +319,7 @@ function AgencyAnalytics() {
 
             {loadingKeywords ? (
               <Box display="flex" justifyContent="center" py={4}>
-                <CircularProgress size={32} thickness={4} />
+                <CircularProgress size={40} thickness={4} />
               </Box>
             ) : keywordRankings.length === 0 ? (
               <Alert severity="info" sx={{ borderRadius: 2, fontSize: '0.875rem' }}>

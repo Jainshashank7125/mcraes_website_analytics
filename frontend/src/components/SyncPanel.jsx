@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Box,
   Card,
@@ -7,103 +7,140 @@ import {
   Typography,
   Grid,
   CircularProgress,
-  Alert,
   LinearProgress,
   alpha,
-  useTheme
+  useTheme,
+  Chip
 } from '@mui/material'
 import {
   Sync as SyncIcon,
   CloudDownload as CloudDownloadIcon,
   Analytics as AnalyticsIcon,
+  CheckCircle as CheckCircleIcon,
+  Error as ErrorIcon,
 } from '@mui/icons-material'
 import { motion } from 'framer-motion'
 import { syncAPI } from '../services/api'
+import { useToast } from '../contexts/ToastContext'
+import { useSyncStatus } from '../contexts/SyncStatusContext'
+import { getErrorMessage } from '../utils/errorHandler'
 
 function SyncPanel() {
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
-  const [success, setSuccess] = useState(null)
   const [syncing, setSyncing] = useState(null)
   const theme = useTheme()
+  const { showError, showSuccess } = useToast()
+  const { activeJobs, addJob, refreshJobs } = useSyncStatus()
+
+  // Poll for job updates
+  useEffect(() => {
+    if (!syncing) return // Don't poll if no job is being tracked
+
+    const interval = setInterval(async () => {
+      if (!syncing) {
+        clearInterval(interval)
+        return
+      }
+
+      try {
+        const job = await syncAPI.getSyncJobStatus(syncing)
+        if (job) {
+          // Stop polling if job is completed or failed
+          if (job.status === 'completed' || job.status === 'failed') {
+            clearInterval(interval)
+            
+            if (job.status === 'completed') {
+              const result = job.result || {}
+              if (job.sync_type === 'sync_all') {
+                const summary = result.summary || {}
+                showSuccess(`Sync completed: Brands: ${summary.brands || 0}, Prompts: ${summary.total_prompts || 0}, Responses: ${summary.total_responses || 0}`)
+              } else if (job.sync_type === 'sync_ga4') {
+                const totalSynced = result.total_synced || {}
+                showSuccess(`GA4 sync completed: Brands: ${totalSynced.brands || 0}`)
+              } else if (job.sync_type === 'sync_agency_analytics') {
+                const totalSynced = result.total_synced || {}
+                showSuccess(`Agency Analytics sync completed: Campaigns: ${totalSynced.campaigns || 0}`)
+              }
+            } else if (job.status === 'failed') {
+              showError(job.error_message || 'Sync failed')
+            }
+            
+            setSyncing(null)
+            refreshJobs()
+          }
+        }
+      } catch (err) {
+        console.error('Error checking job status:', err)
+        // On error, stop polling to avoid infinite retries
+        clearInterval(interval)
+        setSyncing(null)
+      }
+    }, 2000) // Poll every 2 seconds
+
+    return () => clearInterval(interval)
+  }, [syncing, showSuccess, showError, refreshJobs])
 
   const handleSyncScrunch = async () => {
     try {
-      setLoading(true)
-      setError(null)
-      setSuccess(null)
-      setSyncing('scrunch')
+      setSyncing(null) // Reset
       
       const result = await syncAPI.syncAll()
       
-      const summary = result.summary || {}
-      const message = `Successfully synced Scrunch AI data:\n` +
-        `• Brands: ${summary.brands || 0}\n` +
-        `• Prompts: ${summary.total_prompts || 0}\n` +
-        `• Responses: ${summary.total_responses || 0}`
-      
-      setSuccess(message)
-      setTimeout(() => setSuccess(null), 8000)
+      if (result.job_id) {
+        setSyncing(result.job_id)
+        addJob(result.job_id, 'sync_all')
+        showSuccess('Sync started. You can continue using the app while it runs in the background.')
+      } else {
+        showError('Failed to start sync job')
+      }
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to sync Scrunch AI data')
-    } finally {
-      setLoading(false)
-      setSyncing(null)
+      showError(getErrorMessage(err))
     }
   }
 
   const handleSyncGA4 = async () => {
     try {
-      setLoading(true)
-      setError(null)
-      setSuccess(null)
-      setSyncing('ga4')
+      setSyncing(null) // Reset
       
       const result = await syncAPI.syncGA4()
       
-      const totalSynced = result.total_synced || {}
-      const message = `Successfully synced GA4 data:\n` +
-        `• Brands synced: ${totalSynced.brands || 0}\n` +
-        `• Traffic overview: ${totalSynced.traffic_overview || 0}\n` +
-        `• Top pages: ${totalSynced.top_pages || 0}\n` +
-        `• Traffic sources: ${totalSynced.traffic_sources || 0}\n` +
-        `• Geographic data: ${totalSynced.geographic || 0}\n` +
-        `• Device data: ${totalSynced.devices || 0}\n` +
-        `• Conversions: ${totalSynced.conversions || 0}`
-      
-      setSuccess(message)
-      setTimeout(() => setSuccess(null), 8000)
+      if (result.job_id) {
+        setSyncing(result.job_id)
+        addJob(result.job_id, 'sync_ga4')
+        showSuccess('GA4 sync started. You can continue using the app while it runs in the background.')
+      } else {
+        showError('Failed to start GA4 sync job')
+      }
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to sync GA4 data')
-    } finally {
-      setLoading(false)
-      setSyncing(null)
+      showError(getErrorMessage(err))
     }
   }
 
   const handleSyncAgencyAnalytics = async () => {
     try {
-      setLoading(true)
-      setError(null)
-      setSuccess(null)
-      setSyncing('agency-analytics')
+      setSyncing(null) // Reset
       
       const result = await syncAPI.syncAgencyAnalytics()
       
-      const totalSynced = result.total_synced || {}
-      const message = `Successfully synced Agency Analytics data:\n` +
-        `• Campaigns synced: ${totalSynced.campaigns || 0}\n` +
-        `• Ranking records: ${totalSynced.rankings || 0}`
-      
-      setSuccess(message)
-      setTimeout(() => setSuccess(null), 8000)
+      if (result.job_id) {
+        setSyncing(result.job_id)
+        addJob(result.job_id, 'sync_agency_analytics')
+        showSuccess('Agency Analytics sync started. You can continue using the app while it runs in the background.')
+      } else {
+        showError('Failed to start Agency Analytics sync job')
+      }
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to sync Agency Analytics data')
-    } finally {
-      setLoading(false)
-      setSyncing(null)
+      showError(getErrorMessage(err))
     }
   }
+
+  // Get current job status
+  const getCurrentJob = () => {
+    if (!syncing) return null
+    return activeJobs.find(j => j.job_id === syncing)
+  }
+
+  const currentJob = getCurrentJob()
+  const isLoading = syncing !== null && currentJob && ['pending', 'running'].includes(currentJob.status)
 
   return (
     <Box>
@@ -128,35 +165,6 @@ function SyncPanel() {
           Sync data from Scrunch AI API, Google Analytics 4, and Agency Analytics to Supabase
         </Typography>
       </Box>
-
-      {success && (
-        <Alert 
-          severity="success" 
-          sx={{ 
-            mb: 3,
-            borderRadius: 2,
-            fontSize: '0.875rem',
-            whiteSpace: 'pre-line',
-          }}
-          onClose={() => setSuccess(null)}
-        >
-          {success}
-        </Alert>
-      )}
-
-      {error && (
-        <Alert 
-          severity="error" 
-          sx={{ 
-            mb: 3,
-            borderRadius: 2,
-            fontSize: '0.875rem',
-          }}
-          onClose={() => setError(null)}
-        >
-          {error}
-        </Alert>
-      )}
 
       <Grid container spacing={2.5}>
         <Grid item xs={12} md={4}>
@@ -224,9 +232,9 @@ function SyncPanel() {
                   fullWidth
                   size="small"
                   onClick={handleSyncScrunch}
-                  disabled={loading}
+                  disabled={isLoading && currentJob?.sync_type === 'sync_all'}
                   startIcon={
-                    syncing === 'scrunch' ? (
+                    isLoading && currentJob?.sync_type === 'sync_all' ? (
                       <CircularProgress size={16} thickness={4} sx={{ color: 'white' }} />
                     ) : (
                       <SyncIcon sx={{ fontSize: 16 }} />
@@ -244,7 +252,7 @@ function SyncPanel() {
                     },
                   }}
                 >
-                  {syncing === 'scrunch' ? 'Syncing...' : 'Sync Scrunch Data'}
+                  {isLoading && currentJob?.sync_type === 'sync_all' ? 'Syncing...' : 'Sync Scrunch Data'}
                 </Button>
               </CardContent>
             </Card>
@@ -316,9 +324,9 @@ function SyncPanel() {
                   fullWidth
                   size="small"
                   onClick={handleSyncGA4}
-                  disabled={loading}
+                  disabled={isLoading && currentJob?.sync_type === 'sync_ga4'}
                   startIcon={
-                    syncing === 'ga4' ? (
+                    isLoading && currentJob?.sync_type === 'sync_ga4' ? (
                       <CircularProgress size={16} thickness={4} sx={{ color: 'white' }} />
                     ) : (
                       <AnalyticsIcon sx={{ fontSize: 16 }} />
@@ -338,7 +346,7 @@ function SyncPanel() {
                     },
                   }}
                 >
-                  {syncing === 'ga4' ? 'Syncing...' : 'Sync GA4 Data'}
+                  {isLoading && currentJob?.sync_type === 'sync_ga4' ? 'Syncing...' : 'Sync GA4 Data'}
                 </Button>
               </CardContent>
             </Card>
@@ -410,9 +418,9 @@ function SyncPanel() {
                   fullWidth
                   size="small"
                   onClick={handleSyncAgencyAnalytics}
-                  disabled={loading}
+                  disabled={isLoading && currentJob?.sync_type === 'sync_agency_analytics'}
                   startIcon={
-                    syncing === 'agency-analytics' ? (
+                    isLoading && currentJob?.sync_type === 'sync_agency_analytics' ? (
                       <CircularProgress size={16} thickness={4} sx={{ color: 'white' }} />
                     ) : (
                       <AnalyticsIcon sx={{ fontSize: 16 }} />
@@ -432,7 +440,7 @@ function SyncPanel() {
                     },
                   }}
                 >
-                  {syncing === 'agency-analytics' ? 'Syncing...' : 'Sync Agency Analytics'}
+                  {isLoading && currentJob?.sync_type === 'sync_agency_analytics' ? 'Syncing...' : 'Sync Agency Analytics'}
                 </Button>
               </CardContent>
             </Card>
@@ -440,7 +448,7 @@ function SyncPanel() {
         </Grid>
       </Grid>
 
-      {loading && syncing && (
+      {currentJob && isLoading && (
         <Box mt={3}>
           <motion.div
             initial={{ opacity: 0, y: 10 }}
@@ -456,28 +464,43 @@ function SyncPanel() {
             >
               <CardContent sx={{ p: 2.5 }}>
                 <Box display="flex" alignItems="center" justifyContent="space-between" mb={1.5}>
-                  <Typography 
-                    variant="body2" 
-                    sx={{ fontSize: '0.875rem', fontWeight: 600 }}
-                  >
-                    {syncing === 'scrunch' ? 'Syncing Scrunch AI data...' : 
-                     syncing === 'ga4' ? 'Syncing GA4 data...' : 
-                     'Syncing Agency Analytics data...'}
-                  </Typography>
-                  <Typography 
-                    variant="caption" 
-                    color="text.secondary"
-                    sx={{ fontSize: '0.75rem' }}
-                  >
-                    This may take a few minutes
-                  </Typography>
+                  <Box display="flex" alignItems="center" gap={1.5}>
+                    <CircularProgress size={20} thickness={4} />
+                    <Box>
+                      <Typography 
+                        variant="body2" 
+                        sx={{ fontSize: '0.875rem', fontWeight: 600 }}
+                      >
+                        {currentJob.current_step || 'Syncing...'}
+                      </Typography>
+                      {currentJob.progress > 0 && (
+                        <Typography 
+                          variant="caption" 
+                          color="text.secondary"
+                          sx={{ fontSize: '0.75rem' }}
+                        >
+                          {currentJob.progress}% complete
+                        </Typography>
+                      )}
+                    </Box>
+                  </Box>
+                  <Chip 
+                    label={currentJob.status === 'running' ? 'Running' : 'Pending'}
+                    size="small"
+                    color="primary"
+                    sx={{ fontSize: '0.75rem', height: 24 }}
+                  />
                 </Box>
-                <LinearProgress 
-                  sx={{ 
-                    borderRadius: 1,
-                    height: 6,
-                  }}
-                />
+                {currentJob.progress > 0 && (
+                  <LinearProgress 
+                    variant="determinate"
+                    value={currentJob.progress}
+                    sx={{ 
+                      borderRadius: 1,
+                      height: 6,
+                    }}
+                  />
+                )}
               </CardContent>
             </Card>
           </motion.div>
@@ -488,3 +511,4 @@ function SyncPanel() {
 }
 
 export default SyncPanel
+

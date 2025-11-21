@@ -326,7 +326,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
   if (loading) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
-        <CircularProgress size={32} thickness={4} />
+        <CircularProgress size={40} thickness={4} />
       </Box>
     )
   }
@@ -1010,7 +1010,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
 
         {ga4Loading ? (
           <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
-            <CircularProgress size={32} thickness={4} />
+            <CircularProgress size={40} thickness={4} />
           </Box>
         ) : ga4Error ? (
           <Alert 
@@ -1853,7 +1853,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
             
             {agencyAnalyticsLoading ? (
               <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
-                <CircularProgress size={32} thickness={4} />
+                <CircularProgress size={40} thickness={4} />
               </Box>
             ) : agencyAnalyticsCampaigns.length > 0 ? (
               <Card>

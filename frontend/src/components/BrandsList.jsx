@@ -9,7 +9,6 @@ import {
   Avatar,
   Chip,
   CircularProgress,
-  Alert,
   Button,
   alpha,
   useTheme,
@@ -23,14 +22,16 @@ import {
 } from '@mui/icons-material'
 import { motion } from 'framer-motion'
 import { syncAPI } from '../services/api'
+import { useToast } from '../contexts/ToastContext'
+import { getErrorMessage } from '../utils/errorHandler'
 
 function BrandsList() {
   const [brands, setBrands] = useState([])
   const [brandsWithAnalytics, setBrandsWithAnalytics] = useState([])
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
   const navigate = useNavigate()
   const theme = useTheme()
+  const { showError } = useToast()
 
   useEffect(() => {
     loadBrands()
@@ -39,7 +40,6 @@ function BrandsList() {
   const loadBrands = async () => {
     try {
       setLoading(true)
-      setError(null)
       const [brandsResponse, analyticsResponse] = await Promise.all([
         syncAPI.getBrands(),
         syncAPI.getBrandAnalytics().catch(() => null)
@@ -68,7 +68,7 @@ function BrandsList() {
         setBrandsWithAnalytics(brandsList.map(brand => ({ ...brand, analytics: null })))
       }
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load brands')
+      showError(getErrorMessage(err))
     } finally {
       setLoading(false)
     }

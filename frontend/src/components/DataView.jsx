@@ -8,7 +8,6 @@ import {
   TextField,
   Grid,
   CircularProgress,
-  Alert,
   Table,
   TableBody,
   TableCell,
@@ -20,7 +19,12 @@ import {
   Tab,
   Chip,
   alpha,
-  useTheme
+  useTheme,
+  Pagination,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel
 } from '@mui/material'
 import {
   Business as BusinessIcon,
@@ -29,12 +33,16 @@ import {
 } from '@mui/icons-material'
 import { motion } from 'framer-motion'
 import { syncAPI } from '../services/api'
+import { useToast } from '../contexts/ToastContext'
+import { getErrorMessage } from '../utils/errorHandler'
 
 function DataView() {
   const [dataType, setDataType] = useState('brands')
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
+  const [totalCount, setTotalCount] = useState(0)
   const [filters, setFilters] = useState({
     stage: '',
     persona_id: '',
@@ -42,32 +50,42 @@ function DataView() {
     prompt_id: '',
     start_date: '',
     end_date: '',
-    limit: '50',
   })
   const theme = useTheme()
+  const { showError } = useToast()
+
+  useEffect(() => {
+    setPage(1) // Reset to first page when data type changes
+    loadData()
+  }, [dataType])
 
   useEffect(() => {
     loadData()
-  }, [dataType])
+  }, [page, pageSize])
 
   const loadData = async () => {
     try {
       setLoading(true)
-      setError(null)
       let result
+      const offset = (page - 1) * pageSize
 
       switch (dataType) {
         case 'brands':
-          result = await syncAPI.getBrands()
-          setData(Array.isArray(result) ? result : result.items || [])
+          result = await syncAPI.getBrands(pageSize, offset)
+          const brandsData = Array.isArray(result) ? result : result.items || []
+          setData(brandsData)
+          setTotalCount(result.total_count !== undefined ? result.total_count : brandsData.length)
           break
         case 'prompts':
           result = await syncAPI.getPrompts({
             stage: filters.stage || undefined,
             persona_id: filters.persona_id || undefined,
-            limit: filters.limit || undefined,
+            limit: pageSize,
+            offset: offset,
           })
-          setData(Array.isArray(result) ? result : result.items || [])
+          const promptsData = Array.isArray(result) ? result : result.items || []
+          setData(promptsData)
+          setTotalCount(result.total_count !== undefined ? result.total_count : promptsData.length)
           break
         case 'responses':
           result = await syncAPI.getResponses({
@@ -75,20 +93,36 @@ function DataView() {
             prompt_id: filters.prompt_id || undefined,
             start_date: filters.start_date || undefined,
             end_date: filters.end_date || undefined,
-            limit: filters.limit || undefined,
+            limit: pageSize,
+            offset: offset,
           })
-          setData(Array.isArray(result) ? result : result.items || [])
+          const responsesData = Array.isArray(result) ? result : result.items || []
+          setData(responsesData)
+          setTotalCount(result.total_count !== undefined ? result.total_count : responsesData.length)
           break
         default:
           setData([])
+          setTotalCount(0)
       }
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load data')
+      showError(getErrorMessage(err))
       setData([])
+      setTotalCount(0)
     } finally {
       setLoading(false)
     }
   }
+
+  const handlePageChange = (event, value) => {
+    setPage(value)
+  }
+
+  const handlePageSizeChange = (event) => {
+    setPageSize(event.target.value)
+    setPage(1) // Reset to first page when page size changes
+  }
+
+  const totalPages = Math.ceil(totalCount / pageSize) || 1
 
   const renderTable = () => {
     if (data.length === 0) {
@@ -563,21 +597,29 @@ function DataView() {
                 </>
               )}
               <Grid item xs={12} sm={6} md={3}>
-                <TextField
-                  fullWidth
-                  label="Limit"
-                  type="number"
-                  size="small"
-                  value={filters.limit}
-                  onChange={(e) => setFilters({ ...filters, limit: e.target.value })}
-                />
+                <FormControl fullWidth size="small">
+                  <InputLabel>Items per page</InputLabel>
+                  <Select
+                    value={pageSize}
+                    label="Items per page"
+                    onChange={handlePageSizeChange}
+                  >
+                    <MenuItem value={25}>25</MenuItem>
+                    <MenuItem value={50}>50</MenuItem>
+                    <MenuItem value={100}>100</MenuItem>
+                    <MenuItem value={200}>200</MenuItem>
+                  </Select>
+                </FormControl>
               </Grid>
               <Grid item xs={12} sm={6} md={3}>
                 <Button 
                   variant="contained" 
                   fullWidth 
                   size="small"
-                  onClick={loadData}
+                  onClick={() => {
+                    setPage(1)
+                    loadData()
+                  }}
                   sx={{
                     mt: 0.25,
                     borderRadius: 2,
@@ -595,26 +637,44 @@ function DataView() {
         </Card>
       )}
 
-      {error && (
-        <Alert 
-          severity="error" 
-          sx={{ 
-            mb: 3,
-            borderRadius: 2,
-            fontSize: '13px',
-          }}
-          onClose={() => setError(null)}
-        >
-          {error}
-        </Alert>
-      )}
-
       {loading ? (
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="40vh">
-          <CircularProgress size={32} thickness={4} />
+          <CircularProgress size={40} thickness={4} />
         </Box>
       ) : (
-        renderTable()
+        <>
+          {renderTable()}
+          
+          {/* Pagination */}
+          {data.length > 0 && (
+            <Box 
+              mt={3} 
+              display="flex" 
+              justifyContent="space-between" 
+              alignItems="center"
+              flexWrap="wrap"
+              gap={2}
+            >
+              <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.875rem' }}>
+                Showing {((page - 1) * pageSize) + 1} to {Math.min(page * pageSize, totalCount)} of {totalCount} results
+              </Typography>
+              <Pagination
+                count={totalPages}
+                page={page}
+                onChange={handlePageChange}
+                color="primary"
+                size="medium"
+                showFirstButton
+                showLastButton
+                sx={{
+                  '& .MuiPaginationItem-root': {
+                    fontSize: '0.875rem',
+                  },
+                }}
+              />
+            </Box>
+          )}
+        </>
       )}
     </Box>
   )

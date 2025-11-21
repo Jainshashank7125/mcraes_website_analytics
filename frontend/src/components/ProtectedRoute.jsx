@@ -15,7 +15,7 @@ function ProtectedRoute({ children }) {
           justifyContent: 'center',
         }}
       >
-        <CircularProgress />
+        <CircularProgress size={40} thickness={4} />
       </Box>
     )
   }

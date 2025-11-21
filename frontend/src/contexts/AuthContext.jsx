@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react'
 import { authAPI } from '../services/api'
+import { getErrorMessage } from '../utils/errorHandler'
 
 const AuthContext = createContext(null)
 
@@ -63,7 +64,7 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       return {
         success: false,
-        error: error.response?.data?.detail || 'Sign in failed',
+        error: getErrorMessage(error),
       }
     }
   }
@@ -88,7 +89,7 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       return {
         success: false,
-        error: error.response?.data?.detail || 'Sign up failed',
+        error: getErrorMessage(error),
       }
     }
   }

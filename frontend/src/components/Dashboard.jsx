@@ -6,7 +6,6 @@ import {
   Grid,
   Typography,
   CircularProgress,
-  Alert,
   Button,
   Paper,
   alpha,
@@ -24,6 +23,8 @@ import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { syncAPI } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
+import { useToast } from '../contexts/ToastContext'
+import { getErrorMessage } from '../utils/errorHandler'
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -84,10 +85,10 @@ const statCards = [
 function Dashboard() {
   const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
   const navigate = useNavigate()
   const theme = useTheme()
   const { isAuthenticated, loading: authLoading } = useAuth()
+  const { showError } = useToast()
 
   useEffect(() => {
     // Redirect to login if not authenticated
@@ -107,9 +108,8 @@ function Dashboard() {
       setLoading(true)
       const data = await syncAPI.getStatus()
       setStatus(data)
-      setError(null)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load status')
+      showError(getErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -133,7 +133,7 @@ function Dashboard() {
         alignItems="center" 
         minHeight="50vh"
       >
-        <CircularProgress size={32} thickness={4} />
+        <CircularProgress size={40} thickness={4} />
       </Box>
     )
   }
@@ -169,19 +169,6 @@ function Dashboard() {
             Monitor your brand performance and track insights across all platforms
           </Typography>
         </Box>
-
-        {error && (
-          <Alert 
-            severity="error" 
-            sx={{ 
-              mb: 3,
-              borderRadius: 2,
-            }}
-            onClose={() => setError(null)}
-          >
-            {error}
-          </Alert>
-        )}
 
         <Grid container spacing={2.5} sx={{ mb: 4 }}>
           {statCards.map((card, index) => {

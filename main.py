@@ -1,11 +1,19 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError, HTTPException
 from contextlib import asynccontextmanager
 import uvicorn
 from app.core.config import settings
-from app.api import sync, data, database, auth
+from app.api import sync, data, database, auth, audit, sync_jobs
 from app.db.database import init_db, check_db_connection
 from app.core.logging_config import setup_logging
+from app.core.error_handlers import (
+    base_api_exception_handler,
+    validation_exception_handler,
+    http_exception_handler,
+    general_exception_handler
+)
+from app.core.exceptions import BaseAPIException
 import logging
 
 # Setup logging
@@ -54,11 +62,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register exception handlers (order matters - most specific first)
+app.add_exception_handler(BaseAPIException, base_api_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
+
 # Include routers
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(sync.router, prefix="/api/v1", tags=["sync"])
+app.include_router(sync_jobs.router, prefix="/api/v1", tags=["sync-jobs"])
 app.include_router(data.router, prefix="/api/v1", tags=["data"])
 app.include_router(database.router, prefix="/api/v1", tags=["database"])
+app.include_router(audit.router, prefix="/api/v1", tags=["audit"])
 
 @app.get("/")
 async def root():

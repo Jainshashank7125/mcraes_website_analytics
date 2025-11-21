@@ -1,10 +1,12 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 from typing import Optional
 import logging
 from datetime import datetime, timedelta
 from app.services.supabase_service import SupabaseService
 from app.services.ga4_client import GA4APIClient
 from app.services.agency_analytics_client import AgencyAnalyticsClient
+from app.core.exceptions import NotFoundException, handle_exception
+from app.core.error_utils import handle_api_errors
 
 logger = logging.getLogger(__name__)
 
@@ -12,33 +14,37 @@ router = APIRouter()
 ga4_client = GA4APIClient()
 
 @router.get("/data/brands")
+@handle_api_errors(context="fetching brands")
 async def get_brands(
     limit: Optional[int] = Query(50, description="Number of records to return"),
     offset: Optional[int] = Query(0, description="Offset for pagination")
 ):
     """Get brands from database"""
-    try:
-        supabase = SupabaseService()
-        
-        query = supabase.client.table("brands").select("*")
-        
-        if limit:
-            query = query.limit(limit)
-        if offset:
-            query = query.offset(offset)
-        
-        result = query.execute()
-        items = result.data if hasattr(result, 'data') else result
-        
-        return {
-            "items": items if isinstance(items, list) else [],
-            "count": len(items) if isinstance(items, list) else 0
-        }
-    except Exception as e:
-        logger.error(f"Error fetching brands: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    supabase = SupabaseService()
+    
+    # Get total count first
+    count_result = supabase.client.table("brands").select("*", count="exact").execute()
+    total_count = count_result.count if hasattr(count_result, 'count') else 0
+    
+    # Get paginated items
+    query = supabase.client.table("brands").select("*")
+    
+    if limit:
+        query = query.limit(limit)
+    if offset:
+        query = query.offset(offset)
+    
+    result = query.execute()
+    items = result.data if hasattr(result, 'data') else result
+    
+    return {
+        "items": items if isinstance(items, list) else [],
+        "count": len(items) if isinstance(items, list) else 0,
+        "total_count": total_count
+    }
 
 @router.get("/data/prompts")
+@handle_api_errors(context="fetching prompts")
 async def get_prompts(
     brand_id: Optional[int] = Query(None, description="Filter by brand ID"),
     stage: Optional[str] = Query(None, description="Filter by funnel stage"),
@@ -47,35 +53,46 @@ async def get_prompts(
     offset: Optional[int] = Query(0, description="Offset for pagination")
 ):
     """Get prompts from database"""
-    try:
-        supabase = SupabaseService()
-        
-        query = supabase.client.table("prompts").select("*")
-        
-        if brand_id:
-            query = query.eq("brand_id", brand_id)
-        if stage:
-            query = query.eq("stage", stage)
-        if persona_id:
-            query = query.eq("persona_id", persona_id)
-        
-        if limit:
-            query = query.limit(limit)
-        if offset:
-            query = query.offset(offset)
-        
-        result = query.execute()
-        items = result.data if hasattr(result, 'data') else result
-        
-        return {
-            "items": items if isinstance(items, list) else [],
-            "count": len(items) if isinstance(items, list) else 0
-        }
-    except Exception as e:
-        logger.error(f"Error fetching prompts: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    supabase = SupabaseService()
+    
+    # Build count query with same filters
+    count_query = supabase.client.table("prompts").select("*", count="exact")
+    if brand_id:
+        count_query = count_query.eq("brand_id", brand_id)
+    if stage:
+        count_query = count_query.eq("stage", stage)
+    if persona_id:
+        count_query = count_query.eq("persona_id", persona_id)
+    
+    count_result = count_query.execute()
+    total_count = count_result.count if hasattr(count_result, 'count') else 0
+    
+    # Get paginated items
+    query = supabase.client.table("prompts").select("*")
+    
+    if brand_id:
+        query = query.eq("brand_id", brand_id)
+    if stage:
+        query = query.eq("stage", stage)
+    if persona_id:
+        query = query.eq("persona_id", persona_id)
+    
+    if limit:
+        query = query.limit(limit)
+    if offset:
+        query = query.offset(offset)
+    
+    result = query.execute()
+    items = result.data if hasattr(result, 'data') else result
+    
+    return {
+        "items": items if isinstance(items, list) else [],
+        "count": len(items) if isinstance(items, list) else 0,
+        "total_count": total_count
+    }
 
 @router.get("/data/responses")
+@handle_api_errors(context="fetching responses")
 async def get_responses(
     brand_id: Optional[int] = Query(None, description="Filter by brand ID"),
     platform: Optional[str] = Query(None, description="Filter by AI platform"),
@@ -86,37 +103,51 @@ async def get_responses(
     offset: Optional[int] = Query(0, description="Offset for pagination")
 ):
     """Get responses from database"""
-    try:
-        supabase = SupabaseService()
-        
-        query = supabase.client.table("responses").select("*")
-        
-        if brand_id:
-            query = query.eq("brand_id", brand_id)
-        if platform:
-            query = query.eq("platform", platform)
-        if prompt_id:
-            query = query.eq("prompt_id", prompt_id)
-        if start_date:
-            query = query.gte("created_at", start_date)
-        if end_date:
-            query = query.lte("created_at", end_date)
-        
-        if limit:
-            query = query.limit(limit)
-        if offset:
-            query = query.offset(offset)
-        
-        result = query.execute()
-        items = result.data if hasattr(result, 'data') else result
-        
-        return {
-            "items": items if isinstance(items, list) else [],
-            "count": len(items) if isinstance(items, list) else 0
-        }
-    except Exception as e:
-        logger.error(f"Error fetching responses: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    supabase = SupabaseService()
+    
+    # Build count query with same filters
+    count_query = supabase.client.table("responses").select("*", count="exact")
+    if brand_id:
+        count_query = count_query.eq("brand_id", brand_id)
+    if platform:
+        count_query = count_query.eq("platform", platform)
+    if prompt_id:
+        count_query = count_query.eq("prompt_id", prompt_id)
+    if start_date:
+        count_query = count_query.gte("created_at", start_date)
+    if end_date:
+        count_query = count_query.lte("created_at", end_date)
+    
+    count_result = count_query.execute()
+    total_count = count_result.count if hasattr(count_result, 'count') else 0
+    
+    # Get paginated items
+    query = supabase.client.table("responses").select("*")
+    
+    if brand_id:
+        query = query.eq("brand_id", brand_id)
+    if platform:
+        query = query.eq("platform", platform)
+    if prompt_id:
+        query = query.eq("prompt_id", prompt_id)
+    if start_date:
+        query = query.gte("created_at", start_date)
+    if end_date:
+        query = query.lte("created_at", end_date)
+    
+    if limit:
+        query = query.limit(limit)
+    if offset:
+        query = query.offset(offset)
+    
+    result = query.execute()
+    items = result.data if hasattr(result, 'data') else result
+    
+    return {
+        "items": items if isinstance(items, list) else [],
+        "count": len(items) if isinstance(items, list) else 0,
+        "total_count": total_count
+    }
 
 def calculate_analytics(responses):
     """Calculate analytics from responses"""

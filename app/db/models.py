@@ -1,9 +1,23 @@
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, ARRAY, JSON
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, ARRAY, JSON, Enum
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 from datetime import datetime
+import enum
 
 Base = declarative_base()
+
+
+class AuditLogAction(str, enum.Enum):
+    """Enum for audit log action types"""
+    LOGIN = "login"
+    LOGOUT = "logout"
+    USER_CREATED = "user_created"
+    SYNC_BRANDS = "sync_brands"
+    SYNC_PROMPTS = "sync_prompts"
+    SYNC_RESPONSES = "sync_responses"
+    SYNC_GA4 = "sync_ga4"
+    SYNC_AGENCY_ANALYTICS = "sync_agency_analytics"
+    SYNC_ALL = "sync_all"
 
 
 class Brand(Base):
@@ -78,3 +92,27 @@ class Citation(Base):
     def __repr__(self):
         return f"<Citation(id={self.id}, response_id={self.response_id}, domain='{self.domain}')>"
 
+
+class AuditLog(Base):
+    """Audit log table for tracking user actions and data syncs"""
+    __tablename__ = "audit_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    action = Column(Enum(AuditLogAction), nullable=False, index=True)
+    user_id = Column(String, nullable=True, index=True)  # Supabase user ID
+    user_email = Column(String, nullable=True, index=True)  # User email for easier querying
+    ip_address = Column(String, nullable=True)
+    user_agent = Column(String, nullable=True)
+    
+    # Action-specific details
+    details = Column(JSON, nullable=True)  # Store additional context (brand_id, sync counts, etc.)
+    
+    # Status
+    status = Column(String, nullable=True, index=True)  # 'success', 'error', 'partial'
+    error_message = Column(Text, nullable=True)  # Error message if status is 'error'
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    
+    def __repr__(self):
+        return f"<AuditLog(id={self.id}, action='{self.action}', user_email='{self.user_email}', created_at='{self.created_at}')>"

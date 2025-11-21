@@ -60,7 +60,7 @@ function PublicReportingDashboard() {
           bgcolor: theme.palette.background.default,
         }}
       >
-        <CircularProgress />
+        <CircularProgress size={40} thickness={4} />
       </Box>
     )
   }

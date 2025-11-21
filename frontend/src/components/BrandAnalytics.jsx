@@ -147,7 +147,7 @@ function BrandAnalytics() {
   if (loading) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
-        <CircularProgress size={32} thickness={4} />
+        <CircularProgress size={40} thickness={4} />
       </Box>
     )
   }

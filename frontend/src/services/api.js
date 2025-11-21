@@ -79,13 +79,13 @@ export const syncAPI = {
     return response.data
   },
 
-  // Sync all Scrunch AI data
+  // Sync all Scrunch AI data (async - returns job_id)
   syncAll: async () => {
     const response = await api.post('/api/v1/sync/all')
     return response.data
   },
 
-  // Sync GA4 data
+  // Sync GA4 data (async - returns job_id)
   syncGA4: async (brandId = null, startDate = null, endDate = null, syncRealtime = false) => {
     const params = new URLSearchParams()
     if (brandId) params.append('brand_id', brandId)
@@ -97,7 +97,7 @@ export const syncAPI = {
     return response.data
   },
 
-  // Sync Agency Analytics data
+  // Sync Agency Analytics data (async - returns job_id)
   syncAgencyAnalytics: async (campaignId = null) => {
     const params = new URLSearchParams()
     if (campaignId) params.append('campaign_id', campaignId)
@@ -106,9 +106,44 @@ export const syncAPI = {
     return response.data
   },
 
+  // Get sync job status
+  getSyncJobStatus: async (jobId) => {
+    const response = await api.get(`/api/v1/sync/jobs/${jobId}`)
+    return response.data
+  },
+
+  // Get active sync jobs (pending or running)
+  getActiveSyncJobs: async () => {
+    // Get all jobs and filter for active ones on the frontend
+    const response = await api.get('/api/v1/sync/jobs?limit=100')
+    const allJobs = response.data.items || []
+    const activeJobs = allJobs.filter(job => 
+      job.status === 'pending' || job.status === 'running'
+    )
+    return {
+      items: activeJobs,
+      count: activeJobs.length
+    }
+  },
+
+  // Get user sync jobs
+  getSyncJobs: async (status = null, syncType = null, limit = 50) => {
+    const params = new URLSearchParams()
+    if (status) params.append('status', status)
+    if (syncType) params.append('sync_type', syncType)
+    params.append('limit', limit)
+    
+    const response = await api.get(`/api/v1/sync/jobs?${params.toString()}`)
+    return response.data
+  },
+
   // Get data from database (you'll need to add these endpoints to the backend)
-  getBrands: async () => {
-    const response = await api.get('/api/v1/data/brands')
+  getBrands: async (limit = 50, offset = 0) => {
+    const params = new URLSearchParams()
+    params.append('limit', limit)
+    params.append('offset', offset)
+    
+    const response = await api.get(`/api/v1/data/brands?${params.toString()}`)
     return response.data
   },
 

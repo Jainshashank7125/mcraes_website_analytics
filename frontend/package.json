@@ -16,7 +16,9 @@
     "@mui/material": "^5.14.20",
     "@mui/icons-material": "^5.14.19",
     "@emotion/react": "^11.11.1",
-    "@emotion/styled": "^11.11.0"
+    "@emotion/styled": "^11.11.0",
+    "framer-motion": "^10.16.16",
+    "recharts": "^2.10.3"
   },
   "devDependencies": {
     "@types/react": "^18.2.43",

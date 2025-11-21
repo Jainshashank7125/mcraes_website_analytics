@@ -333,7 +333,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
     } else if (sourceLower.includes('google') && sourceLower.includes('organic')) {
       return 'rgba(59, 130, 246, 0.6)' // Light blue for Google Organic
     } else if (sourceLower.includes('google') && (sourceLower.includes('cpc') || sourceLower.includes('paid'))) {
-      return 'rgba(59, 130, 246, 0.6)' // Light blue for Google CPC
+      return 'rgba(68, 192, 237, 0.6)' // Light blue for Google CPC
     } else if (sourceLower.includes('facebook') || sourceLower.includes('social') || sourceLower.includes('paid_social')) {
       return 'rgba(239, 68, 68, 0.6)' // Orange-red for Social/Paid Social
     } else if (sourceLower.includes('referral') || sourceLower.includes('refer')) {
@@ -637,7 +637,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
 
       {loading ? (
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
-          <CircularProgress size={32} thickness={4} />
+          <CircularProgress size={40} thickness={4} />
         </Box>
       ) : dashboardData ? (
         <>
