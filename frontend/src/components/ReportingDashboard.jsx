@@ -70,6 +70,18 @@ import {
 } from "recharts";
 import { reportingAPI, syncAPI } from "../services/api";
 import ScrunchVisualizations from "./reporting/charts/ScrunchVisualizations";
+// Import reusable components and utilities
+import ChartCard from "./reporting/ChartCard";
+import SectionContainer from "./reporting/SectionContainer";
+import KPICard from "./reporting/KPICard";
+import KPIGrid from "./reporting/KPIGrid";
+import { formatValue, getSourceColor, getSourceLabel, getMonthName, getChannelLabel, getChannelColor } from "./reporting/utils";
+import { CHART_COLORS } from "./reporting/constants";
+import { useChartData, formatDateForAxis, getDateRangeLabel as getDateRangeLabelUtil } from "./reporting/hooks/useChartData";
+// Import enhanced chart components (keeping original Recharts imports for now to avoid breaking changes)
+import LineChartEnhanced from "./reporting/charts/LineChart";
+import BarChartEnhanced from "./reporting/charts/BarChart";
+import PieChartEnhanced from "./reporting/charts/PieChart";
 
 // Define all KPIs in order: GA4 (9), AgencyAnalytics (8), Scrunch (11)
 const KPI_ORDER = [
@@ -222,23 +234,7 @@ const DATE_PRESETS = [
 ];
 
 // Helper function to get month name
-const getMonthName = (monthNumber) => {
-  const months = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-  ];
-  return months[monthNumber - 1] || "";
-};
+// getMonthName is now imported from utils
 
 function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   const isPublic = !!publicSlug;
@@ -741,7 +737,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
     Object.keys(allKPIs).length > 0
       ? isPublic
         ? KPI_ORDER.filter(
-            (key) => allKPIs[key] && key !== "competitive_benchmarking"
+            (key) => allKPIs[key] // Show all available KPIs in public mode
           ).map((key) => [key, allKPIs[key]])
         : KPI_ORDER.filter(
             (key) =>
@@ -988,30 +984,11 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
           {/* Google Analytics 4 Section */}
           {(dashboardData?.kpis?.users ||
             dashboardData?.chart_data?.ga4_traffic_overview) && (
-            <>
-              <Typography
-                variant="h5"
-                fontWeight={700}
-                sx={{
-                  mt: 5,
-                  mb: 3,
-                  fontSize: "1.5rem",
-                  letterSpacing: "-0.02em",
-                  color: "text.primary",
-                }}
-              >
-                Google Analytics 4
-              </Typography>
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{
-                  mb: 3,
-                  fontSize: "0.875rem",
-                }}
-              >
-                Website traffic and engagement metrics
-              </Typography>
+            <SectionContainer
+              title="Google Analytics 4"
+              description="Website traffic and engagement metrics"
+              loading={loading}
+            >
 
               {/* GA4 Charts and Visualizations */}
               <Box sx={{ mb: 4 }}>
@@ -1869,416 +1846,131 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                     <Grid container spacing={3}>
                       {/* Active Users Chart - Full Width (Primary Chart) */}
                       <Grid item xs={12}>
-                        <motion.div
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.5, delay: 0.3 }}
+                        <ChartCard
+                          title="Active Users"
+                          badge="GA4"
+                          badgeColor={CHART_COLORS.ga4.primary}
+                          height={500}
+                          animationDelay={0.3}
                         >
-                          <Card
-                            sx={{
-                              height: 500,
-                              border: `1px solid ${theme.palette.divider}`,
-                              boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                            }}
-                          >
-                            <CardContent sx={{ p: 3 }}>
-                              <Box
-                                display="flex"
-                                alignItems="center"
-                                justifyContent="space-between"
-                                mb={3}
-                              >
-                                <Typography
-                                  variant="h6"
-                                  fontWeight={600}
-                                  sx={{ fontSize: "1.125rem" }}
-                                >
-                                  Active Users
-                                </Typography>
-                                <Chip
-                                  label="GA4"
-                                  size="small"
-                                  sx={{
-                                    bgcolor: alpha(
-                                      theme.palette.primary.main,
-                                      0.1
-                                    ),
-                                    color: theme.palette.primary.main,
-                                    fontWeight: 600,
-                                    fontSize: "10px",
-                                    height: 20,
-                                    borderRadius: "4px",
-                                    border: `1px solid ${alpha(
-                                      theme.palette.primary.main,
-                                      0.2
-                                    )}`,
-                                  }}
-                                />
-                              </Box>
-                              <ResponsiveContainer width="100%" height={400}>
-                                <LineChart
-                                  data={
-                                    dashboardData.chart_data
-                                      .ga4_daily_comparison
-                                  }
-                                  margin={{
-                                    top: 5,
-                                    right: 30,
-                                    left: 20,
-                                    bottom: 5,
-                                  }}
-                                >
-                                  <CartesianGrid
-                                    strokeDasharray="3 3"
-                                    stroke="#E4E4E7"
-                                  />
-                                  <XAxis
+                          <LineChartEnhanced
+                            data={dashboardData.chart_data.ga4_daily_comparison}
                                     dataKey="date"
-                                    tick={{ fontSize: 12 }}
-                                    stroke="#71717A"
-                                    tickFormatter={(value) => {
-                                      if (value && value.length === 8) {
-                                        const month = value.substring(4, 6);
-                                        const day = value.substring(6, 8);
-                                        return `${day} ${getMonthName(
-                                          parseInt(month)
-                                        )}`;
-                                      }
-                                      return value;
-                                    }}
-                                  />
-                                  <YAxis
-                                    tick={{ fontSize: 12 }}
-                                    stroke="#71717A"
-                                  />
-                                  <Tooltip
-                                    contentStyle={{
-                                      borderRadius: "8px",
-                                      border: "none",
-                                      boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                                      backgroundColor: "#FFFFFF",
-                                    }}
-                                    labelFormatter={(value) => {
-                                      if (value && value.length === 8) {
-                                        const year = value.substring(0, 4);
-                                        const month = value.substring(4, 6);
-                                        const day = value.substring(6, 8);
-                                        return `${day} ${getMonthName(
-                                          parseInt(month)
-                                        )} ${year}`;
-                                      }
-                                      return value;
-                                    }}
-                                  />
-                                  <Legend
-                                    wrapperStyle={{ paddingTop: "20px" }}
-                                  />
-                                  <Line
-                                    type="monotone"
-                                    dataKey="current_users"
-                                    name={getDateRangeLabel()}
-                                    stroke={theme.palette.primary.main}
-                                    strokeWidth={3}
-                                    dot={{
-                                      fill: theme.palette.primary.main,
-                                      r: 5,
-                                    }}
-                                    activeDot={{ r: 7 }}
-                                  />
-                                  <Line
-                                    type="monotone"
-                                    dataKey="previous_users"
-                                    name="Previous period"
-                                    stroke={theme.palette.grey[400]}
-                                    strokeWidth={2.5}
-                                    strokeDasharray="5 5"
-                                    dot={{
-                                      fill: theme.palette.grey[400],
-                                      r: 4,
-                                    }}
-                                    activeDot={{ r: 6 }}
-                                  />
-                                </LineChart>
-                              </ResponsiveContainer>
-                            </CardContent>
-                          </Card>
-                        </motion.div>
+                            lines={[
+                              {
+                                dataKey: "current_users",
+                                name: getDateRangeLabel(),
+                                color: CHART_COLORS.comparison.current,
+                                strokeWidth: 3,
+                              },
+                              {
+                                dataKey: "previous_users",
+                                name: "Previous period",
+                                color: CHART_COLORS.comparison.previous,
+                                strokeWidth: 2.5,
+                                strokeDasharray: "5 5",
+                              },
+                            ]}
+                            xAxisFormatter={formatDateForAxis}
+                            formatter={(value) => [value.toLocaleString(), "Users"]}
+                            labelFormatter={(label) => {
+                              if (label && label.length === 8) {
+                                const year = label.substring(0, 4);
+                                const month = label.substring(4, 6);
+                                const day = label.substring(6, 8);
+                                return `${day} ${getMonthName(parseInt(month))} ${year}`;
+                              }
+                              return label;
+                            }}
+                            height={400}
+                          />
+                        </ChartCard>
                       </Grid>
 
                       {/* Sessions Comparison Chart */}
                       <Grid item xs={12} md={6}>
-                        <motion.div
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.5, delay: 0.35 }}
+                        <ChartCard
+                          title="Sessions"
+                          badge="GA4"
+                          badgeColor={CHART_COLORS.ga4.primary}
+                          height={400}
+                          animationDelay={0.35}
                         >
-                          <Card
-                            sx={{
-                              height: 400,
-                              border: `1px solid ${theme.palette.divider}`,
-                              boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                            }}
-                          >
-                            <CardContent sx={{ p: 3 }}>
-                              <Box
-                                display="flex"
-                                alignItems="center"
-                                justifyContent="space-between"
-                                mb={2}
-                              >
-                                <Typography
-                                  variant="h6"
-                                  fontWeight={600}
-                                  sx={{ fontSize: "1rem" }}
-                                >
-                                  Sessions
-                                </Typography>
-                                <Chip
-                                  label="GA4"
-                                  size="small"
-                                  sx={{
-                                    bgcolor: alpha(
-                                      theme.palette.primary.main,
-                                      0.1
-                                    ),
-                                    color: theme.palette.primary.main,
-                                    fontWeight: 600,
-                                    fontSize: "10px",
-                                    height: 20,
-                                    borderRadius: "4px",
-                                    border: `1px solid ${alpha(
-                                      theme.palette.primary.main,
-                                      0.2
-                                    )}`,
-                                  }}
-                                />
-                              </Box>
-                              <ResponsiveContainer width="100%" height={320}>
-                                <LineChart
-                                  data={
-                                    dashboardData.chart_data
-                                      .ga4_daily_comparison
-                                  }
-                                  margin={{
-                                    top: 5,
-                                    right: 30,
-                                    left: 20,
-                                    bottom: 5,
-                                  }}
-                                >
-                                  <CartesianGrid
-                                    strokeDasharray="3 3"
-                                    stroke="#E4E4E7"
-                                  />
-                                  <XAxis
+                          <LineChartEnhanced
+                            data={dashboardData.chart_data.ga4_daily_comparison}
                                     dataKey="date"
-                                    tick={{ fontSize: 11 }}
-                                    stroke="#71717A"
-                                    tickFormatter={(value) => {
-                                      if (value && value.length === 8) {
-                                        const month = value.substring(4, 6);
-                                        const day = value.substring(6, 8);
-                                        return `${day} ${getMonthName(
-                                          parseInt(month)
-                                        )}`;
-                                      }
-                                      return value;
-                                    }}
-                                  />
-                                  <YAxis
-                                    tick={{ fontSize: 12 }}
-                                    stroke="#71717A"
-                                  />
-                                  <Tooltip
-                                    contentStyle={{
-                                      borderRadius: "8px",
-                                      border: "none",
-                                      boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                                      backgroundColor: "#FFFFFF",
-                                    }}
-                                    labelFormatter={(value) => {
-                                      if (value && value.length === 8) {
-                                        const year = value.substring(0, 4);
-                                        const month = value.substring(4, 6);
-                                        const day = value.substring(6, 8);
-                                        return `${day} ${getMonthName(
-                                          parseInt(month)
-                                        )} ${year}`;
-                                      }
-                                      return value;
-                                    }}
-                                  />
-                                  <Legend
-                                    wrapperStyle={{ paddingTop: "10px" }}
-                                  />
-                                  <Line
-                                    type="monotone"
-                                    dataKey="current_sessions"
-                                    name={getDateRangeLabel()}
-                                    stroke={theme.palette.primary.main}
-                                    strokeWidth={3}
-                                    dot={{
-                                      fill: theme.palette.primary.main,
-                                      r: 4,
-                                    }}
-                                    activeDot={{ r: 6 }}
-                                  />
-                                  <Line
-                                    type="monotone"
-                                    dataKey="previous_sessions"
-                                    name="Previous period"
-                                    stroke={theme.palette.grey[400]}
-                                    strokeWidth={2.5}
-                                    strokeDasharray="5 5"
-                                    dot={{
-                                      fill: theme.palette.grey[400],
-                                      r: 3,
-                                    }}
-                                    activeDot={{ r: 5 }}
-                                  />
-                                </LineChart>
-                              </ResponsiveContainer>
-                            </CardContent>
-                          </Card>
-                        </motion.div>
+                            lines={[
+                              {
+                                dataKey: "current_sessions",
+                                name: getDateRangeLabel(),
+                                color: CHART_COLORS.comparison.current,
+                                strokeWidth: 3,
+                              },
+                              {
+                                dataKey: "previous_sessions",
+                                name: "Previous period",
+                                color: CHART_COLORS.comparison.previous,
+                                strokeWidth: 2.5,
+                                strokeDasharray: "5 5",
+                              },
+                            ]}
+                            xAxisFormatter={formatDateForAxis}
+                            formatter={(value) => [value.toLocaleString(), "Sessions"]}
+                            labelFormatter={(label) => {
+                              if (label && label.length === 8) {
+                                const year = label.substring(0, 4);
+                                const month = label.substring(4, 6);
+                                const day = label.substring(6, 8);
+                                return `${day} ${getMonthName(parseInt(month))} ${year}`;
+                              }
+                              return label;
+                            }}
+                            height={320}
+                          />
+                        </ChartCard>
                       </Grid>
 
                       {/* New Users Comparison Chart */}
                       <Grid item xs={12} md={6}>
-                        <motion.div
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.5, delay: 0.4 }}
+                        <ChartCard
+                          title="New Users"
+                          badge="GA4"
+                          badgeColor={CHART_COLORS.ga4.primary}
+                          height={400}
+                          animationDelay={0.4}
                         >
-                          <Card
-                            sx={{
-                              height: 400,
-                              border: `1px solid ${theme.palette.divider}`,
-                              boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                            }}
-                          >
-                            <CardContent sx={{ p: 3 }}>
-                              <Box
-                                display="flex"
-                                alignItems="center"
-                                justifyContent="space-between"
-                                mb={2}
-                              >
-                                <Typography
-                                  variant="h6"
-                                  fontWeight={600}
-                                  sx={{ fontSize: "1rem" }}
-                                >
-                                  New Users
-                                </Typography>
-                                <Chip
-                                  label="GA4"
-                                  size="small"
-                                  sx={{
-                                    bgcolor: alpha(
-                                      theme.palette.primary.main,
-                                      0.1
-                                    ),
-                                    color: theme.palette.primary.main,
-                                    fontWeight: 600,
-                                    fontSize: "10px",
-                                    height: 20,
-                                    borderRadius: "4px",
-                                    border: `1px solid ${alpha(
-                                      theme.palette.primary.main,
-                                      0.2
-                                    )}`,
-                                  }}
-                                />
-                              </Box>
-                              <ResponsiveContainer width="100%" height={320}>
-                                <LineChart
-                                  data={
-                                    dashboardData.chart_data
-                                      .ga4_daily_comparison
-                                  }
-                                  margin={{
-                                    top: 5,
-                                    right: 30,
-                                    left: 20,
-                                    bottom: 5,
-                                  }}
-                                >
-                                  <CartesianGrid
-                                    strokeDasharray="3 3"
-                                    stroke="#E4E4E7"
-                                  />
-                                  <XAxis
+                          <LineChartEnhanced
+                            data={dashboardData.chart_data.ga4_daily_comparison}
                                     dataKey="date"
-                                    tick={{ fontSize: 11 }}
-                                    stroke="#71717A"
-                                    tickFormatter={(value) => {
-                                      if (value && value.length === 8) {
-                                        const month = value.substring(4, 6);
-                                        const day = value.substring(6, 8);
-                                        return `${day} ${getMonthName(
-                                          parseInt(month)
-                                        )}`;
-                                      }
-                                      return value;
-                                    }}
-                                  />
-                                  <YAxis
-                                    tick={{ fontSize: 12 }}
-                                    stroke="#71717A"
-                                  />
-                                  <Tooltip
-                                    contentStyle={{
-                                      borderRadius: "8px",
-                                      border: "none",
-                                      boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                                      backgroundColor: "#FFFFFF",
-                                    }}
-                                    labelFormatter={(value) => {
-                                      if (value && value.length === 8) {
-                                        const year = value.substring(0, 4);
-                                        const month = value.substring(4, 6);
-                                        const day = value.substring(6, 8);
-                                        return `${day} ${getMonthName(
-                                          parseInt(month)
-                                        )} ${year}`;
-                                      }
-                                      return value;
-                                    }}
-                                  />
-                                  <Legend
-                                    wrapperStyle={{ paddingTop: "10px" }}
-                                  />
-                                  <Line
-                                    type="monotone"
-                                    dataKey="current_new_users"
-                                    name={getDateRangeLabel()}
-                                    stroke={theme.palette.success.main}
-                                    strokeWidth={3}
-                                    dot={{
-                                      fill: theme.palette.success.main,
-                                      r: 4,
-                                    }}
-                                    activeDot={{ r: 6 }}
-                                  />
-                                  <Line
-                                    type="monotone"
-                                    dataKey="previous_new_users"
-                                    name="Previous period"
-                                    stroke={theme.palette.grey[400]}
-                                    strokeWidth={2.5}
-                                    strokeDasharray="5 5"
-                                    dot={{
-                                      fill: theme.palette.grey[400],
-                                      r: 3,
-                                    }}
-                                    activeDot={{ r: 5 }}
-                                  />
-                                </LineChart>
-                              </ResponsiveContainer>
-                            </CardContent>
-                          </Card>
-                        </motion.div>
+                            lines={[
+                              {
+                                dataKey: "current_new_users",
+                                name: getDateRangeLabel(),
+                                color: CHART_COLORS.success,
+                                strokeWidth: 3,
+                              },
+                              {
+                                dataKey: "previous_new_users",
+                                name: "Previous period",
+                                color: CHART_COLORS.comparison.previous,
+                                strokeWidth: 2.5,
+                                strokeDasharray: "5 5",
+                              },
+                            ]}
+                            xAxisFormatter={formatDateForAxis}
+                            formatter={(value) => [value.toLocaleString(), "New Users"]}
+                            labelFormatter={(label) => {
+                              if (label && label.length === 8) {
+                                const year = label.substring(0, 4);
+                                const month = label.substring(4, 6);
+                                const day = label.substring(6, 8);
+                                return `${day} ${getMonthName(parseInt(month))} ${year}`;
+                              }
+                              return label;
+                            }}
+                            height={320}
+                          />
+                        </ChartCard>
                       </Grid>
 
                       {/* Conversions Comparison Chart */}
@@ -2288,123 +1980,51 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                           d.previous_conversions > 0
                       ) && (
                         <Grid item xs={12} md={6}>
-                          <motion.div
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: 0.5, delay: 0.45 }}
+                          <ChartCard
+                            title="Conversions"
+                            badge="GA4"
+                            badgeColor={CHART_COLORS.ga4.primary}
+                            height={400}
+                            animationDelay={0.45}
                           >
-                            <Card sx={{ height: 400 }}>
-                              <CardContent sx={{ p: 3 }}>
-                                <Box
-                                  display="flex"
-                                  alignItems="center"
-                                  justifyContent="space-between"
-                                  mb={2}
-                                >
-                                  <Typography variant="h6" fontWeight={600}>
-                                    Conversions
-                                  </Typography>
-                                  <Chip
-                                    label="GA4"
-                                    size="small"
-                                    sx={{
-                                      bgcolor: alpha(
-                                        theme.palette.primary.main,
-                                        0.1
-                                      ),
-                                      color: theme.palette.primary.main,
-                                      fontWeight: 600,
-                                      fontSize: "10px",
-                                      height: 20,
-                                      borderRadius: "4px",
-                                      border: `1px solid ${alpha(
-                                        theme.palette.primary.main,
-                                        0.2
-                                      )}`,
-                                    }}
-                                  />
-                                </Box>
-                                <ResponsiveContainer width="100%" height={320}>
-                                  <LineChart
-                                    data={
-                                      dashboardData.chart_data
-                                        .ga4_daily_comparison
-                                    }
-                                    margin={{
-                                      top: 5,
-                                      right: 30,
-                                      left: 20,
-                                      bottom: 5,
-                                    }}
-                                  >
-                                    <CartesianGrid
-                                      strokeDasharray="3 3"
-                                      stroke="#E4E4E7"
-                                    />
-                                    <XAxis
+                            <LineChartEnhanced
+                              data={dashboardData.chart_data.ga4_daily_comparison}
                                       dataKey="date"
-                                      tick={{ fontSize: 11 }}
-                                      stroke="#71717A"
-                                      tickFormatter={(value) => {
+                              lines={[
+                                {
+                                  dataKey: "current_conversions",
+                                  name: getDateRangeLabel(),
+                                  color: CHART_COLORS.warning,
+                                  strokeWidth: 2.5,
+                                },
+                                {
+                                  dataKey: "previous_conversions",
+                                  name: "Previous period",
+                                  color: CHART_COLORS.comparison.previous,
+                                  strokeWidth: 2,
+                                  strokeDasharray: "5 5",
+                                },
+                              ]}
+                              xAxisFormatter={(value) => {
                                         if (value && value.length === 8) {
                                           const day = value.substring(6, 8);
                                           return day;
                                         }
                                         return value;
                                       }}
-                                    />
-                                    <YAxis
-                                      tick={{ fontSize: 12 }}
-                                      stroke="#71717A"
-                                    />
-                                    <Tooltip
-                                      contentStyle={{
-                                        borderRadius: "8px",
-                                        border: "none",
-                                        boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                                        backgroundColor: "#FFFFFF",
-                                      }}
-                                      labelFormatter={(value) => {
-                                        if (value && value.length === 8) {
-                                          const year = value.substring(0, 4);
-                                          const month = value.substring(4, 6);
-                                          const day = value.substring(6, 8);
-                                          return `${day} ${getMonthName(
-                                            parseInt(month)
-                                          )} ${year}`;
-                                        }
-                                        return value;
-                                      }}
-                                    />
-                                    <Legend />
-                                    <Line
-                                      type="monotone"
-                                      dataKey="current_conversions"
-                                      name={getDateRangeLabel()}
-                                      stroke={theme.palette.warning.main}
-                                      strokeWidth={2.5}
-                                      dot={{
-                                        fill: theme.palette.warning.main,
-                                        r: 3,
-                                      }}
-                                    />
-                                    <Line
-                                      type="monotone"
-                                      dataKey="previous_conversions"
-                                      name="Previous period"
-                                      stroke={theme.palette.grey[400]}
-                                      strokeWidth={2}
-                                      strokeDasharray="5 5"
-                                      dot={{
-                                        fill: theme.palette.grey[400],
-                                        r: 2,
-                                      }}
-                                    />
-                                  </LineChart>
-                                </ResponsiveContainer>
-                              </CardContent>
-                            </Card>
-                          </motion.div>
+                              formatter={(value) => [value.toLocaleString(), "Conversions"]}
+                              labelFormatter={(label) => {
+                                if (label && label.length === 8) {
+                                  const year = label.substring(0, 4);
+                                  const month = label.substring(4, 6);
+                                  const day = label.substring(6, 8);
+                                  return `${day} ${getMonthName(parseInt(month))} ${year}`;
+                                }
+                                return label;
+                              }}
+                              height={320}
+                            />
+                          </ChartCard>
                         </Grid>
                       )}
 
@@ -2413,93 +2033,35 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                         (d) => d.current_revenue > 0 || d.previous_revenue > 0
                       ) && (
                         <Grid item xs={12} md={6}>
-                          <motion.div
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: 0.5, delay: 0.5 }}
+                          <ChartCard
+                            title="Revenue"
+                            badge="GA4"
+                            badgeColor={CHART_COLORS.ga4.primary}
+                            height={400}
+                            animationDelay={0.5}
                           >
-                            <Card sx={{ height: 400 }}>
-                              <CardContent sx={{ p: 3 }}>
-                                <Box
-                                  display="flex"
-                                  alignItems="center"
-                                  justifyContent="space-between"
-                                  mb={2}
-                                >
-                                  <Typography variant="h6" fontWeight={600}>
-                                    Revenue
-                                  </Typography>
-                                  <Chip
-                                    label="GA4"
-                                    size="small"
-                                    sx={{
-                                      bgcolor: alpha(
-                                        theme.palette.primary.main,
-                                        0.1
-                                      ),
-                                      color: theme.palette.primary.main,
-                                      fontWeight: 600,
-                                      fontSize: "10px",
-                                      height: 20,
-                                      borderRadius: "4px",
-                                      border: `1px solid ${alpha(
-                                        theme.palette.primary.main,
-                                        0.2
-                                      )}`,
-                                    }}
-                                  />
-                                </Box>
-                                <ResponsiveContainer width="100%" height={320}>
-                                  <LineChart
-                                    data={
-                                      dashboardData.chart_data
-                                        .ga4_daily_comparison
-                                    }
-                                    margin={{
-                                      top: 5,
-                                      right: 30,
-                                      left: 20,
-                                      bottom: 5,
-                                    }}
-                                  >
-                                    <CartesianGrid
-                                      strokeDasharray="3 3"
-                                      stroke="#E4E4E7"
-                                    />
-                                    <XAxis
+                            <LineChartEnhanced
+                              data={dashboardData.chart_data.ga4_daily_comparison}
                                       dataKey="date"
-                                      tick={{ fontSize: 11 }}
-                                      stroke="#71717A"
-                                      tickFormatter={(value) => {
+                              lines={[
+                                {
+                                  dataKey: "current_revenue",
+                                  name: getDateRangeLabel(),
+                                  color: CHART_COLORS.success,
+                                  strokeWidth: 2.5,
+                                },
+                                {
+                                  dataKey: "previous_revenue",
+                                  name: "Previous period",
+                                  color: CHART_COLORS.comparison.previous,
+                                  strokeWidth: 2,
+                                  strokeDasharray: "5 5",
+                                },
+                              ]}
+                              xAxisFormatter={(value) => {
                                         if (value && value.length === 8) {
                                           const day = value.substring(6, 8);
                                           return day;
-                                        }
-                                        return value;
-                                      }}
-                                    />
-                                    <YAxis
-                                      tick={{ fontSize: 12 }}
-                                      stroke="#71717A"
-                                      tickFormatter={(value) =>
-                                        `$${(value / 1000).toFixed(0)}k`
-                                      }
-                                    />
-                                    <Tooltip
-                                      contentStyle={{
-                                        borderRadius: "8px",
-                                        border: "none",
-                                        boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                                        backgroundColor: "#FFFFFF",
-                                      }}
-                                      labelFormatter={(value) => {
-                                        if (value && value.length === 8) {
-                                          const year = value.substring(0, 4);
-                                          const month = value.substring(4, 6);
-                                          const day = value.substring(6, 8);
-                                          return `${day} ${getMonthName(
-                                            parseInt(month)
-                                          )} ${year}`;
                                         }
                                         return value;
                                       }}
@@ -2509,36 +2071,18 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                                           maximumFractionDigits: 2,
                                         })}`
                                       }
-                                    />
-                                    <Legend />
-                                    <Line
-                                      type="monotone"
-                                      dataKey="current_revenue"
-                                      name={getDateRangeLabel()}
-                                      stroke={theme.palette.success.main}
-                                      strokeWidth={2.5}
-                                      dot={{
-                                        fill: theme.palette.success.main,
-                                        r: 3,
-                                      }}
-                                    />
-                                    <Line
-                                      type="monotone"
-                                      dataKey="previous_revenue"
-                                      name="Previous period"
-                                      stroke={theme.palette.grey[400]}
-                                      strokeWidth={2}
-                                      strokeDasharray="5 5"
-                                      dot={{
-                                        fill: theme.palette.grey[400],
-                                        r: 2,
-                                      }}
-                                    />
-                                  </LineChart>
-                                </ResponsiveContainer>
-                              </CardContent>
-                            </Card>
-                          </motion.div>
+                              labelFormatter={(label) => {
+                                if (label && label.length === 8) {
+                                  const year = label.substring(0, 4);
+                                  const month = label.substring(4, 6);
+                                  const day = label.substring(6, 8);
+                                  return `${day} ${getMonthName(parseInt(month))} ${year}`;
+                                }
+                                return label;
+                              }}
+                              height={320}
+                            />
+                          </ChartCard>
                         </Grid>
                       )}
                     </Grid>
@@ -2548,94 +2092,34 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                 {/* Top Performing Pages - Horizontal Bar Chart */}
                 {dashboardData.chart_data?.top_pages &&
                   dashboardData.chart_data.top_pages.length > 0 && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.5, delay: 0.9 }}
+                    <ChartCard
+                      title="Top Performing Pages"
+                      badge="GA4"
+                      badgeColor={CHART_COLORS.ga4.primary}
+                      height={500}
+                      animationDelay={0.9}
                     >
-                      <Card
-                        sx={{
-                          mb: 3,
-                          borderRadius: 2,
-                          border: `1px solid ${theme.palette.divider}`,
-                          boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                        }}
-                      >
-                        <CardContent sx={{ p: 3 }}>
-                          <Typography
-                            variant="h6"
-                            mb={2}
-                            fontWeight={600}
-                            sx={{
-                              fontSize: "1.125rem",
-                              letterSpacing: "-0.01em",
-                            }}
-                          >
-                            Top Performing Pages
-                          </Typography>
-                          <ResponsiveContainer width="100%" height={400}>
-                            <BarChart
-                              data={dashboardData.chart_data.top_pages.slice(
-                                0,
-                                10
-                              )}
-                              layout="vertical"
+                      <BarChartEnhanced
+                        data={dashboardData.chart_data.top_pages.slice(0, 10)}
+                        dataKey="pagePath"
+                        horizontal={true}
+                        bars={[
+                          {
+                            dataKey: "views",
+                            name: "Page Views",
+                            color: CHART_COLORS.primary,
+                          },
+                        ]}
+                        formatter={(value) => [value.toLocaleString(), "Views"]}
                               margin={{
                                 top: 5,
                                 right: 30,
                                 left: 150,
                                 bottom: 5,
                               }}
-                            >
-                              <CartesianGrid
-                                strokeDasharray="3 3"
-                                horizontal={false}
-                                stroke="#E4E4E7"
-                              />
-                              <XAxis
-                                type="number"
-                                tick={{ fontSize: 12 }}
-                                stroke="#71717A"
-                              />
-                              <YAxis
-                                dataKey="pagePath"
-                                type="category"
-                                width={140}
-                                stroke="#71717A"
-                                tick={{ fontSize: 10 }}
-                                tickFormatter={(value) => {
-                                  if (!value) return "N/A";
-                                  const path =
-                                    value.length > 30
-                                      ? value.substring(0, 30) + "..."
-                                      : value;
-                                  return path;
-                                }}
-                              />
-                              <Tooltip
-                                contentStyle={{
-                                  borderRadius: "8px",
-                                  border: "none",
-                                  boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                                  backgroundColor: "#FFFFFF",
-                                }}
-                                formatter={(value) => [
-                                  value.toLocaleString(),
-                                  "Views",
-                                ]}
-                              />
-                              <Legend />
-                              <Bar
-                                dataKey="views"
-                                radius={[0, 4, 4, 0]}
-                                fill={theme.palette.primary.main}
-                                name="Page Views"
-                              />
-                            </BarChart>
-                          </ResponsiveContainer>
-                        </CardContent>
-                      </Card>
-                    </motion.div>
+                        height={400}
+                      />
+                    </ChartCard>
                   )}
 
                 {/* Sessions by Channel - Donut Chart & Bar Chart */}
@@ -2915,171 +2399,61 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                     <Grid container spacing={3} sx={{ mb: 3 }}>
                       {/* Bar Chart */}
                       <Grid item xs={12} md={7}>
-                        <motion.div
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.5, delay: 1.2 }}
+                        <ChartCard
+                          title="Geographic Distribution"
+                          badge="GA4"
+                          badgeColor={CHART_COLORS.ga4.primary}
+                          height="100%"
+                          animationDelay={1.2}
                         >
-                          <Card
-                            sx={{
-                              height: "100%",
-                              borderRadius: 2,
-                              border: `1px solid ${theme.palette.divider}`,
-                              boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                            }}
-                          >
-                            <CardContent sx={{ p: 3 }}>
-                              <Typography
-                                variant="h6"
-                                mb={2}
-                                fontWeight={600}
-                                sx={{
-                                  fontSize: "1.125rem",
-                                  letterSpacing: "-0.01em",
-                                }}
-                              >
-                                Geographic Distribution
-                              </Typography>
-                              <ResponsiveContainer width="100%" height={350}>
-                                <BarChart
-                                  data={dashboardData.chart_data.geographic_breakdown.slice(
-                                    0,
-                                    10
-                                  )}
+                          <BarChartEnhanced
+                            data={dashboardData.chart_data.geographic_breakdown.slice(0, 10)}
+                            dataKey="country"
+                            bars={[
+                              {
+                                dataKey: "users",
+                                name: "Users",
+                                color: CHART_COLORS.primary,
+                              },
+                            ]}
+                            formatter={(value) => [value.toLocaleString(), "Users"]}
+                            xAxisFormatter={(value) => value}
                                   margin={{
                                     top: 5,
                                     right: 30,
                                     left: 20,
                                     bottom: 5,
                                   }}
-                                >
-                                  <CartesianGrid
-                                    strokeDasharray="3 3"
-                                    stroke="#E4E4E7"
-                                  />
-                                  <XAxis
-                                    dataKey="country"
-                                    tick={{ fontSize: 11 }}
-                                    stroke="#71717A"
-                                    angle={-45}
-                                    textAnchor="end"
-                                    height={80}
-                                  />
-                                  <YAxis
-                                    tick={{ fontSize: 12 }}
-                                    stroke="#71717A"
-                                  />
-                                  <Tooltip
-                                    contentStyle={{
-                                      borderRadius: "8px",
-                                      border: "none",
-                                      boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                                      backgroundColor: "#FFFFFF",
-                                    }}
-                                    formatter={(value) => [
-                                      value.toLocaleString(),
-                                      "Users",
-                                    ]}
-                                  />
-                                  <Legend />
-                                  <Bar
-                                    dataKey="users"
-                                    radius={[4, 4, 0, 0]}
-                                    fill={theme.palette.primary.main}
-                                    name="Users"
-                                  />
-                                </BarChart>
-                              </ResponsiveContainer>
-                            </CardContent>
-                          </Card>
-                        </motion.div>
+                            height={350}
+                          />
+                        </ChartCard>
                       </Grid>
 
                       {/* Pie Chart */}
                       <Grid item xs={12} md={5}>
-                        <motion.div
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.5, delay: 1.25 }}
+                        <ChartCard
+                          title="Top Countries"
+                          badge="GA4"
+                          badgeColor={CHART_COLORS.ga4.primary}
+                          height={450}
+                          animationDelay={1.25}
                         >
-                          <Card
-                            sx={{
-                              height: "100%",
-                              borderRadius: 2,
-                              border: `1px solid ${theme.palette.divider}`,
-                              boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                            }}
-                          >
-                            <CardContent sx={{ p: 3 }}>
-                              <Typography
-                                variant="h6"
-                                mb={2}
-                                fontWeight={600}
-                                sx={{
-                                  fontSize: "1.125rem",
-                                  letterSpacing: "-0.01em",
-                                }}
-                              >
-                                Top Countries
-                              </Typography>
-                              <ResponsiveContainer width="100%" height={350}>
-                                <PieChart>
-                                  <Pie
+                          <PieChartEnhanced
                                     data={dashboardData.chart_data.geographic_breakdown
                                       .slice(0, 6)
                                       .map((item) => ({
                                         name: item.country || "Unknown",
                                         value: item.users || 0,
                                       }))}
-                                    cx="50%"
-                                    cy="50%"
-                                    labelLine={false}
-                                    label={({ name, percent }) =>
-                                      `${name}: ${(percent * 100).toFixed(0)}%`
-                                    }
-                                    outerRadius={100}
-                                    fill="#8884d8"
-                                    dataKey="value"
-                                  >
-                                    {dashboardData.chart_data.geographic_breakdown
-                                      .slice(0, 6)
-                                      .map((entry, index) => {
-                                        const colors = [
-                                          theme.palette.primary.main,
-                                          theme.palette.secondary.main,
-                                          theme.palette.success.main,
-                                          theme.palette.warning.main,
-                                          theme.palette.error.main,
-                                          theme.palette.info.main,
-                                        ];
-                                        return (
-                                          <Cell
-                                            key={`cell-${index}`}
-                                            fill={colors[index % colors.length]}
-                                          />
-                                        );
-                                      })}
-                                  </Pie>
-                                  <Tooltip
-                                    contentStyle={{
-                                      borderRadius: "8px",
-                                      border: "none",
-                                      boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                                      backgroundColor: "#FFFFFF",
-                                    }}
-                                    formatter={(value) => [
+                            donut={false}
+                            colors={CHART_COLORS.palette}
+                            formatter={(value, name) => [
                                       value.toLocaleString(),
                                       "Users",
                                     ]}
-                                  />
-                                  <Legend
-                                    wrapperStyle={{ paddingTop: "20px" }}
-                                  />
-                                </PieChart>
-                              </ResponsiveContainer>
-                            </CardContent>
-                          </Card>
-                        </motion.div>
+                            height={350}
+                          />
+                        </ChartCard>
                       </Grid>
                     </Grid>
                   )}
@@ -3089,82 +2463,38 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                   {/* Bounce Rate Donut */}
                   {dashboardData?.kpis?.bounce_rate && (
                     <Grid item xs={12} sm={6} md={4}>
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.5, delay: 1.3 }}
+                      <ChartCard
+                        title="Bounce Rate"
+                        badge="GA4"
+                        badgeColor={CHART_COLORS.ga4.primary}
+                        height="100%"
+                        animationDelay={1.3}
+                        sx={{ textAlign: "center" }}
                       >
-                        <Card
-                          sx={{
-                            height: "100%",
-                            borderRadius: 2,
-                            border: `1px solid ${theme.palette.divider}`,
-                            boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                          }}
-                        >
-                          <CardContent sx={{ p: 3, textAlign: "center" }}>
-                            <Typography
-                              variant="h6"
-                              mb={2}
-                              fontWeight={600}
-                              sx={{
-                                fontSize: "1rem",
-                                letterSpacing: "-0.01em",
-                              }}
-                            >
-                              Bounce Rate
-                            </Typography>
-                            <ResponsiveContainer width="100%" height={250}>
-                              <PieChart>
-                                <Pie
+                        <Box>
+                          <PieChartEnhanced
                                   data={[
                                     {
                                       name: "Bounced",
-                                      value:
-                                        dashboardData.kpis.bounce_rate.value ||
-                                        0,
+                                value: dashboardData.kpis.bounce_rate.value || 0,
                                     },
                                     {
                                       name: "Engaged",
                                       value:
-                                        100 -
-                                        (dashboardData.kpis.bounce_rate.value ||
-                                          0),
+                                  100 - (dashboardData.kpis.bounce_rate.value || 0),
                                     },
                                   ]}
-                                  cx="50%"
-                                  cy="50%"
+                            donut={true}
                                   innerRadius={60}
                                   outerRadius={90}
-                                  startAngle={90}
-                                  endAngle={-270}
-                                  dataKey="value"
-                                  label={({ name, value }) =>
-                                    `${name}: ${value.toFixed(1)}%`
-                                  }
-                                  labelLine={false}
-                                >
-                                  <Cell fill={theme.palette.error.main} />
-                                  <Cell fill={theme.palette.success.main} />
-                                </Pie>
-                                <Tooltip
-                                  contentStyle={{
-                                    borderRadius: "8px",
-                                    border: "none",
-                                    boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                                    backgroundColor: "#FFFFFF",
-                                  }}
+                            colors={[CHART_COLORS.error, CHART_COLORS.success]}
                                   formatter={(value, name) => [
                                     `${value.toFixed(1)}%`,
                                     name,
                                   ]}
-                                />
-                                <Legend
-                                  wrapperStyle={{ paddingTop: "10px" }}
-                                  formatter={(value) => value}
-                                />
-                              </PieChart>
-                            </ResponsiveContainer>
+                            showLabel={true}
+                            height={250}
+                          />
                             <Box mt={2}>
                               <Typography
                                 variant="h4"
@@ -3176,10 +2506,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                                     : "success.main"
                                 }
                               >
-                                {(
-                                  dashboardData.kpis.bounce_rate.value || 0
-                                ).toFixed(1)}
-                                %
+                              {(dashboardData.kpis.bounce_rate.value || 0).toFixed(1)}%
                               </Typography>
                               <Typography
                                 variant="caption"
@@ -3193,92 +2520,50 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                                 Bounced Sessions
                               </Typography>
                             </Box>
-                          </CardContent>
-                        </Card>
-                      </motion.div>
+                        </Box>
+                      </ChartCard>
                     </Grid>
                   )}
 
                   {/* Engagement Rate Donut */}
                   {dashboardData?.kpis?.ga4_engagement_rate && (
                     <Grid item xs={12} sm={6} md={4}>
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.5, delay: 1.35 }}
+                      <ChartCard
+                        title="Engagement Rate"
+                        badge="GA4"
+                        badgeColor={CHART_COLORS.ga4.primary}
+                        height="100%"
+                        animationDelay={1.35}
+                        sx={{ textAlign: "center" }}
                       >
-                        <Card
-                          sx={{
-                            height: "100%",
-                            borderRadius: 2,
-                            border: `1px solid ${theme.palette.divider}`,
-                            boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                          }}
-                        >
-                          <CardContent sx={{ p: 3, textAlign: "center" }}>
-                            <Typography
-                              variant="h6"
-                              mb={2}
-                              fontWeight={600}
-                              sx={{
-                                fontSize: "1rem",
-                                letterSpacing: "-0.01em",
-                              }}
-                            >
-                              Engagement Rate
-                            </Typography>
-                            <ResponsiveContainer width="100%" height={250}>
-                              <PieChart>
-                                <Pie
+                        <Box>
+                          <PieChartEnhanced
                                   data={[
                                     {
                                       name: "Engaged",
                                       value:
-                                        (dashboardData.kpis.ga4_engagement_rate
-                                          .value || 0) * 100,
+                                  (dashboardData.kpis.ga4_engagement_rate.value || 0) *
+                                  100,
                                     },
                                     {
                                       name: "Not Engaged",
                                       value:
                                         100 -
-                                        (dashboardData.kpis.ga4_engagement_rate
-                                          .value || 0) *
+                                  (dashboardData.kpis.ga4_engagement_rate.value || 0) *
                                           100,
                                     },
                                   ]}
-                                  cx="50%"
-                                  cy="50%"
+                            donut={true}
                                   innerRadius={60}
                                   outerRadius={90}
-                                  startAngle={90}
-                                  endAngle={-270}
-                                  dataKey="value"
-                                  label={({ name, value }) =>
-                                    `${name}: ${value.toFixed(1)}%`
-                                  }
-                                  labelLine={false}
-                                >
-                                  <Cell fill={theme.palette.success.main} />
-                                  <Cell fill={theme.palette.grey[300]} />
-                                </Pie>
-                                <Tooltip
-                                  contentStyle={{
-                                    borderRadius: "8px",
-                                    border: "none",
-                                    boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                                    backgroundColor: "#FFFFFF",
-                                  }}
+                            colors={[CHART_COLORS.success, theme.palette.grey[300]]}
                                   formatter={(value, name) => [
                                     `${value.toFixed(1)}%`,
                                     name,
                                   ]}
-                                />
-                                <Legend
-                                  wrapperStyle={{ paddingTop: "10px" }}
-                                  formatter={(value) => value}
-                                />
-                              </PieChart>
-                            </ResponsiveContainer>
+                            showLabel={true}
+                            height={250}
+                          />
                             <Box mt={2}>
                               <Typography
                                 variant="h4"
@@ -3287,8 +2572,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                                 color="success.main"
                               >
                                 {(
-                                  (dashboardData.kpis.ga4_engagement_rate
-                                    .value || 0) * 100
+                                (dashboardData.kpis.ga4_engagement_rate.value || 0) * 100
                                 ).toFixed(1)}
                                 %
                               </Typography>
@@ -3304,91 +2588,46 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                                 Engaged Sessions
                               </Typography>
                             </Box>
-                          </CardContent>
-                        </Card>
-                      </motion.div>
+                        </Box>
+                      </ChartCard>
                     </Grid>
                   )}
 
-                  {/* Brand Presence Rate Donut */}
+                  {/* Brand Presence Rate Donut
                   {dashboardData?.kpis?.brand_presence_rate && (
                     <Grid item xs={12} sm={6} md={4}>
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.5, delay: 1.4 }}
+                      <ChartCard
+                        title="Brand Presence Rate"
+                        badge="Scrunch"
+                        badgeColor={CHART_COLORS.scrunch.primary}
+                        height="100%"
+                        animationDelay={1.4}
+                        sx={{ textAlign: "center" }}
                       >
-                        <Card
-                          sx={{
-                            height: "100%",
-                            borderRadius: 2,
-                            border: `1px solid ${theme.palette.divider}`,
-                            boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                          }}
-                        >
-                          <CardContent sx={{ p: 3, textAlign: "center" }}>
-                            <Typography
-                              variant="h6"
-                              mb={2}
-                              fontWeight={600}
-                              sx={{
-                                fontSize: "1rem",
-                                letterSpacing: "-0.01em",
-                              }}
-                            >
-                              Brand Presence Rate
-                            </Typography>
-                            <ResponsiveContainer width="100%" height={250}>
-                              <PieChart>
-                                <Pie
+                        <Box>
+                          <PieChartEnhanced
                                   data={[
                                     {
                                       name: "Present",
-                                      value:
-                                        dashboardData.kpis.brand_presence_rate
-                                          .value || 0,
+                                value: dashboardData.kpis.brand_presence_rate.value || 0,
                                     },
                                     {
                                       name: "Absent",
                                       value:
-                                        100 -
-                                        (dashboardData.kpis.brand_presence_rate
-                                          .value || 0),
+                                  100 - (dashboardData.kpis.brand_presence_rate.value || 0),
                                     },
                                   ]}
-                                  cx="50%"
-                                  cy="50%"
+                            donut={true}
                                   innerRadius={60}
                                   outerRadius={90}
-                                  startAngle={90}
-                                  endAngle={-270}
-                                  dataKey="value"
-                                  label={({ name, value }) =>
-                                    `${name}: ${value.toFixed(1)}%`
-                                  }
-                                  labelLine={false}
-                                >
-                                  <Cell fill={theme.palette.success.main} />
-                                  <Cell fill={theme.palette.grey[300]} />
-                                </Pie>
-                                <Tooltip
-                                  contentStyle={{
-                                    borderRadius: "8px",
-                                    border: "none",
-                                    boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                                    backgroundColor: "#FFFFFF",
-                                  }}
+                            colors={[CHART_COLORS.success, theme.palette.grey[300]]}
                                   formatter={(value, name) => [
                                     `${value.toFixed(1)}%`,
                                     name,
                                   ]}
-                                />
-                                <Legend
-                                  wrapperStyle={{ paddingTop: "10px" }}
-                                  formatter={(value) => value}
-                                />
-                              </PieChart>
-                            </ResponsiveContainer>
+                            showLabel={true}
+                            height={250}
+                          />
                             <Box mt={2}>
                               <Typography
                                 variant="h4"
@@ -3396,11 +2635,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                                 sx={{ fontSize: "2rem" }}
                                 color="success.main"
                               >
-                                {(
-                                  dashboardData.kpis.brand_presence_rate
-                                    .value || 0
-                                ).toFixed(1)}
-                                %
+                              {(dashboardData.kpis.brand_presence_rate.value || 0).toFixed(1)}%
                               </Typography>
                               <Typography
                                 variant="caption"
@@ -3414,43 +2649,23 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                                 Brand Present in Responses
                               </Typography>
                             </Box>
-                          </CardContent>
-                        </Card>
-                      </motion.div>
+                        </Box>
+                      </ChartCard>
                     </Grid>
-                  )}
+                  )} */}
                 </Grid>
 
                 {/* Top Keywords Ranking - Bar Chart */}
                 {dashboardData.chart_data?.all_keywords_ranking &&
                   dashboardData.chart_data.all_keywords_ranking.length > 0 && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.5, delay: 0.2 }}
+                    <ChartCard
+                      title="Top Keywords Ranking"
+                      badge="AgencyAnalytics"
+                      badgeColor={CHART_COLORS.agencyAnalytics.primary}
+                      height={500}
+                      animationDelay={0.2}
                     >
-                      <Card
-                        sx={{
-                          mb: 3,
-                          borderRadius: 2,
-                          border: `1px solid ${theme.palette.divider}`,
-                          boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                        }}
-                      >
-                        <CardContent sx={{ p: 3 }}>
-                          <Typography
-                            variant="h6"
-                            mb={2}
-                            fontWeight={600}
-                            sx={{
-                              fontSize: "1.125rem",
-                              letterSpacing: "-0.01em",
-                            }}
-                          >
-                            Top Keywords Ranking
-                          </Typography>
-                          <ResponsiveContainer width="100%" height={400}>
-                            <BarChart
+                      <BarChartEnhanced
                               data={dashboardData.chart_data.all_keywords_ranking
                                 .slice(0, 15)
                                 .map((kw) => ({
@@ -3458,77 +2673,34 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                                   rank: kw.google_rank || 0,
                                   searchVolume: kw.search_volume || 0,
                                 }))}
-                              layout="vertical"
-                              margin={{
-                                top: 5,
-                                right: 30,
-                                left: 120,
-                                bottom: 5,
-                              }}
-                            >
-                              <CartesianGrid
-                                strokeDasharray="3 3"
-                                horizontal={false}
-                                stroke="#E4E4E7"
-                              />
-                              <XAxis
-                                type="number"
-                                tick={{ fontSize: 12 }}
-                                stroke="#71717A"
-                                domain={[0, 100]}
-                                reversed
-                                label={{
-                                  value: "Ranking Position (Lower is Better)",
-                                  position: "insideBottom",
-                                  offset: -5,
-                                }}
-                              />
-                              <YAxis
                                 dataKey="keyword"
-                                type="category"
-                                width={110}
-                                stroke="#71717A"
-                                tick={{ fontSize: 10 }}
-                                tickFormatter={(value) => {
-                                  if (!value) return "N/A";
-                                  return value.length > 20
-                                    ? value.substring(0, 20) + "..."
-                                    : value;
-                                }}
-                              />
-                              <Tooltip
-                                contentStyle={{
-                                  borderRadius: "8px",
-                                  border: "none",
-                                  boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-                                  backgroundColor: "#FFFFFF",
-                                }}
+                        horizontal={true}
+                        bars={[
+                          {
+                            dataKey: "rank",
+                            name: "Rank",
+                            color: CHART_COLORS.agencyAnalytics.primary,
+                          },
+                        ]}
                                 formatter={(value, name) => {
                                   if (name === "rank")
                                     return [`Position ${value}`, "Rank"];
                                   if (name === "searchVolume")
-                                    return [
-                                      value.toLocaleString(),
-                                      "Search Volume",
-                                    ];
+                            return [value.toLocaleString(), "Search Volume"];
                                   return [value, name];
                                 }}
-                              />
-                              <Legend />
-                              <Bar
-                                dataKey="rank"
-                                radius={[0, 4, 4, 0]}
-                                fill={theme.palette.primary.main}
-                                name="Rank"
-                              />
-                            </BarChart>
-                          </ResponsiveContainer>
-                        </CardContent>
-                      </Card>
-                    </motion.div>
+                        margin={{
+                          top: 5,
+                          right: 30,
+                          left: 120,
+                          bottom: 5,
+                        }}
+                        height={400}
+                      />
+                    </ChartCard>
                   )}
               </Box>
-            </>
+            </SectionContainer>
           )}
 
           {/* Scrunch AI Section */}
@@ -3575,48 +2747,12 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
 
               return shouldShow;
             })() && (
-              <>
-                <Typography
-                  variant="h5"
-                  fontWeight={700}
-                  sx={{
-                    mt: 5,
-                    mb: 3,
-                    fontSize: "1.5rem",
-                    letterSpacing: "-0.02em",
-                    color: "text.primary",
-                  }}
-                >
-                  Scrunch AI
-                  {loadingScrunch && (
-                    <CircularProgress
-                      size={16}
-                      sx={{ ml: 2, verticalAlign: "middle" }}
-                    />
-                  )}
-                </Typography>
-                <Typography
-                  variant="body2"
-                  color="text.secondary"
-                  sx={{
-                    mb: 3,
-                    fontSize: "0.875rem",
-                  }}
-                >
-                  AI platform presence and engagement metrics
-                </Typography>
+              <SectionContainer
+                title="Scrunch AI"
+                description="AI platform presence and engagement metrics"
+                loading={loadingScrunch}
+              >
 
-                {loadingScrunch ? (
-                  <Box
-                    display="flex"
-                    justifyContent="center"
-                    alignItems="center"
-                    minHeight="200px"
-                  >
-                    <CircularProgress size={40} />
-                  </Box>
-                ) : (
-                  <>
                     {/* Use scrunchData if available, otherwise fall back to dashboardData */}
                     {(() => {
                       // Prefer scrunchData, but fall back to dashboardData if scrunchData doesn't have KPIs
@@ -3691,101 +2827,40 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                               </Typography>
                               <Grid container spacing={3}>
                                 <Grid item xs={12} sm={6} md={4}>
-                                  <motion.div
-                                    initial={{ opacity: 0, y: 20 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    transition={{
-                                      duration: 0.5,
-                                      delay: 0.1,
-                                    }}
+                                  <ChartCard
+                                    title="Brand Presence Rate"
+                                    badge="Scrunch"
+                                    badgeColor={CHART_COLORS.scrunch.primary}
+                                    height="100%"
+                                    animationDelay={0.1}
+                                    sx={{ textAlign: "center" }}
                                   >
-                                    <Card
-                                      sx={{
-                                        height: "100%",
-                                        borderRadius: 2,
-                                        border: `1px solid ${theme.palette.divider}`,
-                                        boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                                      }}
-                                    >
-                                      <CardContent
-                                        sx={{ p: 3, textAlign: "center" }}
-                                      >
-                                        <Typography
-                                          variant="h6"
-                                          mb={2}
-                                          fontWeight={600}
-                                          sx={{
-                                            fontSize: "1rem",
-                                            letterSpacing: "-0.01em",
-                                          }}
-                                        >
-                                          Brand Presence Rate
-                                        </Typography>
-                                        <ResponsiveContainer
-                                          width="100%"
-                                          height={250}
-                                        >
-                                          <PieChart>
-                                            <Pie
+                                    <Box>
+                                      <PieChartEnhanced
                                               data={[
                                                 {
                                                   name: "Present",
                                                   value:
-                                                    scrunchKPIs
-                                                      .brand_presence_rate
-                                                      .value || 0,
+                                              scrunchKPIs.brand_presence_rate.value || 0,
                                                 },
                                                 {
                                                   name: "Absent",
                                                   value:
                                                     100 -
-                                                    (scrunchKPIs
-                                                      .brand_presence_rate
-                                                      .value || 0),
+                                              (scrunchKPIs.brand_presence_rate.value || 0),
                                                 },
                                               ]}
-                                              cx="50%"
-                                              cy="50%"
+                                        donut={true}
                                               innerRadius={60}
                                               outerRadius={90}
-                                              startAngle={90}
-                                              endAngle={-270}
-                                              dataKey="value"
-                                              label={({ name, value }) =>
-                                                `${name}: ${value.toFixed(1)}%`
-                                              }
-                                              labelLine={false}
-                                            >
-                                              <Cell
-                                                fill={
-                                                  theme.palette.success.main
-                                                }
-                                              />
-                                              <Cell
-                                                fill={theme.palette.grey[300]}
-                                              />
-                                            </Pie>
-                                            <Tooltip
-                                              contentStyle={{
-                                                borderRadius: "8px",
-                                                border: "none",
-                                                boxShadow:
-                                                  "0 4px 12px rgba(0,0,0,0.1)",
-                                                backgroundColor: "#FFFFFF",
-                                              }}
+                                        colors={[CHART_COLORS.success, theme.palette.grey[300]]}
                                               formatter={(value, name) => [
                                                 `${value.toFixed(1)}%`,
                                                 name,
                                               ]}
-                                            />
-                                            <Legend
-                                              wrapperStyle={{
-                                                paddingTop: "10px",
-                                              }}
-                                              formatter={(value) => value}
-                                            />
-                                          </PieChart>
-                                        </ResponsiveContainer>
+                                        showLabel={true}
+                                        height={250}
+                                      />
                                         <Box mt={2}>
                                           <Typography
                                             variant="h4"
@@ -3794,8 +2869,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                                             color="success.main"
                                           >
                                             {(
-                                              dashboardData.kpis
-                                                .brand_presence_rate.value || 0
+                                            scrunchKPIs.brand_presence_rate.value || 0
                                             ).toFixed(1)}
                                             %
                                           </Typography>
@@ -3811,9 +2885,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                                             Brand Present in Responses
                                           </Typography>
                                         </Box>
-                                      </CardContent>
-                                    </Card>
-                                  </motion.div>
+                                    </Box>
+                                  </ChartCard>
                                 </Grid>
                               </Grid>
                             </Box>
@@ -4384,23 +3457,21 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                         </>
                       );
                     })()}
-                  </>
-                )}
 
                 {/* New Query API Visualizations - Separate component that fetches its own data */}
-                {selectedBrandId && !isPublic && (
+                {selectedBrandId  && (
                   <Box sx={{ mb: 4, mt: 4 }}>
-                    <Typography
+                <Typography
                       variant="h6"
                       fontWeight={600}
                       mb={3}
-                      sx={{
+                  sx={{
                         fontSize: "1.125rem",
                         letterSpacing: "-0.01em",
                       }}
                     >
                       Advanced Analytics (Query API)
-                    </Typography>
+                </Typography>
                     <ScrunchVisualizations
                       brandId={selectedBrandId}
                       startDate={startDate}
@@ -4408,25 +3479,15 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                     />
                   </Box>
                 )}
-              </>
+              </SectionContainer>
             )}
 
             {/* Brand Analytics Charts Section */}
             {brandAnalytics && (
-              <>
-                <Typography
-                  variant="h5"
-                  fontWeight={700}
-                  sx={{
-                    mt: 5,
-                    mb: 3,
-                    fontSize: "1.5rem",
-                    letterSpacing: "-0.02em",
-                    color: "text.primary",
-                  }}
-                >
-                  Brand Analytics Insights
-                </Typography>
+              <SectionContainer
+                title="Brand Analytics Insights"
+                loading={loadingAnalytics}
+              >
 
                 <Grid container spacing={2.5} sx={{ mb: 3 }}>
                   {/* Platform Distribution - Donut Chart */}
@@ -4844,402 +3905,33 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                         )}
                     </Grid>
                   )}
-              </>
+              </SectionContainer>
             )}
 
             {/* General KPI Grid - All Other KPIs */}
             {displayedKPIs.length > 0 && (
-              <>
-                <Typography
-                  variant="h5"
-                  fontWeight={700}
-                  sx={{
-                    mt: 5,
-                    mb: 3,
-                    fontSize: "1.5rem",
-                    letterSpacing: "-0.02em",
-                    color: "text.primary",
-                  }}
-                >
-                  All Performance Metrics
-                </Typography>
-
+              <SectionContainer title="All Performance Metrics">
                 <Grid container spacing={2} sx={{ mb: 4 }}>
-                  {displayedKPIs.map(([key, kpi], index) => {
-                    const sourceColor = getSourceColor(kpi.source);
-                    const sourceLabel = getSourceLabel(kpi.source);
-
-                    return (
-                      <Grid item xs={12} sm={6} md={3} key={key}>
-                        <motion.div
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{
-                            duration: 0.3,
-                            delay: index * 0.05,
-                          }}
-                        >
-                          <Card
-                            sx={{
-                              height: "100%",
-                              background: "#FFFFFF",
-                              border: `1px solid ${theme.palette.divider}`,
-                              borderRadius: 2,
-                              boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                              transition: "all 0.2s ease-in-out",
-                              "&:hover": {
-                                boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-                                transform: "translateY(-2px)",
-                              },
-                            }}
-                          >
-                            <CardContent sx={{ p: 2.5 }}>
-                              {/* Source Label */}
-                              <Box
-                                display="flex"
-                                justifyContent="flex-end"
-                                mb={1}
-                              >
-                                <Chip
-                                  label={sourceLabel}
-                                  size="small"
-                                  sx={{
-                                    bgcolor: alpha(sourceColor, 0.1),
-                                    color: sourceColor,
-                                    fontWeight: 600,
-                                    fontSize: "10px",
-                                    height: 20,
-                                    borderRadius: "4px",
-                                    border: `1px solid ${alpha(
-                                      sourceColor,
-                                      0.2
-                                    )}`,
-                                  }}
-                                />
-                              </Box>
-
-                              {/* KPI Label */}
-                              <Typography
-                                variant="caption"
-                                color="text.secondary"
-                                sx={{
-                                  fontSize: "0.75rem",
-                                  fontWeight: 500,
-                                  display: "block",
-                                  mb: 0.5,
-                                }}
-                              >
-                                {kpi.label}
-                              </Typography>
-
-                              {/* KPI Value */}
-                              <Typography
-                                variant="h5"
-                                fontWeight={700}
-                                sx={{
-                                  fontSize: "1.5rem",
-                                  letterSpacing: "-0.02em",
-                                  mb: 1,
-                                  color: "text.primary",
-                                }}
-                              >
-                                {formatValue(kpi)}
-                              </Typography>
-
-                              {/* Change Indicator */}
-                              {kpi.change !== undefined &&
-                                kpi.change !== null &&
-                                ![
-                                  "impressions",
-                                  "clicks",
-                                  "ctr",
-                                  "influencer_reach",
-                                  "scrunch_engagement_rate",
-                                  "total_interactions",
-                                  "cost_per_engagement",
-                                  "all_keywords_ranking",
-                                ].includes(key) &&
-                                kpi.format !== "custom" &&
-                                typeof kpi.change === "number" && (
-                                  <Box
-                                    display="flex"
-                                    alignItems="center"
-                                    gap={0.5}
-                                  >
-                                    {kpi.change >= 0 ? (
-                                      <TrendingUpIcon
-                                        sx={{
-                                          fontSize: 14,
-                                          color: "#34A853",
-                                        }}
-                                      />
-                                    ) : (
-                                      <TrendingDownIcon
-                                        sx={{
-                                          fontSize: 14,
-                                          color: "#EA4335",
-                                        }}
-                                      />
-                                    )}
-                                    <Typography
-                                      variant="caption"
-                                      sx={{
-                                        fontWeight: 600,
-                                        fontSize: "0.75rem",
-                                        color:
-                                          kpi.change >= 0
-                                            ? "#34A853"
-                                            : "#EA4335",
-                                      }}
-                                    >
-                                      {kpi.change >= 0 ? "+" : ""}
-                                      {kpi.change.toFixed(1)}%
-                                    </Typography>
-                                  </Box>
-                                )}
-                              {/* Handle custom format KPIs with object change values */}
-                              {kpi.format === "custom" &&
-                                kpi.change &&
-                                typeof kpi.change === "object" && (
-                                  <Box
-                                    display="flex"
-                                    flexDirection="column"
-                                    gap={0.5}
-                                    mt={0.5}
-                                  >
-                                    {key === "competitive_benchmarking" && (
-                                      <>
-                                        {kpi.change.brand_visibility !==
-                                          undefined &&
-                                          kpi.change.brand_visibility !==
-                                            null && (
-                                            <Box
-                                              display="flex"
-                                              alignItems="center"
-                                              gap={0.5}
-                                            >
-                                              {kpi.change.brand_visibility >=
-                                              0 ? (
-                                                <TrendingUpIcon
-                                                  sx={{
-                                                    fontSize: 12,
-                                                    color: "#34A853",
-                                                  }}
-                                                />
-                                              ) : (
-                                                <TrendingDownIcon
-                                                  sx={{
-                                                    fontSize: 12,
-                                                    color: "#EA4335",
-                                                  }}
-                                                />
-                                              )}
-                                              <Typography
-                                                variant="caption"
-                                                sx={{
-                                                  fontSize: "0.7rem",
-                                                  color:
-                                                    kpi.change
-                                                      .brand_visibility >= 0
-                                                      ? "#34A853"
-                                                      : "#EA4335",
-                                                }}
-                                              >
-                                                Brand:{" "}
-                                                {kpi.change.brand_visibility >=
-                                                0
-                                                  ? "+"
-                                                  : ""}
-                                                {kpi.change.brand_visibility.toFixed(
-                                                  1
-                                                )}
-                                                %
-                                              </Typography>
-                                            </Box>
-                                          )}
-                                        {kpi.change
-                                          .competitor_avg_visibility !==
-                                          undefined &&
-                                          kpi.change
-                                            .competitor_avg_visibility !==
-                                            null && (
-                                            <Box
-                                              display="flex"
-                                              alignItems="center"
-                                              gap={0.5}
-                                            >
-                                              {kpi.change
-                                                .competitor_avg_visibility >=
-                                              0 ? (
-                                                <TrendingUpIcon
-                                                  sx={{
-                                                    fontSize: 12,
-                                                    color: "#34A853",
-                                                  }}
-                                                />
-                                              ) : (
-                                                <TrendingDownIcon
-                                                  sx={{
-                                                    fontSize: 12,
-                                                    color: "#EA4335",
-                                                  }}
-                                                />
-                                              )}
-                                              <Typography
-                                                variant="caption"
-                                                sx={{
-                                                  fontSize: "0.7rem",
-                                                  color:
-                                                    kpi.change
-                                                      .competitor_avg_visibility >=
-                                                    0
-                                                      ? "#34A853"
-                                                      : "#EA4335",
-                                                }}
-                                              >
-                                                Competitor avg:{" "}
-                                                {kpi.change
-                                                  .competitor_avg_visibility >=
-                                                0
-                                                  ? "+"
-                                                  : ""}
-                                                {kpi.change.competitor_avg_visibility.toFixed(
-                                                  1
-                                                )}
-                                                %
-                                              </Typography>
-                                            </Box>
-                                          )}
-                                      </>
-                                    )}
-                                  </Box>
-                                )}
-                              {/* Handle keyword_ranking_change_and_volume with object change values */}
-                              {key === "keyword_ranking_change_and_volume" &&
-                                kpi.format === "custom" &&
-                                kpi.change &&
-                                typeof kpi.change === "object" && (
-                                  <Box
-                                    display="flex"
-                                    flexDirection="column"
-                                    gap={0.5}
-                                    mt={0.5}
-                                  >
-                                    {kpi.change.ranking_change !== undefined &&
-                                      kpi.change.ranking_change !== null && (
-                                        <Box
-                                          display="flex"
-                                          alignItems="center"
-                                          gap={0.5}
-                                        >
-                                          {kpi.change.ranking_change >= 0 ? (
-                                            <TrendingUpIcon
-                                              sx={{
-                                                fontSize: 12,
-                                                color: "#34A853",
-                                              }}
-                                            />
-                                          ) : (
-                                            <TrendingDownIcon
-                                              sx={{
-                                                fontSize: 12,
-                                                color: "#EA4335",
-                                              }}
-                                            />
-                                          )}
-                                          <Typography
-                                            variant="caption"
-                                            sx={{
-                                              fontSize: "0.7rem",
-                                              color:
-                                                kpi.change.ranking_change >= 0
-                                                  ? "#34A853"
-                                                  : "#EA4335",
-                                            }}
-                                          >
-                                            Ranking change:{" "}
-                                            {kpi.change.ranking_change >= 0
-                                              ? "+"
-                                              : ""}
-                                            {kpi.change.ranking_change.toFixed(
-                                              1
-                                            )}
-                                            %
-                                          </Typography>
-                                        </Box>
-                                      )}
-                                    {kpi.change.search_volume !== undefined &&
-                                      kpi.change.search_volume !== null && (
-                                        <Box
-                                          display="flex"
-                                          alignItems="center"
-                                          gap={0.5}
-                                        >
-                                          {kpi.change.search_volume >= 0 ? (
-                                            <TrendingUpIcon
-                                              sx={{
-                                                fontSize: 12,
-                                                color: "#34A853",
-                                              }}
-                                            />
-                                          ) : (
-                                            <TrendingDownIcon
-                                              sx={{
-                                                fontSize: 12,
-                                                color: "#EA4335",
-                                              }}
-                                            />
-                                          )}
-                                          <Typography
-                                            variant="caption"
-                                            sx={{
-                                              fontSize: "0.7rem",
-                                              color:
-                                                kpi.change.search_volume >= 0
-                                                  ? "#34A853"
-                                                  : "#EA4335",
-                                            }}
-                                          >
-                                            Search volume:{" "}
-                                            {kpi.change.search_volume >= 0
-                                              ? "+"
-                                              : ""}
-                                            {kpi.change.search_volume.toFixed(
-                                              1
-                                            )}
-                                            %
-                                          </Typography>
-                                        </Box>
-                                      )}
-                                  </Box>
-                                )}
-                            </CardContent>
-                          </Card>
-                        </motion.div>
+                  {displayedKPIs.map(([key, kpi], index) => (
+                    <KPICard
+                      key={key}
+                      kpi={kpi}
+                      kpiKey={key}
+                      index={index}
+                      theme={theme}
+                    />
+                  ))}
                       </Grid>
-                    );
-                  })}
-                </Grid>
-              </>
+              </SectionContainer>
             )}
+
 
             {/* Overall Performance Metrics Section - Large Cards */}
             {dashboardData?.kpis && (
-              <>
-                <Typography
-                  variant="h5"
-                  fontWeight={700}
-                  sx={{
-                    mt: 4,
-                    mb: 3,
-                    fontSize: "1.5rem",
-                    letterSpacing: "-0.02em",
-                    color: "text.primary",
-                  }}
-                >
-                  Overall Performance Metrics
-                </Typography>
-
+              <SectionContainer
+                title="Overall Performance Metrics"
+                sx={{ mt: 4 }}
+              >
                 <Grid container spacing={2.5} sx={{ mb: 4 }}>
                   {/* Top 10 Prompt Percentage */}
                   {dashboardData.kpis.top10_prompt_percentage && (
@@ -5374,7 +4066,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                     </Grid>
                   )}
                 </Grid>
-              </>
+              </SectionContainer>
             )}
           </Box>
         </>

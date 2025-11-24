@@ -1,115 +1,200 @@
 import { BarChart as RechartsBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
-import { useTheme } from '@mui/material'
+import { useTheme, useMediaQuery } from '@mui/material'
+import { CHART_COLORS, CHART_CONFIG } from '../constants'
 
 /**
- * Reusable Bar Chart Component
+ * Enhanced Reusable Bar Chart Component with responsive design
  * 
  * @param {Object} props
  * @param {Array} props.data - Array of data objects
- * @param {string} props.dataKey - Key for data values
+ * @param {string} props.dataKey - Key for X-axis category
  * @param {string} props.title - Chart title
- * @param {number} props.height - Chart height (default: 300)
+ * @param {number} props.height - Chart height (default: responsive)
  * @param {boolean} props.horizontal - Horizontal bars (default: false)
  * @param {boolean} props.stacked - Stacked bars (default: false)
  * @param {Array} props.bars - Array of {dataKey, name, color} for multiple bars
  * @param {Function} props.formatter - Custom tooltip formatter
+ * @param {Function} props.labelFormatter - Custom tooltip label formatter
  * @param {Function} props.xAxisFormatter - X-axis label formatter
+ * @param {boolean} props.showGrid - Show grid (default: true)
+ * @param {boolean} props.showLegend - Show legend (default: true)
  */
 export default function BarChart({
   data = [],
   dataKey,
   title,
-  height = 300,
+  height,
   horizontal = false,
   stacked = false,
   bars,
   formatter,
+  labelFormatter,
   xAxisFormatter,
-  margin = { top: 5, right: 30, left: 20, bottom: 5 }
+  margin,
+  showGrid = true,
+  showLegend = true,
+  ...props
 }) {
   const theme = useTheme()
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
+  const isTablet = useMediaQuery(theme.breakpoints.down('md'))
+  
+  // Responsive height
+  const chartHeight = height || (isMobile ? CHART_CONFIG.heights.mobile : isTablet ? CHART_CONFIG.heights.tablet : CHART_CONFIG.heights.desktop)
+  
+  // Responsive margin
+  const chartMargin = margin || {
+    top: 10,
+    right: isMobile ? 10 : 30,
+    left: horizontal ? (isMobile ? 80 : 120) : (isMobile ? 10 : 20),
+    bottom: horizontal ? 5 : (isMobile ? 60 : 40),
+  }
   
   if (!data || data.length === 0) {
     return (
-      <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <p style={{ color: theme.palette.text.secondary }}>No data available</p>
+      <div style={{ 
+        height: chartHeight, 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center' 
+      }}>
+        <p style={{ 
+          color: theme.palette.text.secondary,
+          fontSize: isMobile ? '0.875rem' : '1rem'
+        }}>
+          No data available
+        </p>
+      </div>
+    )
+  }
+  
+  // If multiple bars specified, use them; otherwise use single bar
+  const barConfigs = bars || (dataKey ? [{ 
+    dataKey: dataKey, 
+    name: title || 'Value', 
+    color: CHART_COLORS.primary 
+  }] : [])
+  
+  if (!barConfigs || barConfigs.length === 0) {
+    return (
+      <div style={{ 
+        height: chartHeight, 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center' 
+      }}>
+        <p style={{ 
+          color: theme.palette.text.secondary,
+          fontSize: isMobile ? '0.875rem' : '1rem'
+        }}>
+          No bars configured
+        </p>
       </div>
     )
   }
   
   // Default formatter
-  const defaultFormatter = (value) => [value.toLocaleString(), '']
+  const defaultFormatter = (value, name) => {
+    if (typeof value === 'number') {
+      return [value.toLocaleString(), name || '']
+    }
+    return [value, name || '']
+  }
   const tooltipFormatter = formatter || defaultFormatter
   
-  // If multiple bars specified, use them; otherwise use single bar
-  const barConfigs = bars || [{ dataKey, name: title || 'Value', color: theme.palette.primary.main }]
+  // Default label formatter
+  const defaultLabelFormatter = (label) => label || ''
+  const tooltipLabelFormatter = labelFormatter || defaultLabelFormatter
   
   return (
-    <div>
-      {title && (
-        <h6 style={{ 
-          marginBottom: 16, 
-          fontSize: '1rem', 
-          fontWeight: 600,
-          color: theme.palette.text.primary 
-        }}>
-          {title}
-        </h6>
-      )}
-      <ResponsiveContainer width="100%" height={height}>
-        <RechartsBarChart
-          data={data}
-          layout={horizontal ? "vertical" : "horizontal"}
-          margin={margin}
-        >
-          <CartesianGrid strokeDasharray="3 3" stroke="#E4E4E7" />
-          {horizontal ? (
-            <>
-              <XAxis type="number" tick={{ fontSize: 12 }} stroke="#71717A" />
-              <YAxis 
-                dataKey={dataKey} 
-                type="category" 
-                width={horizontal ? 120 : undefined}
-                tick={{ fontSize: 11 }}
-                stroke="#71717A"
-              />
-            </>
-          ) : (
-            <>
-              <XAxis 
-                dataKey={dataKey}
-                tick={{ fontSize: 11 }}
-                stroke="#71717A"
-                angle={data.length > 6 ? -45 : 0}
-                textAnchor={data.length > 6 ? "end" : "middle"}
-                height={data.length > 6 ? 80 : undefined}
-              />
-              <YAxis tick={{ fontSize: 12 }} stroke="#71717A" />
-            </>
-          )}
-          <Tooltip 
-            contentStyle={{ 
-              borderRadius: '8px', 
-              border: 'none', 
-              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-              backgroundColor: '#FFFFFF'
-            }}
-            formatter={tooltipFormatter}
+    <ResponsiveContainer width="100%" height={chartHeight}>
+      <RechartsBarChart
+        data={data}
+        layout={horizontal ? "vertical" : "horizontal"}
+        margin={chartMargin}
+        {...props}
+      >
+        {showGrid && (
+          <CartesianGrid 
+            strokeDasharray={CHART_CONFIG.grid.strokeDasharray} 
+            stroke={CHART_CONFIG.grid.stroke}
+            opacity={0.3}
           />
-          <Legend wrapperStyle={{ paddingTop: '10px' }} />
-          {barConfigs.map((bar, index) => (
-            <Bar
-              key={bar.dataKey}
-              dataKey={bar.dataKey}
-              name={bar.name}
-              fill={bar.color}
-              stackId={stacked ? "a" : undefined}
-              radius={index === barConfigs.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}
+        )}
+        {horizontal ? (
+          <>
+            <XAxis 
+              type="number" 
+              tick={{ 
+                fontSize: isMobile ? 10 : isTablet ? 11 : 12,
+                fill: CHART_CONFIG.axis.stroke
+              }} 
+              stroke={CHART_CONFIG.axis.stroke}
             />
-          ))}
-        </RechartsBarChart>
-      </ResponsiveContainer>
-    </div>
+            <YAxis 
+              dataKey={dataKey}
+              type="category" 
+              width={isMobile ? 80 : 120}
+              tick={{ 
+                fontSize: isMobile ? 10 : 11,
+                fill: CHART_CONFIG.axis.stroke
+              }}
+              stroke={CHART_CONFIG.axis.stroke}
+            />
+          </>
+        ) : (
+          <>
+            <XAxis 
+              dataKey={dataKey}
+              tick={{ 
+                fontSize: isMobile ? 9 : isTablet ? 10 : 11,
+                fill: CHART_CONFIG.axis.stroke
+              }}
+              stroke={CHART_CONFIG.axis.stroke}
+              angle={isMobile && data.length > 5 ? -45 : (data.length > 8 ? -30 : 0)}
+              textAnchor={isMobile && data.length > 5 ? "end" : "middle"}
+              height={isMobile && data.length > 5 ? 60 : (data.length > 8 ? 50 : undefined)}
+            />
+            <YAxis 
+              tick={{ 
+                fontSize: isMobile ? 10 : isTablet ? 11 : 12,
+                fill: CHART_CONFIG.axis.stroke
+              }} 
+              stroke={CHART_CONFIG.axis.stroke}
+              width={isMobile ? 40 : undefined}
+            />
+          </>
+        )}
+        <Tooltip 
+          contentStyle={CHART_CONFIG.tooltip}
+          formatter={tooltipFormatter}
+          labelFormatter={tooltipLabelFormatter}
+          cursor={{ fill: 'rgba(0, 0, 0, 0.05)' }}
+        />
+        {showLegend && (
+          <Legend 
+            wrapperStyle={{ 
+              paddingTop: '10px',
+              fontSize: isMobile ? '0.75rem' : '0.875rem'
+            }}
+            iconType="rect"
+          />
+        )}
+        {barConfigs.map((bar, index) => (
+          <Bar
+            key={bar.dataKey || index}
+            dataKey={bar.dataKey}
+            name={bar.name}
+            fill={bar.color || CHART_COLORS.palette[index % CHART_COLORS.palette.length]}
+            stackId={stacked ? "a" : undefined}
+            radius={horizontal 
+              ? (index === barConfigs.length - 1 ? [0, 4, 4, 0] : [0, 0, 0, 0])
+              : (index === barConfigs.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0])
+            }
+          />
+        ))}
+      </RechartsBarChart>
+    </ResponsiveContainer>
   )
 }
 

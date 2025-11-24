@@ -105,22 +105,6 @@ function BrandsList() {
     )
   }
 
-  if (error) {
-    return (
-      <Alert 
-        severity="error" 
-        sx={{ 
-          mb: 3,
-          borderRadius: 2,
-          fontSize: '13px',
-        }}
-        onClose={() => setError(null)}
-      >
-        {error}
-      </Alert>
-    )
-  }
-
   if (brands.length === 0) {
     return (
       <Card

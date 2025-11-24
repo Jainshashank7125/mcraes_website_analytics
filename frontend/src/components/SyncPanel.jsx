@@ -166,16 +166,20 @@ function SyncPanel() {
         </Typography>
       </Box>
 
-      <Grid container spacing={2.5}>
-        <Grid item xs={12} md={4}>
+      <Grid container spacing={{ xs: 2, sm: 2.5, md: 3 }} sx={{ display: 'flex' }}>
+        <Grid item xs={12} sm={6} md={4} sx={{ display: 'flex' }}>
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3 }}
+            style={{ width: '100%', display: 'flex' }}
           >
             <Card
               sx={{
+                width: '100%',
                 height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
                 background: '#FFFFFF',
                 border: `1px solid ${theme.palette.divider}`,
                 borderRadius: 2,
@@ -198,7 +202,16 @@ function SyncPanel() {
                 },
               }}
             >
-              <CardContent sx={{ p: 3, textAlign: 'center' }}>
+              <CardContent 
+                sx={{ 
+                  p: { xs: 2.5, sm: 3 },
+                  textAlign: 'center',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  flex: 1,
+                  height: '100%',
+                }}
+              >
                 <Box
                   sx={{
                     p: 1.5,
@@ -207,15 +220,22 @@ function SyncPanel() {
                     color: theme.palette.primary.main,
                     display: 'inline-flex',
                     mb: 2,
+                    mx: 'auto',
                   }}
                 >
-                  <CloudDownloadIcon sx={{ fontSize: 24 }} />
+                  <CloudDownloadIcon sx={{ fontSize: { xs: 22, sm: 24 } }} />
                 </Box>
                 <Typography 
                   variant="h6" 
                   fontWeight={600} 
                   mb={1}
-                  sx={{ fontSize: '1rem' }}
+                  sx={{ 
+                    fontSize: { xs: '0.9375rem', sm: '1rem' },
+                    minHeight: { xs: '24px', sm: '28px' },
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
                 >
                   Sync Scrunch API Data
                 </Typography>
@@ -223,7 +243,14 @@ function SyncPanel() {
                   variant="body2" 
                   color="text.secondary" 
                   mb={3}
-                  sx={{ fontSize: '0.875rem', lineHeight: 1.6 }}
+                  sx={{ 
+                    fontSize: { xs: '0.8125rem', sm: '0.875rem' },
+                    lineHeight: 1.6,
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    minHeight: { xs: '64px', sm: '72px' },
+                  }}
                 >
                   Sync all data from Scrunch AI API including brands, prompts, and responses to Supabase database.
                 </Typography>
@@ -244,9 +271,10 @@ function SyncPanel() {
                     borderRadius: 1.5,
                     px: 2,
                     py: 0.75,
-                    fontSize: '0.875rem',
+                    fontSize: { xs: '0.8125rem', sm: '0.875rem' },
                     fontWeight: 600,
                     boxShadow: 'none',
+                    mt: 'auto',
                     '&:hover': {
                       boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
                     },
@@ -259,15 +287,19 @@ function SyncPanel() {
           </motion.div>
         </Grid>
 
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} sm={6} md={4} sx={{ display: 'flex' }}>
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3, delay: 0.1 }}
+            style={{ width: '100%', display: 'flex' }}
           >
             <Card
               sx={{
+                width: '100%',
                 height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
                 background: '#FFFFFF',
                 border: `1px solid ${theme.palette.divider}`,
                 borderRadius: 2,
@@ -290,7 +322,16 @@ function SyncPanel() {
                 },
               }}
             >
-              <CardContent sx={{ p: 3, textAlign: 'center' }}>
+              <CardContent 
+                sx={{ 
+                  p: { xs: 2.5, sm: 3 },
+                  textAlign: 'center',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  flex: 1,
+                  height: '100%',
+                }}
+              >
                 <Box
                   sx={{
                     p: 1.5,
@@ -299,15 +340,22 @@ function SyncPanel() {
                     color: theme.palette.success.main,
                     display: 'inline-flex',
                     mb: 2,
+                    mx: 'auto',
                   }}
                 >
-                  <AnalyticsIcon sx={{ fontSize: 24 }} />
+                  <AnalyticsIcon sx={{ fontSize: { xs: 22, sm: 24 } }} />
                 </Box>
                 <Typography 
                   variant="h6" 
                   fontWeight={600} 
                   mb={1}
-                  sx={{ fontSize: '1rem' }}
+                  sx={{ 
+                    fontSize: { xs: '0.9375rem', sm: '1rem' },
+                    minHeight: { xs: '24px', sm: '28px' },
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
                 >
                   Sync GA4 Data
                 </Typography>
@@ -315,7 +363,14 @@ function SyncPanel() {
                   variant="body2" 
                   color="text.secondary" 
                   mb={3}
-                  sx={{ fontSize: '0.875rem', lineHeight: 1.6 }}
+                  sx={{ 
+                    fontSize: { xs: '0.8125rem', sm: '0.875rem' },
+                    lineHeight: 1.6,
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    minHeight: { xs: '64px', sm: '72px' },
+                  }}
                 >
                   Sync Google Analytics 4 data for all brands with GA4 property IDs configured. Includes traffic overview, top pages, sources, geographic, devices, and conversions.
                 </Typography>
@@ -336,10 +391,11 @@ function SyncPanel() {
                     borderRadius: 1.5,
                     px: 2,
                     py: 0.75,
-                    fontSize: '0.875rem',
+                    fontSize: { xs: '0.8125rem', sm: '0.875rem' },
                     fontWeight: 600,
                     bgcolor: theme.palette.success.main,
                     boxShadow: 'none',
+                    mt: 'auto',
                     '&:hover': {
                       bgcolor: theme.palette.success.dark,
                       boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
@@ -353,15 +409,19 @@ function SyncPanel() {
           </motion.div>
         </Grid>
 
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} sm={6} md={4} sx={{ display: 'flex' }}>
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3, delay: 0.2 }}
+            style={{ width: '100%', display: 'flex' }}
           >
             <Card
               sx={{
+                width: '100%',
                 height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
                 background: '#FFFFFF',
                 border: `1px solid ${theme.palette.divider}`,
                 borderRadius: 2,
@@ -384,7 +444,16 @@ function SyncPanel() {
                 },
               }}
             >
-              <CardContent sx={{ p: 3, textAlign: 'center' }}>
+              <CardContent 
+                sx={{ 
+                  p: { xs: 2.5, sm: 3 },
+                  textAlign: 'center',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  flex: 1,
+                  height: '100%',
+                }}
+              >
                 <Box
                   sx={{
                     p: 1.5,
@@ -393,15 +462,22 @@ function SyncPanel() {
                     color: theme.palette.warning.main,
                     display: 'inline-flex',
                     mb: 2,
+                    mx: 'auto',
                   }}
                 >
-                  <AnalyticsIcon sx={{ fontSize: 24 }} />
+                  <AnalyticsIcon sx={{ fontSize: { xs: 22, sm: 24 } }} />
                 </Box>
                 <Typography 
                   variant="h6" 
                   fontWeight={600} 
                   mb={1}
-                  sx={{ fontSize: '1rem' }}
+                  sx={{ 
+                    fontSize: { xs: '0.9375rem', sm: '1rem' },
+                    minHeight: { xs: '24px', sm: '28px' },
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
                 >
                   Sync Agency Analytics Data
                 </Typography>
@@ -409,7 +485,14 @@ function SyncPanel() {
                   variant="body2" 
                   color="text.secondary" 
                   mb={3}
-                  sx={{ fontSize: '0.875rem', lineHeight: 1.6 }}
+                  sx={{ 
+                    fontSize: { xs: '0.8125rem', sm: '0.875rem' },
+                    lineHeight: 1.6,
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    minHeight: { xs: '64px', sm: '72px' },
+                  }}
                 >
                   Sync Agency Analytics campaigns and quarterly ranking data. Includes Google rankings, Bing rankings, search volume, and competition metrics.
                 </Typography>
@@ -430,10 +513,11 @@ function SyncPanel() {
                     borderRadius: 1.5,
                     px: 2,
                     py: 0.75,
-                    fontSize: '0.875rem',
+                    fontSize: { xs: '0.8125rem', sm: '0.875rem' },
                     fontWeight: 600,
                     bgcolor: theme.palette.warning.main,
                     boxShadow: 'none',
+                    mt: 'auto',
                     '&:hover': {
                       bgcolor: theme.palette.warning.dark,
                       boxShadow: '0 2px 8px rgba(0,0,0,0.05)',

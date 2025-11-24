@@ -1,90 +1,162 @@
 import { LineChart as RechartsLineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
-import { useTheme } from '@mui/material'
+import { useTheme, useMediaQuery } from '@mui/material'
+import { CHART_COLORS, CHART_CONFIG } from '../constants'
 
 /**
- * Reusable Line Chart Component
+ * Enhanced Reusable Line Chart Component with responsive design
  * 
  * @param {Object} props
  * @param {Array} props.data - Array of data objects
  * @param {string} props.title - Chart title
- * @param {number} props.height - Chart height (default: 300)
- * @param {Array} props.lines - Array of {dataKey, name, color, strokeWidth} for lines
+ * @param {number} props.height - Chart height (default: responsive)
+ * @param {Array} props.lines - Array of {dataKey, name, color, strokeWidth, strokeDasharray} for lines
  * @param {Function} props.formatter - Custom tooltip formatter
+ * @param {Function} props.labelFormatter - Custom tooltip label formatter
  * @param {Function} props.xAxisFormatter - X-axis label formatter
+ * @param {string} props.dataKey - Key for X-axis data (default: 'date')
  */
 export default function LineChart({
   data = [],
   title,
-  height = 300,
-  lines,
+  height,
+  lines = [],
   formatter,
+  labelFormatter,
   xAxisFormatter,
-  margin = { top: 5, right: 30, left: 20, bottom: 5 }
+  dataKey = 'date',
+  margin,
+  showGrid = true,
+  showLegend = true,
+  ...props
 }) {
   const theme = useTheme()
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
+  const isTablet = useMediaQuery(theme.breakpoints.down('md'))
+  
+  // Responsive height
+  const chartHeight = height || (isMobile ? CHART_CONFIG.heights.mobile : isTablet ? CHART_CONFIG.heights.tablet : CHART_CONFIG.heights.desktop)
+  
+  // Responsive margin
+  const chartMargin = margin || {
+    top: 10,
+    right: isMobile ? 10 : 30,
+    left: isMobile ? 10 : 20,
+    bottom: isMobile ? 40 : 5,
+  }
   
   if (!data || data.length === 0) {
     return (
-      <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <p style={{ color: theme.palette.text.secondary }}>No data available</p>
+      <div style={{ 
+        height: chartHeight, 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center' 
+      }}>
+        <p style={{ 
+          color: theme.palette.text.secondary,
+          fontSize: isMobile ? '0.875rem' : '1rem'
+        }}>
+          No data available
+        </p>
+      </div>
+    )
+  }
+  
+  if (!lines || lines.length === 0) {
+    return (
+      <div style={{ 
+        height: chartHeight, 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center' 
+      }}>
+        <p style={{ 
+          color: theme.palette.text.secondary,
+          fontSize: isMobile ? '0.875rem' : '1rem'
+        }}>
+          No lines configured
+        </p>
       </div>
     )
   }
   
   // Default formatter
-  const defaultFormatter = (value) => [value.toLocaleString(), '']
+  const defaultFormatter = (value, name) => {
+    if (typeof value === 'number') {
+      return [value.toLocaleString(), name || '']
+    }
+    return [value, name || '']
+  }
   const tooltipFormatter = formatter || defaultFormatter
   
+  // Default label formatter
+  const defaultLabelFormatter = (label) => label || ''
+  const tooltipLabelFormatter = labelFormatter || defaultLabelFormatter
+  
   return (
-    <div>
-      {title && (
-        <h6 style={{ 
-          marginBottom: 16, 
-          fontSize: '1rem', 
-          fontWeight: 600,
-          color: theme.palette.text.primary 
-        }}>
-          {title}
-        </h6>
-      )}
-      <ResponsiveContainer width="100%" height={height}>
-        <RechartsLineChart data={data} margin={margin}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#E4E4E7" />
-          <XAxis 
-            dataKey="date" 
-            tick={{ fontSize: 12 }}
-            stroke="#71717A"
-            tickFormatter={xAxisFormatter}
+    <ResponsiveContainer width="100%" height={chartHeight}>
+      <RechartsLineChart data={data} margin={chartMargin} {...props}>
+        {showGrid && (
+          <CartesianGrid 
+            strokeDasharray={CHART_CONFIG.grid.strokeDasharray} 
+            stroke={CHART_CONFIG.grid.stroke}
+            opacity={0.3}
           />
-          <YAxis 
-            tick={{ fontSize: 12 }}
-            stroke="#71717A"
-          />
-          <Tooltip 
-            contentStyle={{ 
-              borderRadius: '8px', 
-              border: 'none', 
-              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-              backgroundColor: '#FFFFFF'
+        )}
+        <XAxis 
+          dataKey={dataKey}
+          tick={{ 
+            fontSize: isMobile ? 10 : isTablet ? 11 : 12,
+            fill: CHART_CONFIG.axis.stroke
+          }}
+          stroke={CHART_CONFIG.axis.stroke}
+          tickFormatter={xAxisFormatter}
+          angle={isMobile && data.length > 5 ? -45 : 0}
+          textAnchor={isMobile && data.length > 5 ? 'end' : 'middle'}
+          height={isMobile && data.length > 5 ? 60 : undefined}
+        />
+        <YAxis 
+          tick={{ 
+            fontSize: isMobile ? 10 : isTablet ? 11 : 12,
+            fill: CHART_CONFIG.axis.stroke
+          }}
+          stroke={CHART_CONFIG.axis.stroke}
+          width={isMobile ? 40 : undefined}
+        />
+        <Tooltip 
+          contentStyle={CHART_CONFIG.tooltip}
+          formatter={tooltipFormatter}
+          labelFormatter={tooltipLabelFormatter}
+          cursor={{ stroke: theme.palette.primary.main, strokeWidth: 1, strokeDasharray: '3 3' }}
+        />
+        {showLegend && (
+          <Legend 
+            wrapperStyle={{ 
+              paddingTop: '10px',
+              fontSize: isMobile ? '0.75rem' : '0.875rem'
             }}
-            formatter={tooltipFormatter}
+            iconType="line"
           />
-          <Legend wrapperStyle={{ paddingTop: '10px' }} />
-          {lines.map((line, index) => (
-            <Line
-              key={line.dataKey}
-              type="monotone"
-              dataKey={line.dataKey}
-              name={line.name}
-              stroke={line.color || theme.palette.primary.main}
-              strokeWidth={line.strokeWidth || 2}
-              dot={{ fill: line.color || theme.palette.primary.main, r: 4 }}
-              activeDot={{ r: 6 }}
-            />
-          ))}
-        </RechartsLineChart>
-      </ResponsiveContainer>
-    </div>
+        )}
+        {lines.map((line, index) => (
+          <Line
+            key={line.dataKey || index}
+            type={line.type || 'monotone'}
+            dataKey={line.dataKey}
+            name={line.name}
+            stroke={line.color || CHART_COLORS.palette[index % CHART_COLORS.palette.length]}
+            strokeWidth={line.strokeWidth || (isMobile ? 2 : 2.5)}
+            strokeDasharray={line.strokeDasharray}
+            dot={line.showDot !== false ? { 
+              fill: line.color || CHART_COLORS.palette[index % CHART_COLORS.palette.length], 
+              r: isMobile ? 3 : 4 
+            } : false}
+            activeDot={{ r: isMobile ? 5 : 6 }}
+            connectNulls={line.connectNulls || false}
+          />
+        ))}
+      </RechartsLineChart>
+    </ResponsiveContainer>
   )
 }
 

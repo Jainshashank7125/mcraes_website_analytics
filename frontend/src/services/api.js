@@ -28,12 +28,20 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Clear tokens and redirect to login
+      const currentPath = window.location.pathname
+      // Don't redirect if on public routes (login, signup, or public reporting)
+      const isPublicRoute = 
+        currentPath === '/login' || 
+        currentPath === '/signup' || 
+        currentPath.startsWith('/reporting/')
+      
+      // Clear tokens
       localStorage.removeItem('access_token')
       localStorage.removeItem('refresh_token')
       localStorage.removeItem('user')
-      // Only redirect if not already on login page
-      if (window.location.pathname !== '/login' && window.location.pathname !== '/signup') {
+      
+      // Only redirect if not on a public route
+      if (!isPublicRoute) {
         window.location.href = '/login'
       }
     }

@@ -4,6 +4,8 @@ import { motion } from 'framer-motion'
 import PieChart from './PieChart'
 import BarChart from './BarChart'
 import LineChart from './LineChart'
+import ChartCard from '../ChartCard'
+import { CHART_COLORS } from '../constants'
 import { reportingAPI } from '../../../services/api'
 
 /**
@@ -144,159 +146,242 @@ export default function ScrunchVisualizations({ brandId, startDate, endDate }) {
     <Grid container spacing={3}>
       {/* Position Distribution */}
       {data.positionDistribution && (
-        <Grid item xs={12} md={6}>
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3 }}
+        <Grid item xs={12} sm={6} md={4}>
+          <ChartCard
+            title="Brand Position Distribution"
+            badge="Scrunch"
+            badgeColor={CHART_COLORS.scrunch.primary}
+            height="100%"
+            animationDelay={0.1}
           >
-            <Card sx={{ height: '100%', borderRadius: 2, border: `1px solid ${theme.palette.divider}` }}>
-              <CardContent>
-                <PieChart
-                  data={data.positionDistribution}
-                  title="Position Distribution"
-                  height={300}
-                  donut={true}
-                  innerRadius={60}
-                />
-              </CardContent>
-            </Card>
-          </motion.div>
-        </Grid>
-      )}
-
-      {/* Platform Distribution */}
-      {data.platformDistribution && (
-        <Grid item xs={12} md={6}>
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, delay: 0.1 }}
-          >
-            <Card sx={{ height: '100%', borderRadius: 2, border: `1px solid ${theme.palette.divider}` }}>
-              <CardContent>
-                <PieChart
-                  data={data.platformDistribution}
-                  title="Platform Distribution"
-                  height={300}
-                  donut={true}
-                  innerRadius={60}
-                />
-              </CardContent>
-            </Card>
-          </motion.div>
+            <Box>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mb: 2, fontSize: '0.875rem' }}
+              >
+                Distribution of your brand's position in AI responses (Top 67-100%, Middle 34-66%, Bottom 0-33%)
+              </Typography>
+              <PieChart
+                data={data.positionDistribution}
+                height={280}
+                donut={true}
+                innerRadius={70}
+                outerRadius={100}
+                colors={[
+                  CHART_COLORS.success,
+                  CHART_COLORS.warning,
+                  CHART_COLORS.error,
+                  CHART_COLORS.secondary
+                ]}
+                formatter={(value, name) => [
+                  `${value.toLocaleString()} responses`,
+                  name
+                ]}
+                showLegend={true}
+              />
+            </Box>
+          </ChartCard>
         </Grid>
       )}
 
       {/* Sentiment Distribution */}
       {data.sentimentDistribution && (
-        <Grid item xs={12} md={6}>
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, delay: 0.2 }}
+        <Grid item xs={12} sm={6} md={4}>
+          <ChartCard
+            title="Brand Sentiment Analysis"
+            badge="Scrunch"
+            badgeColor={CHART_COLORS.scrunch.primary}
+            height="100%"
+            animationDelay={0.2}
           >
-            <Card sx={{ height: '100%', borderRadius: 2, border: `1px solid ${theme.palette.divider}` }}>
-              <CardContent>
-                <PieChart
-                  data={data.sentimentDistribution}
-                  title="Sentiment Distribution"
-                  height={300}
-                  donut={true}
-                  innerRadius={60}
-                />
-              </CardContent>
-            </Card>
-          </motion.div>
+            <Box>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mb: 2, fontSize: '0.875rem' }}
+              >
+                Sentiment distribution across all AI responses mentioning your brand
+              </Typography>
+              <PieChart
+                data={data.sentimentDistribution}
+                height={280}
+                donut={true}
+                innerRadius={70}
+                outerRadius={100}
+                colors={[
+                  CHART_COLORS.success, // Positive
+                  CHART_COLORS.warning, // Mixed
+                  CHART_COLORS.error,   // Negative
+                  theme.palette.grey[400] // None
+                ]}
+                formatter={(value, name) => [
+                  `${value.toLocaleString()} responses`,
+                  name
+                ]}
+                showLegend={true}
+              />
+            </Box>
+          </ChartCard>
         </Grid>
       )}
 
-      {/* Citation Source Breakdown */}
-      {data.citationSourceBreakdown && (
-        <Grid item xs={12} md={6}>
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, delay: 0.3 }}
+      {/* Platform Distribution */}
+      {data.platformDistribution && (
+        <Grid item xs={12} sm={6} md={4}>
+          <ChartCard
+            title="AI Platform Distribution"
+            badge="Scrunch"
+            badgeColor={CHART_COLORS.scrunch.primary}
+            height="100%"
+            animationDelay={0.3}
           >
-            <Card sx={{ height: '100%', borderRadius: 2, border: `1px solid ${theme.palette.divider}` }}>
-              <CardContent>
-                <PieChart
-                  data={data.citationSourceBreakdown}
-                  title="Citation Source Breakdown"
-                  height={300}
-                  donut={true}
-                  innerRadius={60}
-                />
-              </CardContent>
-            </Card>
-          </motion.div>
+            <Box>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mb: 2, fontSize: '0.875rem' }}
+              >
+                Distribution of responses across different AI platforms (ChatGPT, Perplexity, Google AI Overview, etc.)
+              </Typography>
+              <PieChart
+                data={data.platformDistribution}
+                height={280}
+                donut={true}
+                innerRadius={70}
+                outerRadius={100}
+                colors={CHART_COLORS.palette}
+                formatter={(value, name) => [
+                  `${value.toLocaleString()} responses`,
+                  name
+                ]}
+                showLegend={true}
+              />
+            </Box>
+          </ChartCard>
         </Grid>
       )}
+
+      {/* Citation Source Breakdown
+      {data.citationSourceBreakdown && (
+        <Grid item xs={12} sm={6} md={4}>
+          <ChartCard
+            title="Citation Source Breakdown"
+            badge="Scrunch"
+            badgeColor={CHART_COLORS.scrunch.primary}
+            height="100%"
+            animationDelay={0.4}
+          >
+            <Box>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mb: 2, fontSize: '0.875rem' }}
+              >
+                Distribution of citations by source type (Your Brand, Competitors, Third Party)
+              </Typography>
+              <PieChart
+                data={data.citationSourceBreakdown}
+                height={280}
+                donut={true}
+                innerRadius={70}
+                outerRadius={100}
+                colors={[
+                  CHART_COLORS.primary,  // Your Brand
+                  CHART_COLORS.error,    // Competitors
+                  CHART_COLORS.secondary // Third Party
+                ]}
+                formatter={(value, name) => [
+                  `${value.toLocaleString()} citations`,
+                  name
+                ]}
+                showLegend={true}
+              />
+            </Box>
+          </ChartCard>
+        </Grid>
+      )} */}
 
       {/* Competitive Presence */}
       {data.competitorPresence && data.competitorPresence.length > 0 && (
-        <Grid item xs={12}>
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, delay: 0.4 }}
+        <Grid item xs={12} md={6}>
+          <ChartCard
+            title="Competitive Presence Analysis"
+            badge="Scrunch"
+            badgeColor={CHART_COLORS.scrunch.primary}
+            height={450}
+            animationDelay={0.5}
           >
-            <Card sx={{ borderRadius: 2, border: `1px solid ${theme.palette.divider}` }}>
-              <CardContent>
-                <BarChart
-                  data={data.competitorPresence}
-                  dataKey="name"
-                  title="Competitive Presence"
-                  height={400}
-                  horizontal={true}
-                  margin={{ top: 5, right: 30, left: 150, bottom: 5 }}
-                  bars={[{
-                    dataKey: 'presence',
-                    name: 'Presence %',
-                    color: theme.palette.primary.main
-                  }]}
-                  formatter={(value) => [`${value.toFixed(1)}%`, 'Presence']}
-                />
-              </CardContent>
-            </Card>
-          </motion.div>
+            <Box>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mb: 2, fontSize: '0.875rem' }}
+              >
+                Brand presence percentage for your brand and top competitors in AI responses
+              </Typography>
+              <BarChart
+                data={data.competitorPresence}
+                dataKey="name"
+                horizontal={true}
+                bars={[{
+                  dataKey: 'presence',
+                  name: 'Presence %',
+                  color: CHART_COLORS.scrunch.primary
+                }]}
+                formatter={(value) => [`${value.toFixed(2)}%`, 'Presence']}
+                margin={{ top: 5, right: 30, left: 120, bottom: 5 }}
+                height={350}
+              />
+            </Box>
+          </ChartCard>
         </Grid>
       )}
 
       {/* Time Series Trends */}
       {data.timeSeries && data.timeSeries.length > 0 && (
-        <Grid item xs={12}>
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, delay: 0.5 }}
+        <Grid item xs={12} md={6}>
+          <ChartCard
+            title="Brand Presence Trend Over Time"
+            badge="Scrunch"
+            badgeColor={CHART_COLORS.scrunch.primary}
+            height={450}
+            animationDelay={0.6}
           >
-            <Card sx={{ borderRadius: 2, border: `1px solid ${theme.palette.divider}` }}>
-              <CardContent>
-                <LineChart
-                  data={data.timeSeries}
-                  title="Brand Presence Trend Over Time"
-                  height={400}
-                  lines={[{
-                    dataKey: 'presence',
-                    name: 'Brand Presence %',
-                    color: theme.palette.primary.main,
-                    strokeWidth: 3
-                  }]}
-                  formatter={(value) => [`${value.toFixed(1)}%`, 'Presence']}
-                  xAxisFormatter={(value) => {
-                    // Format date_week (YYYY-MM-DD format)
-                    if (value && value.length >= 10) {
-                      const date = new Date(value)
-                      return `${date.getMonth() + 1}/${date.getDate()}`
-                    }
-                    return value
-                  }}
-                />
-              </CardContent>
-            </Card>
-          </motion.div>
+            <Box>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mb: 2, fontSize: '0.875rem' }}
+              >
+                Weekly trend of your brand's presence percentage in AI responses
+              </Typography>
+              <LineChart
+                data={data.timeSeries}
+                dataKey="date"
+                lines={[{
+                  dataKey: 'presence',
+                  name: 'Brand Presence %',
+                  color: CHART_COLORS.scrunch.primary,
+                  strokeWidth: 3,
+                  showDot: true
+                }]}
+                formatter={(value) => [`${value.toFixed(2)}%`, 'Presence']}
+                xAxisFormatter={(value) => {
+                  // Format date_week (YYYY-MM-DD format)
+                  if (value && value.length >= 10) {
+                    const date = new Date(value)
+                    const month = date.getMonth() + 1
+                    const day = date.getDate()
+                    return `${month}/${day}`
+                  }
+                  return value
+                }}
+                height={350}
+                margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+              />
+            </Box>
+          </ChartCard>
         </Grid>
       )}
     </Grid>
