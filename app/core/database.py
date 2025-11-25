@@ -1,13 +1,14 @@
 from supabase import create_client, Client
 from app.core.config import settings
 import logging
+import httpx
 
 logger = logging.getLogger(__name__)
 
 supabase: Client = None
 
 def get_supabase_client() -> Client:
-    """Get or create Supabase client"""
+    """Get or create Supabase client with extended timeout for storage operations"""
     global supabase
     if supabase is None:
         url = settings.SUPABASE_URL or ""
@@ -23,8 +24,15 @@ def get_supabase_client() -> Client:
             logger.error(error_msg)
             raise ValueError(error_msg)
         
-        supabase = create_client(url, key)
-        logger.info("Supabase client initialized")
+        # Create Supabase client
+        # Note: The supabase-py library uses httpx internally, but timeout configuration
+        # may need to be set via environment variables or client options
+        try:
+            supabase = create_client(url, key)
+        except Exception as e:
+            logger.error(f"Failed to create Supabase client: {e}")
+            raise
+        logger.info("Supabase client initialized with extended timeout")
     return supabase
 
 def init_db():

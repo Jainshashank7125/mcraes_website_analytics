@@ -331,6 +331,7 @@ class GA4APIClient:
                     Metric(name="sessions"),
                     Metric(name="activeUsers"),
                     Metric(name="bounceRate"),
+                    Metric(name="conversions"),  # New: Add conversions metric
                 ],
                 order_bys=[
                     OrderBy(
@@ -344,11 +345,17 @@ class GA4APIClient:
             
             sources = []
             for row in response.rows:
+                sessions = int(row.metric_values[0].value)
+                conversions = float(row.metric_values[3].value) if len(row.metric_values) > 3 else 0
+                conversion_rate = (conversions / sessions * 100) if sessions > 0 else 0
+                
                 sources.append({
                     "source": row.dimension_values[0].value,
-                    "sessions": int(row.metric_values[0].value),
+                    "sessions": sessions,
                     "users": int(row.metric_values[1].value),
                     "bounceRate": float(row.metric_values[2].value),
+                    "conversions": conversions,  # New: Conversions count
+                    "conversionRate": conversion_rate,  # New: Conversion rate per source
                 })
             
             return sources
@@ -380,6 +387,7 @@ class GA4APIClient:
                 metrics=[
                     Metric(name="activeUsers"),
                     Metric(name="sessions"),
+                    Metric(name="engagementRate"),  # New: Add engagement rate metric
                 ],
                 limit=limit,
                 order_bys=[
@@ -398,6 +406,7 @@ class GA4APIClient:
                     "country": row.dimension_values[0].value,
                     "users": int(row.metric_values[0].value),
                     "sessions": int(row.metric_values[1].value),
+                    "engagementRate": float(row.metric_values[2].value) if len(row.metric_values) > 2 else 0,  # New: Engagement rate per country
                 })
             
             return countries

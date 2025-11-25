@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import {
   Box,
@@ -10,10 +10,13 @@ import {
   alpha,
   useTheme,
   Container,
+  ThemeProvider,
 } from '@mui/material'
+import { createTheme } from '@mui/material/styles'
 import { motion } from 'framer-motion'
 import { reportingAPI } from '../services/api'
 import ReportingDashboard from './ReportingDashboard'
+import { theme as baseTheme } from '../theme'
 
 function PublicReportingDashboard() {
   const { slug } = useParams()
@@ -22,6 +25,47 @@ function PublicReportingDashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const theme = useTheme()
+
+  // Create custom theme based on brand theme - MUST be called before any conditional returns
+  const brandTheme = useMemo(() => {
+    if (!brandInfo?.theme || typeof brandInfo.theme !== 'object') {
+      return baseTheme
+    }
+
+    const themeConfig = brandInfo.theme
+    const primaryColor = themeConfig.primary_color || baseTheme.palette.primary.main
+    const secondaryColor = themeConfig.secondary_color || baseTheme.palette.secondary.main
+    const accentColor = themeConfig.accent_color || baseTheme.palette.info.main
+    const fontFamily = themeConfig.font_family || baseTheme.typography.fontFamily
+
+    return createTheme({
+      ...baseTheme,
+      palette: {
+        ...baseTheme.palette,
+        primary: {
+          main: primaryColor,
+          light: alpha(primaryColor, 0.7),
+          dark: alpha(primaryColor, 0.9),
+          contrastText: '#ffffff',
+        },
+        secondary: {
+          main: secondaryColor,
+          light: alpha(secondaryColor, 0.7),
+          dark: alpha(secondaryColor, 0.9),
+          contrastText: '#ffffff',
+        },
+        info: {
+          main: accentColor,
+          light: alpha(accentColor, 0.7),
+          dark: alpha(accentColor, 0.9),
+        },
+      },
+      typography: {
+        ...baseTheme.typography,
+        fontFamily: fontFamily || baseTheme.typography.fontFamily,
+      },
+    })
+  }, [brandInfo?.theme])
 
   useEffect(() => {
     const fetchBrand = async () => {
@@ -93,15 +137,17 @@ function PublicReportingDashboard() {
   // Render the ReportingDashboard component but override it to use slug-based data fetching
   // We'll create a wrapper that passes the brand_id to ReportingDashboard
   return (
-    <Box
-      sx={{
-        minHeight: '100vh',
-        bgcolor: theme.palette.background.default,
-      }}
-    >
-      {/* Pass slug to a modified ReportingDashboard that accepts slug prop */}
-      <ReportingDashboard publicSlug={slug} brandInfo={brandInfo} />
-    </Box>
+    <ThemeProvider theme={brandTheme}>
+      <Box
+        sx={{
+          minHeight: '100vh',
+          bgcolor: brandTheme.palette.background.default,
+        }}
+      >
+        {/* Pass slug to a modified ReportingDashboard that accepts slug prop */}
+        <ReportingDashboard publicSlug={slug} brandInfo={brandInfo} />
+      </Box>
+    </ThemeProvider>
   )
 }
 

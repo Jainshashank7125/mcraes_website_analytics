@@ -12,23 +12,29 @@ import {
   Button,
   alpha,
   useTheme,
-  Skeleton
+  Skeleton,
+  IconButton,
+  Tooltip
 } from '@mui/material'
 import {
   Business as BusinessIcon,
   Language as LanguageIcon,
   ArrowForward as ArrowForwardIcon,
-  Refresh as RefreshIcon
+  Refresh as RefreshIcon,
+  Settings as SettingsIcon
 } from '@mui/icons-material'
 import { motion } from 'framer-motion'
 import { syncAPI } from '../services/api'
 import { useToast } from '../contexts/ToastContext'
 import { getErrorMessage } from '../utils/errorHandler'
+import BrandManagement from './BrandManagement'
 
 function BrandsList() {
   const [brands, setBrands] = useState([])
   const [brandsWithAnalytics, setBrandsWithAnalytics] = useState([])
   const [loading, setLoading] = useState(false)
+  const [managementOpen, setManagementOpen] = useState(false)
+  const [selectedBrand, setSelectedBrand] = useState(null)
   const navigate = useNavigate()
   const theme = useTheme()
   const { showError } = useToast()
@@ -84,6 +90,19 @@ function BrandsList() {
       brandPresence: analytics.brand_presence?.present || 0,
       topCompetitors: analytics.top_competitors?.length || 0
     }
+  }
+
+  const handleManageClick = (e, brand) => {
+    e.stopPropagation() // Prevent card click navigation
+    setSelectedBrand(brand)
+    setManagementOpen(true)
+  }
+
+  const handleManagementClose = () => {
+    setManagementOpen(false)
+    setSelectedBrand(null)
+    // Reload brands to get updated data
+    loadBrands()
   }
 
 
@@ -205,7 +224,6 @@ function BrandsList() {
                 <Card
                   sx={{
                     height: '100%',
-                    cursor: 'pointer',
                     background: '#FFFFFF',
                     border: `1px solid ${theme.palette.divider}`,
                     borderRadius: 2,
@@ -237,23 +255,40 @@ function BrandsList() {
                       },
                     },
                   }}
-                  onClick={() => navigate(`/brands/${brand.id}`)}
                 >
                     <CardContent sx={{ p: 2.5 }}>
                       <Box display="flex" alignItems="center" mb={2}>
-                        <Avatar
-                          sx={{
-                            bgcolor: alpha(theme.palette.primary.main, 0.1),
-                            color: theme.palette.primary.main,
-                            width: 40,
-                            height: 40,
-                            mr: 1.5,
-                            fontSize: '18px',
-                            fontWeight: 600,
-                          }}
-                        >
-                          {brand.name?.charAt(0) || <BusinessIcon />}
-                        </Avatar>
+                        {brand.logo_url ? (
+                          <Box
+                            component="img"
+                            src={brand.logo_url}
+                            alt={`${brand.name} logo`}
+                            sx={{
+                              width: 40,
+                              height: 40,
+                              mr: 1.5,
+                              borderRadius: 1,
+                              objectFit: 'contain',
+                              bgcolor: 'transparent',
+                              border: `1px solid ${theme.palette.divider}`,
+                              p: 0.5,
+                            }}
+                          />
+                        ) : (
+                          <Avatar
+                            sx={{
+                              bgcolor: alpha(theme.palette.primary.main, 0.1),
+                              color: theme.palette.primary.main,
+                              width: 40,
+                              height: 40,
+                              mr: 1.5,
+                              fontSize: '18px',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {brand.name?.charAt(0) || <BusinessIcon />}
+                          </Avatar>
+                        )}
                         <Box flex={1}>
                           <Typography 
                             variant="h6" 
@@ -291,15 +326,43 @@ function BrandsList() {
                             </Box>
                           )}
                         </Box>
-                        <ArrowForwardIcon 
-                          className="brand-arrow"
-                          sx={{ 
-                            color: 'text.secondary',
-                            fontSize: 16,
-                            transition: 'all 0.2s',
-                            opacity: 0.4,
-                          }} 
-                        />
+                        <Box display="flex" alignItems="center" gap={0.5}>
+                          <Tooltip title="Manage Brand Settings" arrow>
+                            <IconButton
+                              size="small"
+                              onClick={(e) => handleManageClick(e, brand)}
+                              sx={{
+                                color: theme.palette.primary.main,
+                                transition: 'all 0.2s',
+                                '&:hover': {
+                                  bgcolor: alpha(theme.palette.primary.main, 0.1),
+                                },
+                              }}
+                            >
+                              <SettingsIcon sx={{ fontSize: 18 }} />
+                            </IconButton>
+                          </Tooltip>
+                          <IconButton
+                            className="brand-arrow"
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              navigate(`/brands/${brand.id}`)
+                            }}
+                            sx={{
+                              color: 'text.secondary',
+                              transition: 'all 0.2s',
+                              opacity: 0.6,
+                              '&:hover': {
+                                opacity: 1,
+                                bgcolor: alpha(theme.palette.primary.main, 0.1),
+                                color: theme.palette.primary.main,
+                              },
+                            }}
+                          >
+                            <ArrowForwardIcon sx={{ fontSize: 16 }} />
+                          </IconButton>
+                        </Box>
                       </Box>
 
                       {stats && (
@@ -403,7 +466,13 @@ function BrandsList() {
             )
           })}
         </Grid>
-      </Box>
+
+      <BrandManagement
+        open={managementOpen}
+        onClose={handleManagementClose}
+        brand={selectedBrand}
+      />
+    </Box>
   )
 }
 

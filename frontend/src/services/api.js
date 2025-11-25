@@ -469,6 +469,60 @@ export const reportingAPI = {
     const response = await api.put(`/api/v1/data/reporting-dashboard/${brandId}/kpi-selections`, payload)
     return response.data
   },
+  
+}
+
+// Brand Management API (Admin/Manager only)
+export const dataAPI = {
+  // Update GA4 Property ID for a brand
+  updateBrandGA4PropertyId: async (brandId, ga4PropertyId) => {
+    const response = await api.put(`/api/v1/data/brands/${brandId}/ga4-property-id`, {
+      ga4_property_id: ga4PropertyId || null
+    })
+    return response.data
+  },
+  
+  // Link Agency Analytics campaign to a brand
+  linkAgencyAnalyticsCampaign: async (brandId, campaignId) => {
+    const response = await api.post(`/api/v1/data/brands/${brandId}/agency-analytics-campaigns/${campaignId}/link`)
+    return response.data
+  },
+  
+  // Unlink Agency Analytics campaign from a brand
+  unlinkAgencyAnalyticsCampaign: async (brandId, campaignId) => {
+    const response = await api.delete(`/api/v1/data/brands/${brandId}/agency-analytics-campaigns/${campaignId}/link`)
+    return response.data
+  },
+  
+  // Get all campaigns linked to a brand
+  getBrandLinkedCampaigns: async (brandId) => {
+    const response = await api.get(`/api/v1/data/brands/${brandId}/agency-analytics-campaigns`)
+    return response.data
+  },
+  
+  // Upload brand logo
+  uploadBrandLogo: async (brandId, file) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const response = await api.post(`/api/v1/data/brands/${brandId}/logo`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
+    return response.data
+  },
+  
+  // Delete brand logo
+  deleteBrandLogo: async (brandId) => {
+    const response = await api.delete(`/api/v1/data/brands/${brandId}/logo`)
+    return response.data
+  },
+  
+  // Update brand theme
+  updateBrandTheme: async (brandId, theme) => {
+    const response = await api.put(`/api/v1/data/brands/${brandId}/theme`, theme)
+    return response.data
+  },
 }
 
 // Authentication API endpoints

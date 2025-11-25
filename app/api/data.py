@@ -1,13 +1,17 @@
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends, UploadFile, File, Form
 from typing import Optional, List, Dict
 import logging
 from datetime import datetime, timedelta
+import base64
+import uuid
 from app.services.supabase_service import SupabaseService
 from app.services.ga4_client import GA4APIClient
 from app.services.agency_analytics_client import AgencyAnalyticsClient
 from app.services.scrunch_client import ScrunchAPIClient
 from app.core.exceptions import NotFoundException, handle_exception
 from app.core.error_utils import handle_api_errors
+from app.api.auth import get_current_user
+from app.core.config import settings
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -1571,6 +1575,11 @@ async def get_reporting_dashboard(
                         if prompt_id not in citations_by_prompt:
                             citations_by_prompt[prompt_id] = 0
                         citations_by_prompt[prompt_id] += citation_count
+                        
+                        # Track unique prompts for Prompt Reach Metric
+                        unique_prompts_tracked.add(prompt_id)
+                        if r.get("brand_present"):
+                            unique_prompts_with_brand.add(prompt_id)
                     
                     # Track brand presence (only for responses matching brand_id)
                     if r.get("brand_present"):
@@ -1637,6 +1646,13 @@ async def get_reporting_dashboard(
                 logger.info(f"Total responses to process: {len(responses_to_process)}")
                 logger.info(f"Total responses: ${total_responses_count}")
                 logger.info(f"Total brand present: {brand_present_count}")
+                # Calculate Prompt Reach Metric
+                prompt_reach = {
+                    "total_prompts_tracked": len(unique_prompts_tracked),
+                    "prompts_with_brand": len(unique_prompts_with_brand),
+                    "display": f"Tracked prompts: {len(unique_prompts_tracked)}; brand appeared in {len(unique_prompts_with_brand)} of them"
+                }
+                
                 return {
                     "total_citations": total_citations,  # 100% from source
                     # NOTE: total_interactions, influencer_reach, engagement_rate, cost_per_engagement
@@ -1651,6 +1667,8 @@ async def get_reporting_dashboard(
                         "brand_visibility_percent": brand_visibility_percent,
                         "competitor_avg_visibility_percent": competitor_avg_visibility_percent
                     },
+                    "prompt_reach": prompt_reach,  # New: Prompt Reach Metric
+                    "citations_by_prompt": citations_by_prompt,  # Expose citations per prompt for frontend
                 }
             
             # Calculate Scrunch KPIs if brand has any Scrunch data (prompts or responses)
@@ -1770,6 +1788,14 @@ async def get_reporting_dashboard(
                         "icon": "BarChart",
                         "format": "custom",
                         "display": f"Your brand's AI visibility: {round(competitive_current.get('brand_visibility_percent', 0), 1)}% vs competitor average: {round(competitive_current.get('competitor_avg_visibility_percent', 0), 1)}%"
+                    },
+                    "prompt_reach": {
+                        "value": current_metrics.get("prompt_reach", {}),
+                        "change": None,  # Not calculating change for this metric
+                        "source": "Scrunch",
+                        "label": "Prompt Reach",
+                        "icon": "Article",
+                        "format": "custom"
                     }
                 }
                 
@@ -1833,6 +1859,7 @@ async def get_reporting_dashboard(
                                 "text": prompt.get("text") or prompt.get("prompt_text") or "N/A",
                                 "responseCount": response_count,
                                 "variants": variants_count,  # Count of unique platforms (ChatGPT, Perplexity, Claude, etc.)
+                                "citations": citations_by_prompt.get(prompt_id, 0),  # New: Citations per prompt
                                 "totalResponsesForBrand": total_responses_for_brand  # Total responses for this brand_id
                             })
                     
@@ -1950,6 +1977,14 @@ async def get_reporting_dashboard(
                 except Exception as e:
                     logger.warning(f"Could not fetch geographic breakdown: {str(e)}")
                     chart_data["geographic_breakdown"] = []
+                
+                # Get device breakdown
+                try:
+                    devices = await ga4_client.get_device_breakdown(property_id, start_date, end_date)
+                    chart_data["device_breakdown"] = devices if devices else []
+                except Exception as e:
+                    logger.warning(f"Could not fetch device breakdown: {str(e)}")
+                    chart_data["device_breakdown"] = []
                 
                 # Get GA4 traffic overview for detailed metrics
                 try:
@@ -2373,6 +2408,9 @@ async def get_scrunch_dashboard_data(
                 prompt_platform_map = {}
                 prompt_brand_present = set()
                 competitor_visibility_count = {}
+                citations_by_prompt = {}  # {prompt_id: total_citations}
+                unique_prompts_tracked = set()
+                unique_prompts_with_brand = set()
                 total_responses_with_competitors = 0
                 citations_by_prompt = {}
                 prompt_counts = {}
@@ -2390,6 +2428,7 @@ async def get_scrunch_dashboard_data(
                     prompt_id = r.get("prompt_id")
                     if prompt_id:
                         prompt_counts[prompt_id] = prompt_counts.get(prompt_id, 0) + 1
+                        unique_prompts_tracked.add(prompt_id)
                         platform = r.get("platform")
                         if platform:
                             if prompt_id not in prompt_platform_map:
@@ -2397,6 +2436,7 @@ async def get_scrunch_dashboard_data(
                             prompt_platform_map[prompt_id].add(platform)
                         if r.get("brand_present"):
                             prompt_brand_present.add(prompt_id)
+                            unique_prompts_with_brand.add(prompt_id)
                 
                 sorted_prompts = sorted(prompt_counts.items(), key=lambda x: x[1], reverse=True)[:10]
                 top10_count = sum(count for _, count in sorted_prompts)
@@ -2427,6 +2467,11 @@ async def get_scrunch_dashboard_data(
                         if prompt_id not in citations_by_prompt:
                             citations_by_prompt[prompt_id] = 0
                         citations_by_prompt[prompt_id] += citation_count
+                        
+                        # Track unique prompts for Prompt Reach Metric
+                        unique_prompts_tracked.add(prompt_id)
+                        if r.get("brand_present"):
+                            unique_prompts_with_brand.add(prompt_id)
                     
                     if r.get("brand_present"):
                         brand_present_count += 1
@@ -2470,6 +2515,13 @@ async def get_scrunch_dashboard_data(
                         total_competitor_appearances = sum(competitor_visibility_count.values())
                         competitor_avg_visibility_percent = (total_competitor_appearances / total_responses_with_competitors) * 100
                 
+                # Calculate Prompt Reach Metric
+                prompt_reach = {
+                    "total_prompts_tracked": len(unique_prompts_tracked),
+                    "prompts_with_brand": len(unique_prompts_with_brand),
+                    "display": f"Tracked prompts: {len(unique_prompts_tracked)}; brand appeared in {len(unique_prompts_with_brand)} of them"
+                }
+                
                 return {
                     "total_citations": total_citations,
                     "brand_present_count": brand_present_count,
@@ -2481,6 +2533,8 @@ async def get_scrunch_dashboard_data(
                         "brand_visibility_percent": brand_visibility_percent,
                         "competitor_avg_visibility_percent": competitor_avg_visibility_percent
                     },
+                    "prompt_reach": prompt_reach,  # New: Prompt Reach Metric
+                    "citations_by_prompt": citations_by_prompt,  # Expose citations per prompt
                 }
             
             if has_any_scrunch_data:
@@ -2569,6 +2623,14 @@ async def get_scrunch_dashboard_data(
                         "label": "Competitive Benchmarking",
                         "icon": "BarChart",
                         "format": "custom"
+                    },
+                    "prompt_reach": {
+                        "value": current_metrics.get("prompt_reach", {}),
+                        "change": None,  # Not calculating change for this metric
+                        "source": "Scrunch",
+                        "label": "Prompt Reach",
+                        "icon": "Article",
+                        "format": "custom"
                     }
                 }
                 
@@ -2625,6 +2687,7 @@ async def get_scrunch_dashboard_data(
                             "rank": idx,
                             "responseCount": count,
                             "variants": variants_count,  # Count of unique platforms (ChatGPT, Perplexity, Claude, etc.)
+                            "citations": citations_by_prompt.get(prompt_id, 0),  # New: Citations per prompt
                             "totalResponsesForBrand": total_responses_for_brand  # Total responses for this brand_id
                         })
                 
@@ -2884,4 +2947,402 @@ async def save_brand_kpi_selections(brand_id: int, request: KPISelectionRequest)
     except Exception as e:
         logger.error(f"Error saving KPI selections for brand {brand_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error saving KPI selections: {str(e)}")
+
+# =====================================================
+# Brand Management Endpoints (Admin/Manager Only)
+# =====================================================
+
+class GA4PropertyUpdateRequest(BaseModel):
+    ga4_property_id: Optional[str] = None
+
+@router.put("/data/brands/{brand_id}/ga4-property-id")
+@handle_api_errors(context="updating GA4 property ID")
+async def update_brand_ga4_property_id(
+    brand_id: int,
+    request: GA4PropertyUpdateRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update GA4 Property ID for a brand"""
+    try:
+        supabase = SupabaseService()
+        
+        # Check if brand exists
+        brand_result = supabase.client.table("brands").select("id").eq("id", brand_id).execute()
+        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        
+        if not brands:
+            raise HTTPException(status_code=404, detail="Brand not found")
+        
+        # Update GA4 property ID (set to None if empty string or None)
+        ga4_property_id = request.ga4_property_id
+        update_data = {
+            "ga4_property_id": ga4_property_id if ga4_property_id else None
+        }
+        
+        result = supabase.client.table("brands").update(update_data).eq("id", brand_id).execute()
+        
+        logger.info(f"Updated GA4 property ID for brand {brand_id} by user {current_user.get('email')}")
+        
+        return {
+            "brand_id": brand_id,
+            "ga4_property_id": update_data["ga4_property_id"],
+            "message": "GA4 Property ID updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating GA4 property ID for brand {brand_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error updating GA4 property ID: {str(e)}")
+
+@router.post("/data/brands/{brand_id}/agency-analytics-campaigns/{campaign_id}/link")
+@handle_api_errors(context="linking Agency Analytics campaign")
+async def link_agency_analytics_campaign(
+    brand_id: int,
+    campaign_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    """Link an Agency Analytics campaign to a brand"""
+    try:
+        supabase = SupabaseService()
+        
+        # Check if brand exists
+        brand_result = supabase.client.table("brands").select("id").eq("id", brand_id).execute()
+        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        
+        if not brands:
+            raise HTTPException(status_code=404, detail="Brand not found")
+        
+        # Check if campaign exists
+        campaign_result = supabase.client.table("agency_analytics_campaigns").select("id").eq("id", campaign_id).execute()
+        campaigns = campaign_result.data if hasattr(campaign_result, 'data') else []
+        
+        if not campaigns:
+            raise HTTPException(status_code=404, detail="Agency Analytics campaign not found")
+        
+        # Check if link already exists
+        existing_link_result = supabase.client.table("agency_analytics_campaign_brands").select("*").eq("brand_id", brand_id).eq("campaign_id", campaign_id).execute()
+        existing_links = existing_link_result.data if hasattr(existing_link_result, 'data') else []
+        
+        if existing_links:
+            return {
+                "brand_id": brand_id,
+                "campaign_id": campaign_id,
+                "message": "Campaign is already linked to this brand"
+            }
+        
+        # Create link
+        link_data = {
+            "brand_id": brand_id,
+            "campaign_id": campaign_id,
+            "match_method": "manual",
+            "match_confidence": "manual"
+        }
+        
+        result = supabase.client.table("agency_analytics_campaign_brands").insert(link_data).execute()
+        
+        logger.info(f"Linked campaign {campaign_id} to brand {brand_id} by user {current_user.get('email')}")
+        
+        return {
+            "brand_id": brand_id,
+            "campaign_id": campaign_id,
+            "message": "Campaign linked successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error linking campaign {campaign_id} to brand {brand_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error linking campaign: {str(e)}")
+
+@router.delete("/data/brands/{brand_id}/agency-analytics-campaigns/{campaign_id}/link")
+@handle_api_errors(context="unlinking Agency Analytics campaign")
+async def unlink_agency_analytics_campaign(
+    brand_id: int,
+    campaign_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    """Unlink an Agency Analytics campaign from a brand"""
+    try:
+        supabase = SupabaseService()
+        
+        # Check if brand exists
+        brand_result = supabase.client.table("brands").select("id").eq("id", brand_id).execute()
+        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        
+        if not brands:
+            raise HTTPException(status_code=404, detail="Brand not found")
+        
+        # Check if link exists
+        existing_link_result = supabase.client.table("agency_analytics_campaign_brands").select("*").eq("brand_id", brand_id).eq("campaign_id", campaign_id).execute()
+        existing_links = existing_link_result.data if hasattr(existing_link_result, 'data') else []
+        
+        if not existing_links:
+            raise HTTPException(status_code=404, detail="Campaign is not linked to this brand")
+        
+        # Delete link
+        result = supabase.client.table("agency_analytics_campaign_brands").delete().eq("brand_id", brand_id).eq("campaign_id", campaign_id).execute()
+        
+        logger.info(f"Unlinked campaign {campaign_id} from brand {brand_id} by user {current_user.get('email')}")
+        
+        return {
+            "brand_id": brand_id,
+            "campaign_id": campaign_id,
+            "message": "Campaign unlinked successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error unlinking campaign {campaign_id} from brand {brand_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error unlinking campaign: {str(e)}")
+
+@router.get("/data/brands/{brand_id}/agency-analytics-campaigns")
+@handle_api_errors(context="fetching linked campaigns")
+async def get_brand_linked_campaigns(
+    brand_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get all Agency Analytics campaigns linked to a brand"""
+    try:
+        supabase = SupabaseService()
+        
+        # Get linked campaigns
+        links_result = supabase.client.table("agency_analytics_campaign_brands").select("*").eq("brand_id", brand_id).execute()
+        links = links_result.data if hasattr(links_result, 'data') else []
+        
+        if not links:
+            return {
+                "brand_id": brand_id,
+                "linked_campaigns": [],
+                "available_campaigns": []
+            }
+        
+        # Get campaign details
+        campaign_ids = [link["campaign_id"] for link in links]
+        campaigns_result = supabase.client.table("agency_analytics_campaigns").select("*").in_("id", campaign_ids).execute()
+        linked_campaigns = campaigns_result.data if hasattr(campaigns_result, 'data') else []
+        
+        # Get all available campaigns for selection
+        all_campaigns_result = supabase.client.table("agency_analytics_campaigns").select("*").order("id", desc=True).execute()
+        all_campaigns = all_campaigns_result.data if hasattr(all_campaigns_result, 'data') else []
+        
+        return {
+            "brand_id": brand_id,
+            "linked_campaigns": linked_campaigns,
+            "available_campaigns": all_campaigns
+        }
+    except Exception as e:
+        logger.error(f"Error fetching linked campaigns for brand {brand_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching linked campaigns: {str(e)}")
+
+class ThemeUpdateRequest(BaseModel):
+    primary_color: Optional[str] = None
+    secondary_color: Optional[str] = None
+    accent_color: Optional[str] = None
+    font_family: Optional[str] = None
+    custom: Optional[Dict] = None
+
+@router.post("/data/brands/{brand_id}/logo")
+@handle_api_errors(context="uploading brand logo")
+async def upload_brand_logo(
+    brand_id: int,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Upload brand logo to Supabase Storage"""
+    try:
+        supabase = SupabaseService()
+        
+        # Check if brand exists
+        brand_result = supabase.client.table("brands").select("id").eq("id", brand_id).execute()
+        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        
+        if not brands:
+            raise HTTPException(status_code=404, detail="Brand not found")
+        
+        # Validate file type
+        if not file.content_type or not file.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="File must be an image")
+        
+        # Read file content
+        file_content = await file.read()
+        file_extension = file.filename.split('.')[-1] if '.' in file.filename else 'png'
+        
+        # Generate unique filename (just the filename, not including bucket name in path)
+        filename = f"brand-{brand_id}-{uuid.uuid4().hex[:8]}.{file_extension}"
+        file_path = filename  # Path is relative to bucket root
+        
+        # Upload to Supabase Storage using Supabase client
+        # The bucket name is 'brand-logos', file path is just the filename
+        try:
+            logger.info(f"Uploading file to storage: bucket=brand-logos, path={file_path}, size={len(file_content)} bytes, content-type={file.content_type}")
+            
+            responseBuckets = supabase.client.storage.list_buckets()
+            logger.info(f"Buckets: {responseBuckets}")
+            # Upload using Supabase storage client
+            storage_response = supabase.client.storage.from_("brand-logos").upload(
+                file=file_content,
+                path=file_path,
+                file_options={
+                    "content-type": file.content_type,
+                    "cache-control": "3600",
+                    "upsert": "true"
+                }
+            )
+            
+            logger.info(f"Storage upload successful: {storage_response}")
+            
+            # Get public URL using Supabase client
+            try:
+                public_url_response = supabase.client.storage.from_("brand-logos").get_public_url(file_path)
+                if isinstance(public_url_response, str):
+                    logo_url = public_url_response
+                elif hasattr(public_url_response, 'get'):
+                    logo_url = public_url_response.get('publicUrl', '')
+                else:
+                    logo_url = str(public_url_response)
+            except Exception as url_error:
+                logger.warning(f"Could not get public URL from response: {url_error}")
+                logo_url = None
+            
+            # Construct public URL manually if Supabase client method fails
+            if not logo_url:
+                # Extract project ref from SUPABASE_URL
+                # URL format: https://{project_ref}.supabase.co
+                project_ref = settings.SUPABASE_URL.replace('https://', '').replace('.supabase.co', '')
+                logo_url = f"https://{project_ref}.supabase.co/storage/v1/object/public/brand-logos/{file_path}"
+            
+            logger.info(f"Final logo URL: {logo_url}")
+            
+        except Exception as storage_error:
+            logger.error(f"Storage error: {str(storage_error)}")
+            # Fallback: Store as base64 data URL (not recommended for production)
+            # For now, we'll raise an error and ask user to configure storage
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to upload to storage. Error: {str(storage_error)}"
+            )
+        
+        # Update brand with logo URL
+        update_data = {"logo_url": logo_url}
+        result = supabase.client.table("brands").update(update_data).eq("id", brand_id).execute()
+        
+        logger.info(f"Uploaded logo for brand {brand_id} by user {current_user.get('email')}")
+        
+        return {
+            "brand_id": brand_id,
+            "logo_url": logo_url,
+            "message": "Logo uploaded successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading logo for brand {brand_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error uploading logo: {str(e)}")
+
+@router.delete("/data/brands/{brand_id}/logo")
+@handle_api_errors(context="deleting brand logo")
+async def delete_brand_logo(
+    brand_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    """Delete brand logo"""
+    try:
+        supabase = SupabaseService()
+        
+        # Check if brand exists and get current logo
+        brand_result = supabase.client.table("brands").select("id, logo_url").eq("id", brand_id).execute()
+        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        
+        if not brands:
+            raise HTTPException(status_code=404, detail="Brand not found")
+        
+        brand = brands[0]
+        logo_url = brand.get("logo_url")
+        
+        # Delete from storage if URL exists
+        if logo_url:
+            try:
+                # Extract file path from URL
+                # URL format: .../storage/v1/object/public/brand-logos/{filename}
+                if "brand-logos/" in logo_url:
+                    file_path = logo_url.split("brand-logos/")[-1].split("?")[0]  # Remove query params if any
+                elif "/object/public/brand-logos/" in logo_url:
+                    file_path = logo_url.split("/object/public/brand-logos/")[-1].split("?")[0]
+                else:
+                    # Try to extract just the filename
+                    file_path = logo_url.split("/")[-1].split("?")[0]
+                
+                if file_path:
+                    logger.info(f"Deleting file from storage: {file_path}")
+                    supabase.client.storage.from_("brand-logos").remove([file_path])
+            except Exception as storage_error:
+                logger.warning(f"Failed to delete logo from storage: {str(storage_error)}")
+        
+        # Update brand to remove logo URL
+        update_data = {"logo_url": None}
+        result = supabase.client.table("brands").update(update_data).eq("id", brand_id).execute()
+        
+        logger.info(f"Deleted logo for brand {brand_id} by user {current_user.get('email')}")
+        
+        return {
+            "brand_id": brand_id,
+            "message": "Logo deleted successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting logo for brand {brand_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error deleting logo: {str(e)}")
+
+@router.put("/data/brands/{brand_id}/theme")
+@handle_api_errors(context="updating brand theme")
+async def update_brand_theme(
+    brand_id: int,
+    request: ThemeUpdateRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update brand theme configuration"""
+    try:
+        supabase = SupabaseService()
+        
+        # Check if brand exists
+        brand_result = supabase.client.table("brands").select("id, theme").eq("id", brand_id).execute()
+        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        
+        if not brands:
+            raise HTTPException(status_code=404, detail="Brand not found")
+        
+        # Get existing theme or initialize empty dict
+        existing_theme = brands[0].get("theme") or {}
+        if not isinstance(existing_theme, dict):
+            existing_theme = {}
+        
+        # Build updated theme
+        updated_theme = existing_theme.copy()
+        if request.primary_color is not None:
+            updated_theme["primary_color"] = request.primary_color
+        if request.secondary_color is not None:
+            updated_theme["secondary_color"] = request.secondary_color
+        if request.accent_color is not None:
+            updated_theme["accent_color"] = request.accent_color
+        if request.font_family is not None:
+            updated_theme["font_family"] = request.font_family
+        if request.custom is not None:
+            updated_theme["custom"] = request.custom
+        
+        # Update brand theme
+        update_data = {"theme": updated_theme}
+        result = supabase.client.table("brands").update(update_data).eq("id", brand_id).execute()
+        
+        logger.info(f"Updated theme for brand {brand_id} by user {current_user.get('email')}")
+        
+        return {
+            "brand_id": brand_id,
+            "theme": updated_theme,
+            "message": "Theme updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating theme for brand {brand_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error updating theme: {str(e)}")
 

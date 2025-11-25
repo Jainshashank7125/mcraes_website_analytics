@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { syncAPI } from '../services/api'
+import { useAuth } from './AuthContext'
 
 const SyncStatusContext = createContext()
 
@@ -14,9 +15,17 @@ export const useSyncStatus = () => {
 export const SyncStatusProvider = ({ children }) => {
   const [activeJobs, setActiveJobs] = useState([])
   const [polling, setPolling] = useState(false)
+  const { isAuthenticated } = useAuth()
 
   // Poll for active jobs status
   const pollActiveJobs = useCallback(async () => {
+    // Only poll if user is authenticated
+    if (!isAuthenticated) {
+      setActiveJobs([])
+      setPolling(false)
+      return
+    }
+
     try {
       const response = await syncAPI.getActiveSyncJobs()
       const jobs = response.items || []
@@ -35,23 +44,32 @@ export const SyncStatusProvider = ({ children }) => {
         setPolling(false)
       }
     } catch (error) {
-      console.error('Error polling sync jobs:', error)
+      // Silently fail if 403 (not authenticated) or other errors
+      if (error.response?.status !== 403) {
+        console.error('Error polling sync jobs:', error)
+      }
       setPolling(false)
+      setActiveJobs([])
     }
-  }, [])
+  }, [isAuthenticated])
 
   // Start polling when there are active jobs
   useEffect(() => {
-    if (polling) {
+    if (polling && isAuthenticated) {
       const interval = setInterval(pollActiveJobs, 2000) // Poll every 2 seconds
       return () => clearInterval(interval)
     }
-  }, [polling, pollActiveJobs])
+  }, [polling, pollActiveJobs, isAuthenticated])
 
-  // Initial poll and check for active jobs
+  // Initial poll and check for active jobs (only if authenticated)
   useEffect(() => {
-    pollActiveJobs()
-  }, [pollActiveJobs])
+    if (isAuthenticated) {
+      pollActiveJobs()
+    } else {
+      setActiveJobs([])
+      setPolling(false)
+    }
+  }, [pollActiveJobs, isAuthenticated])
 
   const addJob = useCallback((jobId, syncType) => {
     setActiveJobs(prev => {

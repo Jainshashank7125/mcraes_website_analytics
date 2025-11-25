@@ -42,17 +42,32 @@ export default function ReportingDashboardHeader({
   return (
     <Box mb={4}>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-        <Typography 
-          variant="h4" 
-          fontWeight={700} 
-          sx={{
-            fontSize: '1.75rem',
-            letterSpacing: '-0.02em',
-            color: 'text.primary'
-          }}
-        >
-          {isPublic && publicBrandInfo ? publicBrandInfo.name : 'Unified Reporting Dashboard'}
-        </Typography>
+        <Box display="flex" alignItems="center" gap={2}>
+          {isPublic && publicBrandInfo?.logo_url && (
+            <Box
+              component="img"
+              src={publicBrandInfo.logo_url}
+              alt={`${publicBrandInfo.name} logo`}
+              sx={{
+                maxHeight: 48,
+                maxWidth: 200,
+                objectFit: 'contain',
+                borderRadius: 1,
+              }}
+            />
+          )}
+          <Typography 
+            variant="h4" 
+            fontWeight={700} 
+            sx={{
+              fontSize: '1.75rem',
+              letterSpacing: '-0.02em',
+              color: 'text.primary'
+            }}
+          >
+            {isPublic && publicBrandInfo ? publicBrandInfo.name : 'Unified Reporting Dashboard'}
+          </Typography>
+        </Box>
         <Box display="flex" gap={1.5}>
           <IconButton
             onClick={onOpenKPISelector}

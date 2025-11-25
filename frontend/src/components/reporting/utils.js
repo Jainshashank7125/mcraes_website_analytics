@@ -22,6 +22,10 @@ export const formatValue = (kpi) => {
     if (Array.isArray(value)) {
       return `${value.length} keywords tracked`
     }
+    // For prompt_reach
+    if (value.total_prompts_tracked !== undefined && value.prompts_with_brand !== undefined) {
+      return value.display || `Tracked prompts: ${value.total_prompts_tracked}; brand appeared in ${value.prompts_with_brand} of them`
+    }
     // For null values (prompt_volume, citations_per_prompt)
     if (value === null) {
       return 'Metric not available - no assumptions made'
