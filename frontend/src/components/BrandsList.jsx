@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Box,
@@ -24,61 +24,20 @@ import {
   Settings as SettingsIcon
 } from '@mui/icons-material'
 import { motion } from 'framer-motion'
-import { syncAPI } from '../services/api'
-import { useToast } from '../contexts/ToastContext'
-import { getErrorMessage } from '../utils/errorHandler'
+import { useBrandsWithAnalytics } from '../hooks/useBrands'
+import { useQueryClient } from '@tanstack/react-query'
+import { queryKeys } from '../hooks/queryKeys'
 import BrandManagement from './BrandManagement'
 
 function BrandsList() {
-  const [brands, setBrands] = useState([])
-  const [brandsWithAnalytics, setBrandsWithAnalytics] = useState([])
-  const [loading, setLoading] = useState(false)
   const [managementOpen, setManagementOpen] = useState(false)
   const [selectedBrand, setSelectedBrand] = useState(null)
   const navigate = useNavigate()
   const theme = useTheme()
-  const { showError } = useToast()
-
-  useEffect(() => {
-    loadBrands()
-  }, [])
-
-  const loadBrands = async () => {
-    try {
-      setLoading(true)
-      const [brandsResponse, analyticsResponse] = await Promise.all([
-        syncAPI.getBrands(),
-        syncAPI.getBrandAnalytics().catch(() => null)
-      ])
-      
-      const brandsList = brandsResponse.items || brandsResponse || []
-      setBrands(brandsList)
-      
-      // Map brands with their individual analytics
-      if (analyticsResponse?.brands && Array.isArray(analyticsResponse.brands)) {
-        // Create a map of brand ID to analytics
-        const analyticsMap = new Map()
-        analyticsResponse.brands.forEach(brandWithAnalytics => {
-          analyticsMap.set(brandWithAnalytics.id, brandWithAnalytics.analytics)
-        })
-        
-        // Merge brands with their analytics
-        const brandsWithStats = brandsList.map(brand => ({
-          ...brand,
-          analytics: analyticsMap.get(brand.id) || null
-        }))
-        
-        setBrandsWithAnalytics(brandsWithStats)
-      } else {
-        // If no analytics response, just set brands without analytics
-        setBrandsWithAnalytics(brandsList.map(brand => ({ ...brand, analytics: null })))
-      }
-    } catch (err) {
-      showError(getErrorMessage(err))
-    } finally {
-      setLoading(false)
-    }
-  }
+  const queryClient = useQueryClient()
+  
+  // Use React Query hook for brands with analytics
+  const { data: brandsWithAnalytics = [], isLoading: loading } = useBrandsWithAnalytics()
 
   const getBrandStats = (brandId) => {
     const brandWithAnalytics = brandsWithAnalytics.find(b => b.id === brandId)
@@ -101,8 +60,12 @@ function BrandsList() {
   const handleManagementClose = () => {
     setManagementOpen(false)
     setSelectedBrand(null)
-    // Reload brands to get updated data
-    loadBrands()
+    // Invalidate brands cache to refetch updated data
+    queryClient.invalidateQueries({ queryKey: queryKeys.brands.all })
+  }
+
+  const handleRefresh = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.brands.all })
   }
 
 
@@ -124,7 +87,7 @@ function BrandsList() {
     )
   }
 
-  if (brands.length === 0) {
+  if (!loading && brandsWithAnalytics.length === 0) {
     return (
       <Card
         sx={{
@@ -144,7 +107,7 @@ function BrandsList() {
           <Button 
             variant="contained" 
             size="small"
-            onClick={loadBrands}
+            onClick={handleRefresh}
             sx={{
               px: 2,
               py: 0.75,
@@ -185,14 +148,14 @@ function BrandsList() {
             color="text.secondary"
             sx={{ fontSize: '0.875rem' }}
           >
-            {brands.length} {brands.length === 1 ? 'brand' : 'brands'} available
+            {brandsWithAnalytics.length} {brandsWithAnalytics.length === 1 ? 'brand' : 'brands'} available
           </Typography>
         </Box>
         <Button 
           variant="outlined" 
           size="small"
           startIcon={<RefreshIcon sx={{ fontSize: 16 }} />}
-          onClick={loadBrands}
+          onClick={handleRefresh}
           sx={{
             borderRadius: 2,
             px: 2,
@@ -212,7 +175,7 @@ function BrandsList() {
       </Box>
 
       <Grid container spacing={2.5}>
-        {(brandsWithAnalytics.length > 0 ? brandsWithAnalytics : brands).map((brand, index) => {
+        {brandsWithAnalytics.map((brand, index) => {
           const stats = getBrandStats(brand.id)
           return (
             <Grid item xs={12} sm={6} md={4} key={brand.id}>

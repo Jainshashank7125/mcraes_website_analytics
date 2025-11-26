@@ -32,17 +32,14 @@ import {
   ChatBubble as ChatBubbleIcon
 } from '@mui/icons-material'
 import { motion } from 'framer-motion'
-import { syncAPI } from '../services/api'
+import { useBrands } from '../hooks/useBrands'
+import { usePrompts, useResponses } from '../hooks/useData'
 import { useToast } from '../contexts/ToastContext'
-import { getErrorMessage } from '../utils/errorHandler'
 
 function DataView() {
   const [dataType, setDataType] = useState('brands')
-  const [data, setData] = useState([])
-  const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
-  const [totalCount, setTotalCount] = useState(0)
   const [filters, setFilters] = useState({
     stage: '',
     persona_id: '',
@@ -52,66 +49,68 @@ function DataView() {
     end_date: '',
   })
   const theme = useTheme()
-  const { showError } = useToast()
 
+  // Reset to first page when data type changes
   useEffect(() => {
-    setPage(1) // Reset to first page when data type changes
-    loadData()
+    setPage(1)
   }, [dataType])
 
-  useEffect(() => {
-    loadData()
-  }, [page, pageSize])
+  // Use React Query hooks for data fetching
+  const { data: brandsData = [], isLoading: brandsLoading } = useBrands()
 
-  const loadData = async () => {
-    try {
-      setLoading(true)
-      let result
-      const offset = (page - 1) * pageSize
+  const { data: promptsData, isLoading: promptsLoading } = usePrompts(
+    {
+      ...filters,
+      page,
+      pageSize,
+    },
+    {
+      enabled: dataType === 'prompts',
+    }
+  )
 
-      switch (dataType) {
-        case 'brands':
-          result = await syncAPI.getBrands(pageSize, offset)
-          const brandsData = Array.isArray(result) ? result : result.items || []
-          setData(brandsData)
-          setTotalCount(result.total_count !== undefined ? result.total_count : brandsData.length)
-          break
-        case 'prompts':
-          result = await syncAPI.getPrompts({
-            stage: filters.stage || undefined,
-            persona_id: filters.persona_id || undefined,
-            limit: pageSize,
-            offset: offset,
-          })
-          const promptsData = Array.isArray(result) ? result : result.items || []
-          setData(promptsData)
-          setTotalCount(result.total_count !== undefined ? result.total_count : promptsData.length)
-          break
-        case 'responses':
-          result = await syncAPI.getResponses({
-            platform: filters.platform || undefined,
-            prompt_id: filters.prompt_id || undefined,
-            start_date: filters.start_date || undefined,
-            end_date: filters.end_date || undefined,
-            limit: pageSize,
-            offset: offset,
-          })
-          const responsesData = Array.isArray(result) ? result : result.items || []
-          setData(responsesData)
-          setTotalCount(result.total_count !== undefined ? result.total_count : responsesData.length)
-          break
-        default:
-          setData([])
-          setTotalCount(0)
-      }
-    } catch (err) {
-      showError(getErrorMessage(err))
-      setData([])
-      setTotalCount(0)
-    } finally {
-      setLoading(false)
+  const { data: responsesData, isLoading: responsesLoading } = useResponses(
+    {
+      ...filters,
+      page,
+      pageSize,
+    },
+    {
+      enabled: dataType === 'responses',
+    }
+  )
+
+  // Determine which data to use based on dataType
+  const getCurrentData = () => {
+    switch (dataType) {
+      case 'brands':
+        // For brands, we need to handle pagination manually since useBrands returns all brands
+        const startIndex = (page - 1) * pageSize
+        const endIndex = startIndex + pageSize
+        const paginatedBrands = brandsData.slice(startIndex, endIndex)
+        return {
+          data: paginatedBrands,
+          loading: brandsLoading,
+          totalCount: brandsData.length,
+        }
+      case 'prompts':
+        return {
+          data: promptsData?.items || [],
+          loading: promptsLoading,
+          totalCount: promptsData?.totalCount || 0,
+        }
+      case 'responses':
+        return {
+          data: responsesData?.items || [],
+          loading: responsesLoading,
+          totalCount: responsesData?.totalCount || 0,
+        }
+      default:
+        return { data: [], loading: false, totalCount: 0 }
     }
   }
+
+  const { data, loading, totalCount } = getCurrentData()
 
   const handlePageChange = (event, value) => {
     setPage(value)

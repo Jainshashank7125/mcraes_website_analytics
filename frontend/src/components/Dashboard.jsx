@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import {
   Box,
   Card,
@@ -21,10 +21,8 @@ import {
 } from '@mui/icons-material'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { syncAPI } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
-import { useToast } from '../contexts/ToastContext'
-import { getErrorMessage } from '../utils/errorHandler'
+import { useSyncStatus } from '../hooks/useSync'
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -83,12 +81,14 @@ const statCards = [
 ]
 
 function Dashboard() {
-  const [status, setStatus] = useState(null)
-  const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
   const theme = useTheme()
   const { isAuthenticated, loading: authLoading } = useAuth()
-  const { showError } = useToast()
+  
+  // Use React Query hook for sync status
+  const { data: status, isLoading: loading } = useSyncStatus({
+    enabled: isAuthenticated,
+  })
 
   useEffect(() => {
     // Redirect to login if not authenticated
@@ -96,24 +96,7 @@ function Dashboard() {
       navigate('/login', { replace: true })
       return
     }
-    
-    // Only load status if authenticated
-    if (isAuthenticated) {
-      loadStatus()
-    }
   }, [isAuthenticated, authLoading, navigate])
-
-  const loadStatus = async () => {
-    try {
-      setLoading(true)
-      const data = await syncAPI.getStatus()
-      setStatus(data)
-    } catch (err) {
-      showError(getErrorMessage(err))
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const getValue = (key) => {
     const mapping = {
