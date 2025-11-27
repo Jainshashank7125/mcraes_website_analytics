@@ -21,6 +21,7 @@ import ReportingDashboard from './components/ReportingDashboard'
 import PublicReportingDashboard from './components/PublicReportingDashboard'
 import Login from './components/Login'
 import CreateUser from './components/CreateUser'
+import NotFound from './components/NotFound'
 import { theme } from './theme'
 import './App.css'
 
@@ -43,20 +44,19 @@ function App() {
                     path="/*"
                     element={
                       <ProtectedRoute>
-                        <Layout>
-                          <Routes>
-                            <Route path="/" element={<Dashboard />} />
-                            <Route path="/brands" element={<BrandsList />} />
-                            <Route path="/brands/:id" element={<BrandAnalyticsDetailWrapper />} />
-                            <Route path="/clients" element={<ClientsList />} />
-                            {/* <Route path="/analytics" element={<BrandAnalytics />} /> */}
-                            <Route path="/agency-analytics" element={<AgencyAnalytics />} />
-                            <Route path="/sync" element={<SyncPanel />} />
-                            <Route path="/data" element={<DataView />} />
-                            <Route path="/reporting" element={<ReportingDashboard />} />
-                            <Route path="/create-user" element={<CreateUser />} />
-                          </Routes>
-                        </Layout>
+                        <Routes>
+                          <Route path="/" element={<Layout><Dashboard /></Layout>} />
+                          <Route path="/brands" element={<Layout><BrandsList /></Layout>} />
+                          <Route path="/brands/:id" element={<Layout><BrandAnalyticsDetailWrapper /></Layout>} />
+                          <Route path="/clients" element={<Layout><ClientsList /></Layout>} />
+                          {/* <Route path="/analytics" element={<Layout><BrandAnalytics /></Layout>} /> */}
+                          <Route path="/agency-analytics" element={<Layout><AgencyAnalytics /></Layout>} />
+                          <Route path="/sync" element={<Layout><SyncPanel /></Layout>} />
+                          <Route path="/data" element={<Layout><DataView /></Layout>} />
+                          <Route path="/reporting" element={<Layout><ReportingDashboard /></Layout>} />
+                          <Route path="/create-user" element={<Layout><CreateUser /></Layout>} />
+                          <Route path="*" element={<NotFound />} />
+                        </Routes>
                       </ProtectedRoute>
                     }
                   />
