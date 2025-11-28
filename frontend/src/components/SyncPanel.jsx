@@ -74,7 +74,7 @@ function SyncPanel() {
         clearInterval(interval)
         setSyncing(null)
       }
-    }, 2000) // Poll every 2 seconds
+    }, 45000) // Poll every 45 seconds
 
     return () => clearInterval(interval)
   }, [syncing, showSuccess, showError, refreshJobs])

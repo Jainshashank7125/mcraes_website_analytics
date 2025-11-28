@@ -92,7 +92,7 @@ export const SyncStatusProvider = ({ children }) => {
     // Start polling interval
     const interval = setInterval(() => {
       pollActiveJobs()
-    }, 2000) // Poll every 2 seconds
+    }, 45000) // Poll every 45 seconds
     
     return () => clearInterval(interval)
   }, [isAuthenticated, activeJobs, pollActiveJobs])

@@ -20,11 +20,19 @@ import DataView from './components/DataView'
 import AgencyAnalytics from './components/AgencyAnalytics'
 import ReportingDashboard from './components/ReportingDashboard'
 import PublicReportingDashboard from './components/PublicReportingDashboard'
+import KeywordsDashboard from './components/KeywordsDashboard'
 import Login from './components/Login'
 import CreateUser from './components/CreateUser'
 import NotFound from './components/NotFound'
 import { theme } from './theme'
+import { useParams } from 'react-router-dom'
 import './App.css'
+
+// Wrapper component to extract clientId from URL params
+function KeywordsDashboardWrapper() {
+  const { clientId } = useParams()
+  return <KeywordsDashboard clientId={parseInt(clientId)} />
+}
 
 function App() {
   return (
@@ -51,6 +59,7 @@ function App() {
                           <Route path="/brands" element={<Layout><BrandsList /></Layout>} />
                           <Route path="/brands/:id" element={<Layout><BrandAnalyticsDetailWrapper /></Layout>} />
                           <Route path="/clients" element={<Layout><ClientsList /></Layout>} />
+                          <Route path="/clients/:clientId/keywords" element={<Layout><KeywordsDashboardWrapper /></Layout>} />
                           {/* <Route path="/analytics" element={<Layout><BrandAnalytics /></Layout>} /> */}
                           <Route path="/agency-analytics" element={<Layout><AgencyAnalytics /></Layout>} />
                           <Route path="/sync" element={<Layout><SyncPanel /></Layout>} />

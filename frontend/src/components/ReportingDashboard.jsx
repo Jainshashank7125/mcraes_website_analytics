@@ -35,6 +35,7 @@ import {
   AccordionSummary,
   AccordionDetails,
   LinearProgress,
+  Autocomplete,
 } from "@mui/material";
 import {
   TrendingUp as TrendingUpIcon,
@@ -84,6 +85,7 @@ import SectionContainer from "./reporting/SectionContainer";
 import KPICard from "./reporting/KPICard";
 import KPIGrid from "./reporting/KPIGrid";
 import PromptsAnalyticsTable from "./reporting/PromptsAnalyticsTable";
+import KeywordsDashboard from "./KeywordsDashboard";
 import { formatValue, getSourceColor, getSourceLabel, getMonthName, getChannelLabel, getChannelColor } from "./reporting/utils";
 import { CHART_COLORS } from "./reporting/constants";
 import { useChartData, formatDateForAxis, getDateRangeLabel as getDateRangeLabelUtil } from "./reporting/hooks/useChartData";
@@ -249,6 +251,9 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   const isPublic = !!publicSlug;
   const [clients, setClients] = useState([]);
   const [selectedClientId, setSelectedClientId] = useState(null);
+  const [clientSearchTerm, setClientSearchTerm] = useState("");
+  const [loadingClients, setLoadingClients] = useState(false);
+  const [clientSearchTimeout, setClientSearchTimeout] = useState(null);
   const [selectedBrandId, setSelectedBrandId] = useState(null); // For backward compatibility with existing data loading
   const [dashboardData, setDashboardData] = useState(null);
   const [scrunchData, setScrunchData] = useState(null);
@@ -261,7 +266,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   const [selectedKPIs, setSelectedKPIs] = useState(new Set(KPI_ORDER));
   const [tempSelectedKPIs, setTempSelectedKPIs] = useState(new Set(KPI_ORDER)); // For dialog
   const [showKPISelector, setShowKPISelector] = useState(false);
-  const [expandedSections, setExpandedSections] = useState(new Set(["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics"])); // Track expanded accordion sections
+  const [expandedSections, setExpandedSections] = useState(new Set(["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics", "keywords"])); // Track expanded accordion sections
   // Initialize with "Last 30 days" as default
   const getDefaultDates = () => {
     const end = new Date();
@@ -293,8 +298,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   // Public KPI selections (loaded from database for public view)
   const [publicKPISelections, setPublicKPISelections] = useState(null);
   // Section visibility state (for authenticated users to configure)
-  const [visibleSections, setVisibleSections] = useState(new Set(["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics"]));
-  const [tempVisibleSections, setTempVisibleSections] = useState(new Set(["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics"])); // For dialog
+  const [visibleSections, setVisibleSections] = useState(new Set(["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics", "keywords"]));
+  const [tempVisibleSections, setTempVisibleSections] = useState(new Set(["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics", "keywords"])); // For dialog
   // Chart/visualization selections (for each section)
   const [selectedCharts, setSelectedCharts] = useState(new Set());
   const [tempSelectedCharts, setTempSelectedCharts] = useState(new Set()); // For dialog
@@ -358,7 +363,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
           setTempVisibleSections(new Set(data.visible_sections));
         } else {
           // Default to all sections visible
-          const defaultSections = new Set(["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics"]);
+          const defaultSections = new Set(["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics", "keywords"]);
           setVisibleSections(defaultSections);
           setTempVisibleSections(defaultSections);
           // Select all KPIs and charts by default
@@ -379,7 +384,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
       // Fallback to all KPIs and sections on error
       setSelectedKPIs(new Set(KPI_ORDER));
       setTempSelectedKPIs(new Set(KPI_ORDER));
-      const defaultSections = new Set(["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics"]);
+      const defaultSections = new Set(["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics", "keywords"]);
       setVisibleSections(defaultSections);
       setTempVisibleSections(defaultSections);
       const allCharts = new Set();
@@ -486,9 +491,19 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
       };
       fetchPublicEntity();
     } else {
-      loadClients();
+      // Load initial small set of clients (first 10) for admin view
+      loadClients("", true);
     }
   }, [isPublic, publicSlug]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (clientSearchTimeout) {
+        clearTimeout(clientSearchTimeout);
+      }
+    };
+  }, [clientSearchTimeout]);
 
   useEffect(() => {
     // For public mode, we can load data with just publicSlug
@@ -509,16 +524,17 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
     }
   }, [selectedClientId, selectedBrandId, startDate, endDate, isPublic, publicSlug]);
 
-  const loadClients = async () => {
+  const loadClients = async (searchTerm = "", autoSelectFirst = false) => {
     try {
-      const data = await clientAPI.getClients(1, 100, ''); // Get first 100 clients
+      setLoadingClients(true);
+      const data = await clientAPI.getClients(1, 25, searchTerm); // Get up to 50 clients based on search
       const clientsList = data.items || [];
       console.log(
         "Loaded clients:",
         clientsList.map((c) => ({ id: c.id, name: c.company_name, url_slug: c.url_slug, scrunch_brand_id: c.scrunch_brand_id }))
       );
       setClients(clientsList);
-      if (clientsList.length > 0) {
+      if (autoSelectFirst && clientsList.length > 0 && !selectedClientId) {
         const firstClient = clientsList[0];
         setSelectedClientId(firstClient.id);
         // Set brand_id from client's scrunch_brand_id for data loading
@@ -533,7 +549,26 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
     } catch (err) {
       console.error("Error loading clients:", err);
       setError(err.response?.data?.detail || "Failed to load clients");
+    } finally {
+      setLoadingClients(false);
     }
+  };
+
+  // Debounced client search
+  const handleClientSearch = (searchValue) => {
+    setClientSearchTerm(searchValue);
+    
+    // Clear existing timeout
+    if (clientSearchTimeout) {
+      clearTimeout(clientSearchTimeout);
+    }
+    
+    // Set new timeout for debounced search
+    const timeout = setTimeout(() => {
+      loadClients(searchValue, false);
+    }, 300); // 300ms debounce
+    
+    setClientSearchTimeout(timeout);
   };
 
   // Update slug and brand_id when client changes
@@ -1132,6 +1167,11 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
         return [
           { key: "scrunch_visualizations", label: "Advanced Query Visualizations", description: "Query API-based visualizations" },
         ];
+      case "keywords":
+        return [
+          { key: "keyword_rankings_chart", label: "Rankings Distribution", description: "Google rankings distribution over time" },
+          { key: "keyword_table", label: "Keyword Table", description: "Detailed keyword performance table" },
+        ];
       default:
         return [];
     }
@@ -1294,7 +1334,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   };
 
   const handleSelectAllSections = () => {
-    const allSections = new Set(["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics"]);
+    const allSections = new Set(["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics", "keywords"]);
     const allKPIs = new Set(KPI_ORDER);
     const allCharts = new Set();
     
@@ -1510,38 +1550,63 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
               bgcolor: "background.paper",
             }}
           >
-            <FormControl size="small" sx={{ minWidth: 200 }}>
-              <InputLabel>Select Client</InputLabel>
-              <Select
-                value={selectedClientId || ""}
-                label="Select Client"
-                onChange={(e) => {
-                  const clientId = e.target.value;
-                  setSelectedClientId(clientId);
+            <Autocomplete
+              size="small"
+              sx={{ minWidth: 300 }}
+              options={clients}
+              getOptionLabel={(option) => option.company_name || ""}
+              value={clients.find((c) => c.id === selectedClientId) || null}
+              onChange={(event, newValue) => {
+                if (newValue) {
+                  setSelectedClientId(newValue.id);
                   // Update slug and brand_id when client changes
-                  const selectedClient = clients.find((c) => c.id === clientId);
-                  if (selectedClient) {
-                    if (selectedClient.url_slug) {
-                      setSelectedBrandSlug(selectedClient.url_slug);
-                    } else {
-                      setSelectedBrandSlug(null);
-                    }
-                    // Set brand_id from client's scrunch_brand_id for data loading
-                    if (selectedClient.scrunch_brand_id) {
-                      setSelectedBrandId(selectedClient.scrunch_brand_id);
-                    } else {
-                      setSelectedBrandId(null);
-                    }
+                  if (newValue.url_slug) {
+                    setSelectedBrandSlug(newValue.url_slug);
+                  } else {
+                    setSelectedBrandSlug(null);
                   }
-                }}
-              >
-                {clients.map((client) => (
-                  <MenuItem key={client.id} value={client.id}>
-                    {client.company_name}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+                  // Set brand_id from client's scrunch_brand_id for data loading
+                  if (newValue.scrunch_brand_id) {
+                    setSelectedBrandId(newValue.scrunch_brand_id);
+                  } else {
+                    setSelectedBrandId(null);
+                  }
+                } else {
+                  setSelectedClientId(null);
+                  setSelectedBrandSlug(null);
+                  setSelectedBrandId(null);
+                }
+              }}
+              onInputChange={(event, newInputValue) => {
+                handleClientSearch(newInputValue);
+              }}
+              loading={loadingClients}
+              loadingText="Loading clients..."
+              noOptionsText={
+                clientSearchTerm
+                  ? `No clients found for "${clientSearchTerm}"`
+                  : "Type to search for clients..."
+              }
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Select Client"
+                  placeholder="Search clients..."
+                  InputProps={{
+                    ...params.InputProps,
+                    endAdornment: (
+                      <>
+                        {loadingClients ? (
+                          <CircularProgress color="inherit" size={20} />
+                        ) : null}
+                        {params.InputProps.endAdornment}
+                      </>
+                    ),
+                  }}
+                />
+              )}
+              filterOptions={(options) => options} // Disable client-side filtering, use server-side search
+            />
 
             {/* Date Range Selector - Commented out per user request */}
             {/* <Box display="flex" alignItems="center" gap={1}>
@@ -4150,6 +4215,18 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
               </SectionContainer>
             )}
 
+            {/* Keywords Section */}
+            {isSectionVisible("keywords") && selectedClientId && (
+              <SectionContainer
+                title="Keywords"
+                description="Keyword rankings, search volume, and performance metrics"
+              >
+                <Box sx={{ mt: -3 }}>
+                  <KeywordsDashboard clientId={selectedClientId} />
+                </Box>
+              </SectionContainer>
+            )}
+
             {/* Brand Analytics Charts Section */}
             {isSectionVisible("brand_analytics") && brandAnalytics && (
               <SectionContainer
@@ -4726,6 +4803,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                 { key: "scrunch_ai", label: "Scrunch AI", description: "AI platform presence and engagement metrics", icon: AnalyticsIcon, color: getSourceColor("Scrunch") },
                 { key: "brand_analytics", label: "Brand Analytics Insights", description: "Platform distribution, funnel stages, and sentiment analysis", icon: AnalyticsIcon, color: theme.palette.primary.main },
                 { key: "advanced_analytics", label: "Advanced Analytics Query", description: "Detailed Scrunch AI visualizations and insights", icon: AnalyticsIcon, color: theme.palette.secondary.main },
+                { key: "keywords", label: "Keywords", description: "Keyword rankings, search volume, and performance metrics", icon: SearchIcon, color: getSourceColor("AgencyAnalytics") },
               ].map((section) => {
                 const sectionKPIs = getDashboardSectionKPIs(section.key);
                 const sectionCharts = getDashboardSectionCharts(section.key);

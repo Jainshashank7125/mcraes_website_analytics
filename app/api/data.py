@@ -4631,3 +4631,958 @@ async def get_client_campaigns(
         logger.error(f"Error fetching client campaigns: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/data/clients/{client_id}/keywords")
+@handle_api_errors(context="fetching client keywords")
+async def get_client_keywords(
+    client_id: int,
+    campaign_id: Optional[int] = Query(None, description="Filter by campaign ID"),
+    location_country: Optional[str] = Query(None, description="Filter by country code"),
+    location_region: Optional[str] = Query(None, description="Filter by region name"),
+    location_city: Optional[str] = Query(None, description="Filter by city"),
+    volume_min: Optional[int] = Query(None, description="Minimum search volume"),
+    volume_max: Optional[int] = Query(None, description="Maximum search volume"),
+    google_ranking_min: Optional[int] = Query(None, description="Minimum Google ranking"),
+    google_ranking_max: Optional[int] = Query(None, description="Maximum Google ranking"),
+    bing_ranking_min: Optional[int] = Query(None, description="Minimum Bing ranking"),
+    bing_ranking_max: Optional[int] = Query(None, description="Maximum Bing ranking"),
+    competition_min: Optional[float] = Query(None, description="Minimum competition score"),
+    competition_max: Optional[float] = Query(None, description="Maximum competition score"),
+    primary_only: Optional[bool] = Query(None, description="Filter primary keywords only"),
+    tags: Optional[str] = Query(None, description="Comma-separated tags"),
+    language: Optional[str] = Query(None, description="Filter by language code"),
+    search: Optional[str] = Query(None, description="Search keyword phrase"),
+    sort_by: Optional[str] = Query("volume", description="Sort field: volume, google_ranking, bing_ranking, keyword_phrase"),
+    sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
+    page: Optional[int] = Query(1, description="Page number (1-indexed)"),
+    page_size: Optional[int] = Query(50, description="Items per page"),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get keywords for a client with filtering, sorting, and pagination"""
+    try:
+        supabase = SupabaseService()
+        
+        # Check if client exists
+        client = supabase.get_client_by_id(client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Get campaign IDs for this client
+        client_campaigns = supabase.get_client_campaigns(client_id)
+        campaign_ids = [c.get("campaign_id") for c in client_campaigns if c.get("campaign_id")]
+        
+        if not campaign_ids:
+            return {
+                "keywords": [],
+                "pagination": {
+                    "total": 0,
+                    "page": page,
+                    "page_size": page_size,
+                    "total_pages": 0
+                },
+                "summary": {
+                    "total_keywords": 0,
+                    "google_rankings_count": 0,
+                    "google_change_total": 0,
+                    "bing_rankings_count": 0,
+                    "bing_change_total": 0
+                }
+            }
+        
+        # Build base query for keywords with joins
+        # We'll need to get keywords, then join with summaries
+        query = supabase.client.table("agency_analytics_keywords").select(
+            "id, keyword_phrase, campaign_id, primary_keyword, search_location, "
+            "search_location_formatted_name, search_location_region_name, "
+            "search_location_country_code, search_language, tags, "
+            "agency_analytics_campaigns(company), "
+            "agency_analytics_keyword_ranking_summaries(*)"
+        ).in_("campaign_id", campaign_ids)
+        
+        # Apply filters
+        if campaign_id:
+            query = query.eq("campaign_id", campaign_id)
+        if location_country:
+            query = query.eq("search_location_country_code", location_country)
+        if location_region:
+            query = query.eq("search_location_region_name", location_region)
+        if location_city:
+            query = query.eq("search_location_formatted_name", location_city)
+        if primary_only:
+            query = query.eq("primary_keyword", True)
+        if language:
+            query = query.eq("search_language", language)
+        if search:
+            query = query.ilike("keyword_phrase", f"%{search}%")
+        
+        # Get all keywords first (we'll filter by summary fields in Python)
+        all_keywords = query.execute()
+        keywords_data = all_keywords.data if hasattr(all_keywords, 'data') else []
+        
+        # Process and filter by summary fields (volume, rankings, competition)
+        filtered_keywords = []
+        for kw in keywords_data:
+            summary = kw.get("agency_analytics_keyword_ranking_summaries")
+            if summary and isinstance(summary, list) and len(summary) > 0:
+                summary = summary[0]
+            elif not summary:
+                summary = {}
+            
+            # Apply summary-based filters
+            volume = summary.get("search_volume", 0) or 0
+            google_ranking = summary.get("google_ranking")
+            bing_ranking = summary.get("bing_ranking")
+            competition = summary.get("competition", 0) or 0
+            
+            if volume_min is not None and volume < volume_min:
+                continue
+            if volume_max is not None and volume > volume_max:
+                continue
+            if google_ranking_min is not None and (google_ranking is None or google_ranking < google_ranking_min):
+                continue
+            if google_ranking_max is not None and (google_ranking is None or google_ranking > google_ranking_max):
+                continue
+            if bing_ranking_min is not None and (bing_ranking is None or bing_ranking < bing_ranking_min):
+                continue
+            if bing_ranking_max is not None and (bing_ranking is None or bing_ranking > bing_ranking_max):
+                continue
+            if competition_min is not None and competition < competition_min:
+                continue
+            if competition_max is not None and competition > competition_max:
+                continue
+            
+            # Filter by tags if provided
+            if tags:
+                kw_tags = kw.get("tags", "") or ""
+                tag_list = [t.strip().lower() for t in tags.split(",")]
+                kw_tag_list = [t.strip().lower() for t in kw_tags.split(",") if t.strip()]
+                if not any(tag in kw_tag_list for tag in tag_list):
+                    continue
+            
+            filtered_keywords.append(kw)
+        
+        # Sort keywords
+        reverse_order = sort_order.lower() == "desc"
+        if sort_by == "volume":
+            filtered_keywords.sort(
+                key=lambda x: (x.get("agency_analytics_keyword_ranking_summaries", [{}])[0] if isinstance(x.get("agency_analytics_keyword_ranking_summaries"), list) else {}).get("search_volume", 0) or 0,
+                reverse=reverse_order
+            )
+        elif sort_by == "google_ranking":
+            filtered_keywords.sort(
+                key=lambda x: (x.get("agency_analytics_keyword_ranking_summaries", [{}])[0] if isinstance(x.get("agency_analytics_keyword_ranking_summaries"), list) else {}).get("google_ranking") or 999,
+                reverse=not reverse_order  # Lower ranking is better, so reverse logic
+            )
+        elif sort_by == "bing_ranking":
+            filtered_keywords.sort(
+                key=lambda x: (x.get("agency_analytics_keyword_ranking_summaries", [{}])[0] if isinstance(x.get("agency_analytics_keyword_ranking_summaries"), list) else {}).get("bing_ranking") or 999,
+                reverse=not reverse_order
+            )
+        elif sort_by == "keyword_phrase":
+            filtered_keywords.sort(
+                key=lambda x: (x.get("keyword_phrase", "") or "").lower(),
+                reverse=reverse_order
+            )
+        
+        # Calculate summary KPIs
+        total_keywords = len(filtered_keywords)
+        google_rankings_count = 0
+        google_change_total = 0
+        bing_rankings_count = 0
+        bing_change_total = 0
+        
+        for kw in filtered_keywords:
+            summary = kw.get("agency_analytics_keyword_ranking_summaries")
+            if summary and isinstance(summary, list) and len(summary) > 0:
+                summary = summary[0]
+            elif not summary:
+                continue
+            
+            if summary.get("google_ranking") is not None:
+                google_rankings_count += 1
+                change = summary.get("ranking_change", 0) or 0
+                if change > 0:  # Positive change means improvement (lower ranking number)
+                    google_change_total += change
+            
+            if summary.get("bing_ranking") is not None:
+                bing_rankings_count += 1
+                # Bing change calculation - would need to be added to summaries or calculated
+                # For now, we'll use 0 or calculate from historical if needed
+        
+        # Paginate
+        total = len(filtered_keywords)
+        offset = (page - 1) * page_size
+        paginated_keywords = filtered_keywords[offset:offset + page_size]
+        
+        # Format response
+        formatted_keywords = []
+        for kw in paginated_keywords:
+            summary = kw.get("agency_analytics_keyword_ranking_summaries")
+            if summary and isinstance(summary, list) and len(summary) > 0:
+                summary = summary[0]
+            else:
+                summary = {}
+            
+            campaign = kw.get("agency_analytics_campaigns")
+            if campaign and isinstance(campaign, dict):
+                campaign_name = campaign.get("company", "")
+            else:
+                campaign_name = ""
+            
+            formatted_keywords.append({
+                "keyword_id": kw.get("id"),
+                "keyword_phrase": kw.get("keyword_phrase", ""),
+                "campaign_id": kw.get("campaign_id"),
+                "campaign_name": campaign_name,
+                "google_ranking": summary.get("google_ranking"),
+                "google_ranking_url": summary.get("google_ranking_url"),
+                "google_mobile_ranking": summary.get("google_mobile_ranking"),
+                "google_local_ranking": summary.get("google_local_ranking"),
+                "bing_ranking": summary.get("bing_ranking"),
+                "bing_ranking_url": summary.get("bing_ranking_url"),
+                "google_change": summary.get("ranking_change", 0) or 0,
+                "bing_change": 0,  # Would need to calculate from historical data
+                "search_volume": summary.get("search_volume", 0) or 0,
+                "competition": summary.get("competition", 0) or 0,
+                "search_location": kw.get("search_location", ""),
+                "search_location_formatted_name": kw.get("search_location_formatted_name", ""),
+                "search_location_country_code": kw.get("search_location_country_code", ""),
+                "search_location_region_name": kw.get("search_location_region_name", ""),
+                "search_language": kw.get("search_language", ""),
+                "tags": kw.get("tags", ""),
+                "primary_keyword": kw.get("primary_keyword", False),
+                "last_updated": summary.get("date")
+            })
+        
+        total_pages = (total + page_size - 1) // page_size if page_size > 0 else 1
+        
+        return {
+            "keywords": formatted_keywords,
+            "pagination": {
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages
+            },
+            "summary": {
+                "total_keywords": total_keywords,
+                "google_rankings_count": google_rankings_count,
+                "google_change_total": google_change_total,
+                "bing_rankings_count": bing_rankings_count,
+                "bing_change_total": bing_change_total
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching client keywords: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/data/clients/{client_id}/keywords/rankings-over-time")
+@handle_api_errors(context="fetching keyword rankings over time")
+async def get_client_keyword_rankings_over_time(
+    client_id: int,
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    campaign_id: Optional[int] = Query(None, description="Filter by campaign ID"),
+    location_country: Optional[str] = Query(None, description="Filter by country code"),
+    group_by: Optional[str] = Query("day", description="Group by: day, week, month"),
+    engine: Optional[str] = Query("both", description="Engine: google, bing, both"),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get keyword rankings distribution over time by position buckets"""
+    try:
+        supabase = SupabaseService()
+        
+        # Check if client exists
+        client = supabase.get_client_by_id(client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Default to last 30 days if not provided
+        if not end_date:
+            end_date = datetime.now().strftime("%Y-%m-%d")
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        
+        # Get campaign IDs for this client
+        client_campaigns = supabase.get_client_campaigns(client_id)
+        campaign_ids = [c.get("campaign_id") for c in client_campaigns if c.get("campaign_id")]
+        
+        if not campaign_ids:
+            return {"data": []}
+        
+        # Get keyword IDs for filtering
+        keyword_query = supabase.client.table("agency_analytics_keywords").select("id").in_("campaign_id", campaign_ids)
+        if campaign_id:
+            keyword_query = keyword_query.eq("campaign_id", campaign_id)
+        if location_country:
+            keyword_query = keyword_query.eq("search_location_country_code", location_country)
+        
+        keywords_result = keyword_query.execute()
+        keyword_ids = [kw.get("id") for kw in (keywords_result.data if hasattr(keywords_result, 'data') else []) if kw.get("id")]
+        
+        if not keyword_ids:
+            return {"data": []}
+        
+        # Get rankings data
+        rankings_query = supabase.client.table("agency_analytics_keyword_rankings").select(
+            "date, google_ranking, bing_ranking"
+        ).in_("keyword_id", keyword_ids).gte("date", start_date).lte("date", end_date).order("date", desc=False)
+        
+        rankings_result = rankings_query.execute()
+        rankings_data = rankings_result.data if hasattr(rankings_result, 'data') else []
+        
+        # Group by date and calculate position buckets
+        date_groups = {}
+        for ranking in rankings_data:
+            date_str = ranking.get("date")
+            if not date_str:
+                continue
+            
+            # Handle group_by parameter
+            if group_by == "week":
+                # Get week start date (Monday)
+                date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                days_since_monday = date_obj.weekday()
+                week_start = date_obj - timedelta(days=days_since_monday)
+                date_key = week_start.strftime("%Y-%m-%d")
+            elif group_by == "month":
+                date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                date_key = date_obj.strftime("%Y-%m")
+            else:  # day
+                date_key = date_str
+            
+            if date_key not in date_groups:
+                date_groups[date_key] = {
+                    "google": {"position_1_3": 0, "position_4_10": 0, "position_11_20": 0, "position_21_50": 0, "position_51_plus": 0, "not_found": 0},
+                    "bing": {"position_1_3": 0, "position_4_10": 0, "position_11_20": 0, "position_21_50": 0, "position_51_plus": 0, "not_found": 0}
+                }
+            
+            # Process Google ranking
+            if engine in ["google", "both"]:
+                google_rank = ranking.get("google_ranking")
+                if google_rank is None:
+                    date_groups[date_key]["google"]["not_found"] += 1
+                elif 1 <= google_rank <= 3:
+                    date_groups[date_key]["google"]["position_1_3"] += 1
+                elif 4 <= google_rank <= 10:
+                    date_groups[date_key]["google"]["position_4_10"] += 1
+                elif 11 <= google_rank <= 20:
+                    date_groups[date_key]["google"]["position_11_20"] += 1
+                elif 21 <= google_rank <= 50:
+                    date_groups[date_key]["google"]["position_21_50"] += 1
+                else:
+                    date_groups[date_key]["google"]["position_51_plus"] += 1
+            
+            # Process Bing ranking
+            if engine in ["bing", "both"]:
+                bing_rank = ranking.get("bing_ranking")
+                if bing_rank is None:
+                    date_groups[date_key]["bing"]["not_found"] += 1
+                elif 1 <= bing_rank <= 3:
+                    date_groups[date_key]["bing"]["position_1_3"] += 1
+                elif 4 <= bing_rank <= 10:
+                    date_groups[date_key]["bing"]["position_4_10"] += 1
+                elif 11 <= bing_rank <= 20:
+                    date_groups[date_key]["bing"]["position_11_20"] += 1
+                elif 21 <= bing_rank <= 50:
+                    date_groups[date_key]["bing"]["position_21_50"] += 1
+                else:
+                    date_groups[date_key]["bing"]["position_51_plus"] += 1
+        
+        # Convert to list and calculate totals
+        result_data = []
+        for date_key in sorted(date_groups.keys()):
+            google_data = date_groups[date_key]["google"]
+            bing_data = date_groups[date_key]["bing"]
+            
+            google_total = sum(google_data.values())
+            bing_total = sum(bing_data.values())
+            
+            result_data.append({
+                "date": date_key,
+                "google": {
+                    **google_data,
+                    "total": google_total
+                },
+                "bing": {
+                    **bing_data,
+                    "total": bing_total
+                }
+            })
+        
+        return {"data": result_data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching keyword rankings over time: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/data/clients/{client_id}/keywords/summary")
+@handle_api_errors(context="fetching keyword summary")
+async def get_client_keyword_summary(
+    client_id: int,
+    campaign_id: Optional[int] = Query(None, description="Filter by campaign ID"),
+    location_country: Optional[str] = Query(None, description="Filter by country code"),
+    date_range: Optional[str] = Query("last_30_days", description="Date range: last_7_days, last_30_days, last_90_days, custom"),
+    start_date: Optional[str] = Query(None, description="Custom start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="Custom end date (YYYY-MM-DD)"),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get keyword summary KPIs for a client"""
+    try:
+        supabase = SupabaseService()
+        
+        # Check if client exists
+        client = supabase.get_client_by_id(client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Get campaign IDs for this client
+        client_campaigns = supabase.get_client_campaigns(client_id)
+        campaign_ids = [c.get("campaign_id") for c in client_campaigns if c.get("campaign_id")]
+        
+        if not campaign_ids:
+            return {
+                "google_rankings": 0,
+                "google_change": 0,
+                "bing_rankings": 0,
+                "bing_change": 0,
+                "total_keywords": 0,
+                "average_google_ranking": 0,
+                "average_bing_ranking": 0,
+                "total_search_volume": 0,
+                "top_10_visibility_percentage": 0,
+                "improving_keywords_count": 0,
+                "declining_keywords_count": 0,
+                "stable_keywords_count": 0
+            }
+        
+        # Build query for keywords with summaries
+        query = supabase.client.table("agency_analytics_keywords").select(
+            "id, agency_analytics_keyword_ranking_summaries(*)"
+        ).in_("campaign_id", campaign_ids)
+        
+        if campaign_id:
+            query = query.eq("campaign_id", campaign_id)
+        if location_country:
+            query = query.eq("search_location_country_code", location_country)
+        
+        keywords_result = query.execute()
+        keywords_data = keywords_result.data if hasattr(keywords_result, 'data') else []
+        
+        # Calculate KPIs
+        total_keywords = len(keywords_data)
+        google_rankings = 0
+        bing_rankings = 0
+        google_change_total = 0
+        google_rankings_list = []
+        bing_rankings_list = []
+        total_search_volume = 0
+        top_10_count = 0
+        improving_count = 0
+        declining_count = 0
+        stable_count = 0
+        
+        for kw in keywords_data:
+            summary = kw.get("agency_analytics_keyword_ranking_summaries")
+            if summary and isinstance(summary, list) and len(summary) > 0:
+                summary = summary[0]
+            else:
+                continue
+            
+            google_rank = summary.get("google_ranking")
+            bing_rank = summary.get("bing_ranking")
+            volume = summary.get("search_volume", 0) or 0
+            change = summary.get("ranking_change", 0) or 0
+            
+            if google_rank is not None:
+                google_rankings += 1
+                google_rankings_list.append(google_rank)
+                if google_rank <= 10:
+                    top_10_count += 1
+                if change > 0:
+                    improving_count += 1
+                    google_change_total += change
+                elif change < 0:
+                    declining_count += 1
+                else:
+                    stable_count += 1
+            
+            if bing_rank is not None:
+                bing_rankings += 1
+                bing_rankings_list.append(bing_rank)
+            
+            total_search_volume += volume
+        
+        # Calculate averages
+        average_google_ranking = sum(google_rankings_list) / len(google_rankings_list) if google_rankings_list else 0
+        average_bing_ranking = sum(bing_rankings_list) / len(bing_rankings_list) if bing_rankings_list else 0
+        top_10_visibility_percentage = (top_10_count / total_keywords * 100) if total_keywords > 0 else 0
+        
+        return {
+            "google_rankings": google_rankings,
+            "google_change": google_change_total,
+            "bing_rankings": bing_rankings,
+            "bing_change": 0,  # Would need to calculate from historical data
+            "total_keywords": total_keywords,
+            "average_google_ranking": round(average_google_ranking, 1),
+            "average_bing_ranking": round(average_bing_ranking, 1),
+            "total_search_volume": total_search_volume,
+            "top_10_visibility_percentage": round(top_10_visibility_percentage, 1),
+            "improving_keywords_count": improving_count,
+            "declining_keywords_count": declining_count,
+            "stable_keywords_count": stable_count
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching keyword summary: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Helper functions for prompts analytics
+def calculate_presence_metrics(responses):
+    """Calculate presence percentage and time series data"""
+    if not responses:
+        return {
+            "presence_percentage": 0,
+            "sparkline_data": []
+        }
+    
+    total_responses = len(responses)
+    brand_present_count = sum(1 for r in responses if r.get("brand_present", False))
+    presence_percentage = (brand_present_count / total_responses * 100) if total_responses > 0 else 0
+    
+    # Generate sparkline data (group by week)
+    sparkline_data = {}
+    for response in responses:
+        created_at = response.get("created_at")
+        if created_at:
+            try:
+                date_obj = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                week_key = date_obj.strftime("%Y-W%W")
+                if week_key not in sparkline_data:
+                    sparkline_data[week_key] = {"total": 0, "present": 0}
+                sparkline_data[week_key]["total"] += 1
+                if response.get("brand_present", False):
+                    sparkline_data[week_key]["present"] += 1
+            except:
+                pass
+    
+    # Convert to sorted list
+    sorted_weeks = sorted(sparkline_data.keys())
+    sparkline_list = []
+    for week in sorted_weeks:
+        week_data = sparkline_data[week]
+        week_presence = (week_data["present"] / week_data["total"] * 100) if week_data["total"] > 0 else 0
+        sparkline_list.append(week_presence)
+    
+    return {
+        "presence_percentage": round(presence_percentage, 1),
+        "sparkline_data": sparkline_list
+    }
+
+def calculate_citation_metrics(responses):
+    """Calculate citation counts and time series data"""
+    if not responses:
+        return {
+            "total_citations": 0,
+            "sparkline_data": []
+        }
+    
+    import json
+    total_citations = 0
+    json_cache = {}
+    
+    for response in responses:
+        citations = response.get("citations")
+        if citations:
+            if isinstance(citations, list):
+                citation_count = len(citations)
+            elif isinstance(citations, str):
+                if citations in json_cache:
+                    citation_count = json_cache[citations]
+                else:
+                    try:
+                        parsed = json.loads(citations)
+                        citation_count = len(parsed) if isinstance(parsed, list) else 0
+                        json_cache[citations] = citation_count
+                    except:
+                        citation_count = 0
+            else:
+                citation_count = 0
+        else:
+            citation_count = 0
+        total_citations += citation_count
+    
+    # Generate sparkline data (group by week)
+    sparkline_data = {}
+    for response in responses:
+        created_at = response.get("created_at")
+        citations = response.get("citations")
+        if created_at:
+            try:
+                date_obj = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                week_key = date_obj.strftime("%Y-W%W")
+                if week_key not in sparkline_data:
+                    sparkline_data[week_key] = 0
+                
+                if citations:
+                    if isinstance(citations, list):
+                        citation_count = len(citations)
+                    elif isinstance(citations, str):
+                        if citations in json_cache:
+                            citation_count = json_cache[citations]
+                        else:
+                            try:
+                                parsed = json.loads(citations)
+                                citation_count = len(parsed) if isinstance(parsed, list) else 0
+                                json_cache[citations] = citation_count
+                            except:
+                                citation_count = 0
+                    else:
+                        citation_count = 0
+                else:
+                    citation_count = 0
+                
+                sparkline_data[week_key] += citation_count
+            except:
+                pass
+    
+    # Convert to sorted list
+    sorted_weeks = sorted(sparkline_data.keys())
+    sparkline_list = [sparkline_data[week] for week in sorted_weeks]
+    
+    return {
+        "total_citations": total_citations,
+        "sparkline_data": sparkline_list
+    }
+
+def extract_competitors(responses):
+    """Aggregate and rank competitors with percentages"""
+    if not responses:
+        return []
+    
+    competitors_count = {}
+    total_responses_with_competitors = 0
+    
+    for response in responses:
+        competitors_present = response.get("competitors_present", [])
+        if competitors_present:
+            total_responses_with_competitors += 1
+            for comp in competitors_present:
+                if comp:
+                    competitors_count[comp] = competitors_count.get(comp, 0) + 1
+    
+    # Calculate percentages
+    competitors_list = []
+    for comp_name, count in sorted(competitors_count.items(), key=lambda x: x[1], reverse=True):
+        percentage = (count / total_responses_with_competitors * 100) if total_responses_with_competitors > 0 else 0
+        competitors_list.append({
+            "name": comp_name,
+            "count": count,
+            "percentage": round(percentage, 1)
+        })
+    
+    return competitors_list[:10]  # Top 10
+
+def calculate_period_change(current_metrics, previous_metrics):
+    """Calculate percentage change between periods"""
+    if not previous_metrics or previous_metrics == 0:
+        return None
+    
+    if current_metrics == 0:
+        return -100.0
+    
+    change = ((current_metrics - previous_metrics) / previous_metrics) * 100
+    return round(change, 1)
+
+@router.get("/data/prompts-analytics")
+@handle_api_errors(context="fetching prompts analytics")
+async def get_prompts_analytics(
+    group_by: str = Query(..., description="Group by: tags, topics, prompt_variants, stage, seed_prompts"),
+    client_id: Optional[int] = Query(None, description="Filter by client ID (maps to brand_id via scrunch_brand_id)"),
+    slug: Optional[str] = Query(None, description="Filter by slug (maps to brand_id)"),
+    search: Optional[str] = Query(None, description="Search term for filtering"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    limit: Optional[int] = Query(50, description="Number of records to return"),
+    offset: Optional[int] = Query(0, description="Offset for pagination")
+):
+    """Get aggregated prompts and responses analytics by different dimensions"""
+    try:
+        supabase = SupabaseService()
+        brand_id = None
+        
+        # Resolve brand_id from client_id or slug
+        if client_id:
+            client_result = supabase.client.table("clients").select("scrunch_brand_id").eq("id", client_id).limit(1).execute()
+            if client_result.data and client_result.data[0].get("scrunch_brand_id"):
+                brand_id = client_result.data[0]["scrunch_brand_id"]
+            else:
+                return {
+                    "items": [],
+                    "count": 0,
+                    "total_count": 0
+                }
+        elif slug:
+            # Try client by slug first
+            client = supabase.get_client_by_slug(slug)
+            if client and client.get("scrunch_brand_id"):
+                brand_id = client["scrunch_brand_id"]
+            else:
+                # Fall back to brand by slug
+                brand_result = supabase.client.table("brands").select("id").eq("slug", slug).limit(1).execute()
+                if brand_result.data:
+                    brand_id = brand_result.data[0]["id"]
+                else:
+                    return {
+                        "items": [],
+                        "count": 0,
+                        "total_count": 0
+                    }
+        
+        if not brand_id:
+            return {
+                "items": [],
+                "count": 0,
+                "total_count": 0
+            }
+        
+        # Get prompts and responses
+        prompts_query = supabase.client.table("prompts").select("*").eq("brand_id", brand_id)
+        if start_date:
+            prompts_query = prompts_query.gte("created_at", f"{start_date}T00:00:00Z")
+        if end_date:
+            prompts_query = prompts_query.lte("created_at", f"{end_date}T23:59:59Z")
+        prompts_result = prompts_query.execute()
+        prompts = prompts_result.data if hasattr(prompts_result, 'data') else []
+        
+        responses_query = supabase.client.table("responses").select("*").eq("brand_id", brand_id)
+        if start_date:
+            responses_query = responses_query.gte("created_at", f"{start_date}T00:00:00Z")
+        if end_date:
+            responses_query = responses_query.lte("created_at", f"{end_date}T23:59:59Z")
+        responses_result = responses_query.execute()
+        responses = responses_result.data if hasattr(responses_result, 'data') else []
+        
+        # Get previous period data for change calculation
+        prev_responses = []
+        if start_date and end_date:
+            try:
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                period_duration = (end_dt - start_dt).days + 1
+                prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                
+                prev_responses_query = supabase.client.table("responses").select("*").eq("brand_id", brand_id)
+                prev_responses_query = prev_responses_query.gte("created_at", f"{prev_start}T00:00:00Z")
+                prev_responses_query = prev_responses_query.lte("created_at", f"{prev_end}T23:59:59Z")
+                prev_responses_result = prev_responses_query.execute()
+                prev_responses = prev_responses_result.data if hasattr(prev_responses_result, 'data') else []
+            except:
+                pass
+        
+        # Group data based on group_by parameter
+        grouped_data = {}
+        
+        if group_by == "tags":
+            # Group by tags
+            for prompt in prompts:
+                tags = prompt.get("tags", []) or []
+                for tag in tags:
+                    if tag:
+                        if tag not in grouped_data:
+                            grouped_data[tag] = {"prompts": [], "prompt_ids": set()}
+                        if prompt["id"] not in grouped_data[tag]["prompt_ids"]:
+                            grouped_data[tag]["prompts"].append(prompt)
+                            grouped_data[tag]["prompt_ids"].add(prompt["id"])
+        
+        elif group_by == "topics":
+            # Group by topics
+            for prompt in prompts:
+                topics = prompt.get("topics", []) or []
+                for topic in topics:
+                    if topic:
+                        if topic not in grouped_data:
+                            grouped_data[topic] = {"prompts": [], "prompt_ids": set()}
+                        if prompt["id"] not in grouped_data[topic]["prompt_ids"]:
+                            grouped_data[topic]["prompts"].append(prompt)
+                            grouped_data[topic]["prompt_ids"].add(prompt["id"])
+        
+        elif group_by == "prompt_variants":
+            # Group by prompt text + platform + persona
+            for prompt in prompts:
+                prompt_text = prompt.get("text", "")
+                # Get responses for this prompt to get platform/persona combinations
+                prompt_responses = [r for r in responses if r.get("prompt_id") == prompt.get("id")]
+                if not prompt_responses:
+                    # If no responses, still create a variant
+                    key = f"{prompt_text}|||unknown|||unknown"
+                    if key not in grouped_data:
+                        grouped_data[key] = {"prompts": [prompt], "prompt_ids": {prompt["id"]}}
+                else:
+                    # Group by platform + persona combinations
+                    variant_map = {}
+                    for resp in prompt_responses:
+                        platform = resp.get("platform", "unknown")
+                        persona = resp.get("persona_name", "unknown")
+                        variant_key = f"{prompt_text}|||{platform}|||{persona}"
+                        if variant_key not in variant_map:
+                            variant_map[variant_key] = []
+                        variant_map[variant_key].append(resp)
+                    
+                    for variant_key in variant_map:
+                        if variant_key not in grouped_data:
+                            grouped_data[variant_key] = {"prompts": [prompt], "prompt_ids": {prompt["id"]}}
+        
+        elif group_by == "stage":
+            # Group by stage
+            for prompt in prompts:
+                stage = prompt.get("stage") or "Other"
+                if stage not in grouped_data:
+                    grouped_data[stage] = {"prompts": [], "prompt_ids": set()}
+                if prompt["id"] not in grouped_data[stage]["prompt_ids"]:
+                    grouped_data[stage]["prompts"].append(prompt)
+                    grouped_data[stage]["prompt_ids"].add(prompt["id"])
+        
+        elif group_by == "seed_prompts":
+            # Group by unique prompt text
+            for prompt in prompts:
+                prompt_text = prompt.get("text", "")
+                if prompt_text:
+                    if prompt_text not in grouped_data:
+                        grouped_data[prompt_text] = {"prompts": [], "prompt_ids": set()}
+                    if prompt["id"] not in grouped_data[prompt_text]["prompt_ids"]:
+                        grouped_data[prompt_text]["prompts"].append(prompt)
+                        grouped_data[prompt_text]["prompt_ids"].add(prompt["id"])
+        
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid group_by parameter: {group_by}")
+        
+        # Calculate metrics for each group
+        items = []
+        for group_key, group_info in grouped_data.items():
+            prompt_ids = list(group_info["prompt_ids"]) if isinstance(group_info["prompt_ids"], set) else [p["id"] for p in group_info["prompts"]]
+            
+            # For prompt_variants, filter responses by platform and persona
+            if group_by == "prompt_variants":
+                parts = group_key.split("|||")
+                if len(parts) >= 3:
+                    prompt_text, platform, persona = parts[0], parts[1], parts[2]
+                    group_responses = [
+                        r for r in responses 
+                        if r.get("prompt_id") in prompt_ids 
+                        and r.get("platform", "unknown") == platform
+                        and r.get("persona_name", "unknown") == persona
+                    ]
+                    group_prev_responses = [
+                        r for r in prev_responses 
+                        if r.get("prompt_id") in prompt_ids 
+                        and r.get("platform", "unknown") == platform
+                        and r.get("persona_name", "unknown") == persona
+                    ]
+                else:
+                    group_responses = [r for r in responses if r.get("prompt_id") in prompt_ids]
+                    group_prev_responses = [r for r in prev_responses if r.get("prompt_id") in prompt_ids]
+            else:
+                group_responses = [r for r in responses if r.get("prompt_id") in prompt_ids]
+                group_prev_responses = [r for r in prev_responses if r.get("prompt_id") in prompt_ids]
+            
+            # Apply search filter if provided
+            if search and search.strip():
+                search_lower = search.strip().lower()
+                if group_by == "prompt_variants":
+                    # Search in prompt text, platform, or persona
+                    parts = group_key.split("|||")
+                    if len(parts) >= 3:
+                        prompt_text, platform, persona = parts[0], parts[1], parts[2]
+                        if search_lower not in prompt_text.lower() and search_lower not in platform.lower() and search_lower not in persona.lower():
+                            continue
+                else:
+                    if search_lower not in group_key.lower():
+                        continue
+            
+            # Calculate metrics
+            presence_metrics = calculate_presence_metrics(group_responses)
+            citation_metrics = calculate_citation_metrics(group_responses)
+            competitors = extract_competitors(group_responses)
+            
+            # Calculate previous period metrics for change
+            prev_presence_metrics = calculate_presence_metrics(group_prev_responses)
+            prev_citation_metrics = calculate_citation_metrics(group_prev_responses)
+            
+            presence_change = calculate_period_change(
+                presence_metrics["presence_percentage"],
+                prev_presence_metrics["presence_percentage"]
+            )
+            citation_change = calculate_period_change(
+                citation_metrics["total_citations"],
+                prev_citation_metrics["total_citations"]
+            )
+            
+            # Format group key for display
+            display_key = group_key
+            if group_by == "prompt_variants":
+                parts = group_key.split("|||")
+                if len(parts) >= 3:
+                    display_key = parts[0]  # Just the prompt text
+                    platform = parts[1]
+                    persona = parts[2]
+                else:
+                    platform = "unknown"
+                    persona = "unknown"
+            else:
+                platform = None
+                persona = None
+            
+            item = {
+                "key": group_key,
+                "display_name": display_key,
+                "prompts_count": len(group_info["prompts"]),
+                "responses_count": len(group_responses),
+                "presence_percentage": presence_metrics["presence_percentage"],
+                "presence_sparkline": presence_metrics["sparkline_data"],
+                "presence_change": presence_change,
+                "citations_count": citation_metrics["total_citations"],
+                "citations_sparkline": citation_metrics["sparkline_data"],
+                "citations_change": citation_change,
+                "competitors": competitors,
+                "stage": group_info["prompts"][0].get("stage") if group_info["prompts"] else None
+            }
+            
+            if group_by == "prompt_variants":
+                item["platform"] = platform
+                item["persona"] = persona
+            
+            items.append(item)
+        
+        # Apply search filter for non-variant groups (already filtered above for variants)
+        if search and search.strip() and group_by != "prompt_variants":
+            search_lower = search.strip().lower()
+            items = [item for item in items if search_lower in item["display_name"].lower()]
+        
+        # Sort by responses count descending
+        items.sort(key=lambda x: x["responses_count"], reverse=True)
+        
+        # Apply pagination
+        total_count = len(items)
+        paginated_items = items[offset:offset + limit] if limit else items[offset:]
+        
+        return {
+            "items": paginated_items,
+            "count": len(paginated_items),
+            "total_count": total_count,
+            "group_by": group_by
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching prompts analytics: {str(e)}")
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Traceback: {error_trace}")
+        raise HTTPException(status_code=500, detail=f"Error fetching prompts analytics: {str(e)}")
+

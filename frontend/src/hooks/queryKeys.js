@@ -56,5 +56,13 @@ export const queryKeys = {
     bySlug: (slug) => [...queryKeys.clients.all, 'slug', slug],
     campaigns: (id) => [...queryKeys.clients.detail(id), 'campaigns'],
   },
+
+  // Keywords
+  keywords: {
+    all: ['keywords'],
+    clientKeywords: (clientId, filters) => [...queryKeys.keywords.all, 'client', clientId, filters],
+    clientRankingsOverTime: (clientId, dateRange) => [...queryKeys.keywords.all, 'rankings-over-time', clientId, dateRange],
+    clientSummary: (clientId, filters) => [...queryKeys.keywords.all, 'summary', clientId, filters],
+  },
 }
 

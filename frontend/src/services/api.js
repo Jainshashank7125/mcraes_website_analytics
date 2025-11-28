@@ -482,6 +482,68 @@ export const clientAPI = {
   },
 }
 
+// Keywords API endpoints
+export const keywordsAPI = {
+  // Get keywords for a client with filtering, sorting, and pagination
+  getClientKeywords: async (clientId, filters = {}) => {
+    const params = new URLSearchParams()
+    
+    // Add all filter parameters
+    if (filters.campaign_id) params.append('campaign_id', filters.campaign_id)
+    if (filters.location_country) params.append('location_country', filters.location_country)
+    if (filters.location_region) params.append('location_region', filters.location_region)
+    if (filters.location_city) params.append('location_city', filters.location_city)
+    if (filters.volume_min !== undefined) params.append('volume_min', filters.volume_min)
+    if (filters.volume_max !== undefined) params.append('volume_max', filters.volume_max)
+    if (filters.google_ranking_min !== undefined) params.append('google_ranking_min', filters.google_ranking_min)
+    if (filters.google_ranking_max !== undefined) params.append('google_ranking_max', filters.google_ranking_max)
+    if (filters.bing_ranking_min !== undefined) params.append('bing_ranking_min', filters.bing_ranking_min)
+    if (filters.bing_ranking_max !== undefined) params.append('bing_ranking_max', filters.bing_ranking_max)
+    if (filters.competition_min !== undefined) params.append('competition_min', filters.competition_min)
+    if (filters.competition_max !== undefined) params.append('competition_max', filters.competition_max)
+    if (filters.primary_only !== undefined) params.append('primary_only', filters.primary_only)
+    if (filters.tags) params.append('tags', filters.tags)
+    if (filters.language) params.append('language', filters.language)
+    if (filters.search) params.append('search', filters.search)
+    if (filters.sort_by) params.append('sort_by', filters.sort_by)
+    if (filters.sort_order) params.append('sort_order', filters.sort_order)
+    if (filters.page) params.append('page', filters.page)
+    if (filters.page_size) params.append('page_size', filters.page_size)
+    
+    const response = await api.get(`/api/v1/data/clients/${clientId}/keywords?${params.toString()}`)
+    return response.data
+  },
+
+  // Get keyword rankings over time for chart
+  getClientKeywordRankingsOverTime: async (clientId, dateRange = {}) => {
+    const params = new URLSearchParams()
+    
+    if (dateRange.start_date) params.append('start_date', dateRange.start_date)
+    if (dateRange.end_date) params.append('end_date', dateRange.end_date)
+    if (dateRange.campaign_id) params.append('campaign_id', dateRange.campaign_id)
+    if (dateRange.location_country) params.append('location_country', dateRange.location_country)
+    if (dateRange.group_by) params.append('group_by', dateRange.group_by)
+    if (dateRange.engine) params.append('engine', dateRange.engine)
+    
+    const response = await api.get(`/api/v1/data/clients/${clientId}/keywords/rankings-over-time?${params.toString()}`)
+    return response.data
+  },
+
+  // Get keyword summary KPIs
+  getClientKeywordSummary: async (clientId, filters = {}) => {
+    const params = new URLSearchParams()
+    
+    if (filters.campaign_id) params.append('campaign_id', filters.campaign_id)
+    if (filters.location_country) params.append('location_country', filters.location_country)
+    if (filters.date_range) params.append('date_range', filters.date_range)
+    if (filters.start_date) params.append('start_date', filters.start_date)
+    if (filters.end_date) params.append('end_date', filters.end_date)
+    
+    const response = await api.get(`/api/v1/data/clients/${clientId}/keywords/summary?${params.toString()}`)
+    return response.data
+  },
+}
+
 // Reporting Dashboard API endpoints
 export const reportingAPI = {
   // Get consolidated reporting dashboard KPIs
@@ -574,6 +636,22 @@ export const reportingAPI = {
       payload.visible_sections = Array.isArray(visibleSections) ? visibleSections : Array.from(visibleSections)
     }
     const response = await api.put(`/api/v1/data/reporting-dashboard/${brandId}/kpi-selections`, payload)
+    return response.data
+  },
+  
+  // Get prompts analytics with different grouping options
+  getPromptsAnalytics: async (clientId, slug, groupBy, search, startDate, endDate, page, rowsPerPage) => {
+    const params = new URLSearchParams()
+    params.append('group_by', groupBy)
+    if (clientId) params.append('client_id', clientId)
+    if (slug) params.append('slug', slug)
+    if (search) params.append('search', search)
+    if (startDate) params.append('start_date', startDate)
+    if (endDate) params.append('end_date', endDate)
+    if (page !== undefined) params.append('offset', page * (rowsPerPage || 10))
+    if (rowsPerPage) params.append('limit', rowsPerPage)
+    
+    const response = await api.get(`/api/v1/data/prompts-analytics?${params.toString()}`)
     return response.data
   },
   

@@ -118,7 +118,7 @@ function SyncStatusIndicator() {
       if (remainingActive.length === 0) {
         clearInterval(interval)
       }
-    }, 2000) // Poll every 2 seconds
+    }, 45000) // Poll every 45 seconds
 
     return () => clearInterval(interval)
   }, [activeJobs, jobDetails, refreshJobs, removeJob])
