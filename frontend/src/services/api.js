@@ -93,10 +93,10 @@ export const syncAPI = {
     return response.data
   },
 
-  // Sync GA4 data (async - returns job_id)
-  syncGA4: async (brandId = null, startDate = null, endDate = null, syncRealtime = false) => {
+  // Sync GA4 data (async - returns job_id) - now uses clientId instead of brandId
+  syncGA4: async (clientId = null, startDate = null, endDate = null, syncRealtime = false) => {
     const params = new URLSearchParams()
-    if (brandId) params.append('brand_id', brandId)
+    if (clientId) params.append('client_id', clientId)
     if (startDate) params.append('start_date', startDate)
     if (endDate) params.append('end_date', endDate)
     params.append('sync_realtime', syncRealtime)
@@ -151,19 +151,10 @@ export const syncAPI = {
     return response.data
   },
 
-  // Get data from database (you'll need to add these endpoints to the backend)
-  getBrands: async (limit = 50, offset = 0) => {
-    const params = new URLSearchParams()
-    params.append('limit', limit)
-    params.append('offset', offset)
-    
-    const response = await api.get(`/api/v1/data/brands?${params.toString()}`)
-    return response.data
-  },
-
   getPrompts: async (filters = {}) => {
     const params = new URLSearchParams()
     if (filters.brand_id) params.append('brand_id', filters.brand_id)
+    if (filters.client_id) params.append('client_id', filters.client_id)  // Maps to brand_id via scrunch_brand_id
     if (filters.stage) params.append('stage', filters.stage)
     if (filters.persona_id) params.append('persona_id', filters.persona_id)
     if (filters.limit) params.append('limit', filters.limit)
@@ -176,6 +167,7 @@ export const syncAPI = {
   getResponses: async (filters = {}) => {
     const params = new URLSearchParams()
     if (filters.brand_id) params.append('brand_id', filters.brand_id)
+    if (filters.client_id) params.append('client_id', filters.client_id)  // Maps to brand_id via scrunch_brand_id
     if (filters.platform) params.append('platform', filters.platform)
     if (filters.prompt_id) params.append('prompt_id', filters.prompt_id)
     if (filters.start_date) params.append('start_date', filters.start_date)
@@ -231,6 +223,16 @@ export const ga4API = {
     if (endDate) params.append('end_date', endDate)
     
     const response = await api.get(`/api/v1/data/ga4/brand/${brandId}?${params.toString()}`)
+    return response.data
+  },
+
+  // Get GA4 analytics for a client (new client-centric endpoint)
+  getClientAnalytics: async (clientId, startDate = null, endDate = null) => {
+    const params = new URLSearchParams()
+    if (startDate) params.append('start_date', startDate)
+    if (endDate) params.append('end_date', endDate)
+    
+    const response = await api.get(`/api/v1/data/ga4/client/${clientId}?${params.toString()}`)
     return response.data
   },
 
@@ -446,6 +448,16 @@ export const clientAPI = {
     return response.data
   },
 
+  // Get GA4 analytics for a client
+  getClientGA4Analytics: async (clientId, startDate = null, endDate = null) => {
+    const params = new URLSearchParams()
+    if (startDate) params.append('start_date', startDate)
+    if (endDate) params.append('end_date', endDate)
+    
+    const response = await api.get(`/api/v1/data/ga4/client/${clientId}?${params.toString()}`)
+    return response.data
+  },
+
   // Upload client logo
   uploadClientLogo: async (clientId, file) => {
     const formData = new FormData()
@@ -479,6 +491,16 @@ export const reportingAPI = {
     if (endDate) params.append('end_date', endDate)
     
     const response = await api.get(`/api/v1/data/reporting-dashboard/${brandId}?${params.toString()}`)
+    return response.data
+  },
+  
+  // Get consolidated reporting dashboard KPIs by client ID (client-centric)
+  getReportingDashboardByClient: async (clientId, startDate = null, endDate = null) => {
+    const params = new URLSearchParams()
+    if (startDate) params.append('start_date', startDate)
+    if (endDate) params.append('end_date', endDate)
+    
+    const response = await api.get(`/api/v1/data/reporting-dashboard/client/${clientId}?${params.toString()}`)
     return response.data
   },
   
@@ -559,6 +581,17 @@ export const reportingAPI = {
 
 // Brand Management API (Admin/Manager only)
 export const dataAPI = {
+  // Get brands from database
+  getBrands: async (limit = 50, offset = 0, search = '') => {
+    const params = new URLSearchParams()
+    params.append('limit', limit)
+    params.append('offset', offset)
+    if (search) params.append('search', search)
+    
+    const response = await api.get(`/api/v1/data/brands?${params.toString()}`)
+    return response.data
+  },
+  
   // Update GA4 Property ID for a brand
   updateBrandGA4PropertyId: async (brandId, ga4PropertyId) => {
     const response = await api.put(`/api/v1/data/brands/${brandId}/ga4-property-id`, {
@@ -662,6 +695,31 @@ export const authAPI = {
         },
       }
     )
+    return response.data
+  },
+}
+
+// OpenAI API endpoints
+export const openaiAPI = {
+  // Get overall metrics overview (all sources combined)
+  getOverallOverview: async (clientId = null, brandId = null, startDate = null, endDate = null) => {
+    const response = await api.post('/api/v1/openai/metrics/overview', {
+      client_id: clientId,
+      brand_id: brandId,
+      start_date: startDate,
+      end_date: endDate
+    })
+    return response.data
+  },
+  
+  // Get metric review for specific data source
+  getMetricReview: async (brandId, dataSource, startDate = null, endDate = null) => {
+    const response = await api.post('/api/v1/openai/metrics/review', {
+      brand_id: brandId,
+      data_source: dataSource,
+      start_date: startDate,
+      end_date: endDate
+    })
     return response.data
   },
 }

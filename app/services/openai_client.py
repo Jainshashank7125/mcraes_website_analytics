@@ -72,7 +72,7 @@ class OpenAIClient:
         data = {
             "model": model,
             "messages": messages,
-            "temperature": temperature
+            # "temperature": temperature
         }
         
         if max_tokens:

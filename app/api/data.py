@@ -24,22 +24,32 @@ ga4_client = GA4APIClient()
 @handle_api_errors(context="fetching brands")
 async def get_brands(
     limit: Optional[int] = Query(50, description="Number of records to return"),
-    offset: Optional[int] = Query(0, description="Offset for pagination")
+    offset: Optional[int] = Query(0, description="Offset for pagination"),
+    search: Optional[str] = Query(None, description="Search by brand name")
 ):
-    """Get brands from database"""
+    """Get brands from database with optional search"""
     supabase = SupabaseService()
     
-    # Get total count first
-    count_result = supabase.client.table("brands").select("*", count="exact").execute()
+    # Build query with optional search
+    query = supabase.client.table("brands").select("*", count="exact")
+    
+    # Apply search filter if provided
+    if search and search.strip():
+        search_term = search.strip()
+        query = query.ilike("name", f"%{search_term}%")
+    
+    # Get total count
+    count_result = query.execute()
     total_count = count_result.count if hasattr(count_result, 'count') else 0
     
-    # Get paginated items
-    query = supabase.client.table("brands").select("*")
-    
+    # Apply pagination
     if limit:
         query = query.limit(limit)
     if offset:
         query = query.offset(offset)
+    
+    # Order by name for consistent results
+    query = query.order("name", desc=False)
     
     result = query.execute()
     items = result.data if hasattr(result, 'data') else result
@@ -54,13 +64,27 @@ async def get_brands(
 @handle_api_errors(context="fetching prompts")
 async def get_prompts(
     brand_id: Optional[int] = Query(None, description="Filter by brand ID"),
+    client_id: Optional[int] = Query(None, description="Filter by client ID (maps to brand_id via scrunch_brand_id)"),
     stage: Optional[str] = Query(None, description="Filter by funnel stage"),
     persona_id: Optional[int] = Query(None, description="Filter by persona ID"),
     limit: Optional[int] = Query(50, description="Number of records to return"),
     offset: Optional[int] = Query(0, description="Offset for pagination")
 ):
-    """Get prompts from database"""
+    """Get prompts from database. Supports both brand_id and client_id (client_id maps to brand_id via scrunch_brand_id)"""
     supabase = SupabaseService()
+    
+    # If client_id is provided, get the scrunch_brand_id from the client
+    if client_id and not brand_id:
+        client_result = supabase.client.table("clients").select("scrunch_brand_id").eq("id", client_id).limit(1).execute()
+        if client_result.data and client_result.data[0].get("scrunch_brand_id"):
+            brand_id = client_result.data[0]["scrunch_brand_id"]
+        elif client_id:
+            # Client exists but has no scrunch_brand_id, return empty result
+            return {
+                "items": [],
+                "count": 0,
+                "total_count": 0
+            }
     
     # Build count query with same filters
     count_query = supabase.client.table("prompts").select("*", count="exact")
@@ -102,6 +126,7 @@ async def get_prompts(
 @handle_api_errors(context="fetching responses")
 async def get_responses(
     brand_id: Optional[int] = Query(None, description="Filter by brand ID"),
+    client_id: Optional[int] = Query(None, description="Filter by client ID (maps to brand_id via scrunch_brand_id)"),
     platform: Optional[str] = Query(None, description="Filter by AI platform"),
     prompt_id: Optional[int] = Query(None, description="Filter by prompt ID"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
@@ -109,8 +134,21 @@ async def get_responses(
     limit: Optional[int] = Query(50, description="Number of records to return"),
     offset: Optional[int] = Query(0, description="Offset for pagination")
 ):
-    """Get responses from database"""
+    """Get responses from database. Supports both brand_id and client_id (client_id maps to brand_id via scrunch_brand_id)"""
     supabase = SupabaseService()
+    
+    # If client_id is provided, get the scrunch_brand_id from the client
+    if client_id and not brand_id:
+        client_result = supabase.client.table("clients").select("scrunch_brand_id").eq("id", client_id).limit(1).execute()
+        if client_result.data and client_result.data[0].get("scrunch_brand_id"):
+            brand_id = client_result.data[0]["scrunch_brand_id"]
+        elif client_id:
+            # Client exists but has no scrunch_brand_id, return empty result
+            return {
+                "items": [],
+                "count": 0,
+                "total_count": 0
+            }
     
     # Build count query with same filters
     count_query = supabase.client.table("responses").select("*", count="exact")
@@ -389,7 +427,7 @@ async def get_brand_ga4_analytics(
             # Store traffic overview
             if analytics["trafficOverview"]:
                 try:
-                    supabase.upsert_ga4_traffic_overview(brand_id, property_id, end_date, analytics["trafficOverview"])
+                    supabase.upsert_ga4_traffic_overview(property_id, end_date, analytics["trafficOverview"], brand_id=brand_id)
                 except Exception as store_error:
                     logger.warning(f"Error storing traffic overview: {str(store_error)}")
         except Exception as e:
@@ -401,7 +439,7 @@ async def get_brand_ga4_analytics(
             # Store top pages
             if analytics["topPages"]:
                 try:
-                    supabase.upsert_ga4_top_pages(brand_id, property_id, end_date, analytics["topPages"])
+                    supabase.upsert_ga4_top_pages(property_id, end_date, analytics["topPages"], brand_id=brand_id)
                 except Exception as store_error:
                     logger.warning(f"Error storing top pages: {str(store_error)}")
         except Exception as e:
@@ -413,7 +451,7 @@ async def get_brand_ga4_analytics(
             # Store traffic sources
             if analytics["trafficSources"]:
                 try:
-                    supabase.upsert_ga4_traffic_sources(brand_id, property_id, end_date, analytics["trafficSources"])
+                    supabase.upsert_ga4_traffic_sources(property_id, end_date, analytics["trafficSources"], brand_id=brand_id)
                 except Exception as store_error:
                     logger.warning(f"Error storing traffic sources: {str(store_error)}")
         except Exception as e:
@@ -425,7 +463,7 @@ async def get_brand_ga4_analytics(
             # Store geographic data
             if analytics["geographic"]:
                 try:
-                    supabase.upsert_ga4_geographic(brand_id, property_id, end_date, analytics["geographic"])
+                    supabase.upsert_ga4_geographic(property_id, end_date, analytics["geographic"], brand_id=brand_id)
                 except Exception as store_error:
                     logger.warning(f"Error storing geographic data: {str(store_error)}")
         except Exception as e:
@@ -437,7 +475,7 @@ async def get_brand_ga4_analytics(
             # Store device data
             if analytics["devices"]:
                 try:
-                    supabase.upsert_ga4_devices(brand_id, property_id, end_date, analytics["devices"])
+                    supabase.upsert_ga4_devices(property_id, end_date, analytics["devices"], brand_id=brand_id)
                 except Exception as store_error:
                     logger.warning(f"Error storing device data: {str(store_error)}")
         except Exception as e:
@@ -449,11 +487,11 @@ async def get_brand_ga4_analytics(
             # Store conversions
             if analytics["conversions"]:
                 try:
-                    supabase.upsert_ga4_conversions(brand_id, property_id, end_date, analytics["conversions"])
+                    supabase.upsert_ga4_conversions(property_id, end_date, analytics["conversions"], brand_id=brand_id)
                     # Also store daily conversions summary
                     total_conversions = sum(c.get("count", 0) for c in analytics["conversions"])
                     if total_conversions > 0:
-                        supabase.upsert_ga4_daily_conversions(brand_id, property_id, end_date, total_conversions)
+                        supabase.upsert_ga4_daily_conversions(property_id, end_date, total_conversions, brand_id=brand_id)
                 except Exception as store_error:
                     logger.warning(f"Error storing conversions: {str(store_error)}")
         except Exception as e:
@@ -465,7 +503,7 @@ async def get_brand_ga4_analytics(
             # Store realtime data
             if analytics["realtime"]:
                 try:
-                    supabase.upsert_ga4_realtime(brand_id, property_id, analytics["realtime"])
+                    supabase.upsert_ga4_realtime(property_id, analytics["realtime"], brand_id=brand_id)
                 except Exception as store_error:
                     logger.warning(f"Error storing realtime data: {str(store_error)}")
         except Exception as e:
@@ -477,7 +515,7 @@ async def get_brand_ga4_analytics(
             # Store property details
             if analytics["propertyDetails"]:
                 try:
-                    supabase.upsert_ga4_property_details(brand_id, property_id, analytics["propertyDetails"])
+                    supabase.upsert_ga4_property_details(property_id, analytics["propertyDetails"], brand_id=brand_id)
                 except Exception as store_error:
                     logger.warning(f"Error storing property details: {str(store_error)}")
         except Exception as e:
@@ -497,6 +535,164 @@ async def get_brand_ga4_analytics(
         raise
     except Exception as e:
         logger.error(f"Error fetching GA4 analytics for brand {brand_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/data/ga4/client/{client_id}")
+async def get_client_ga4_analytics(
+    client_id: int,
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)")
+):
+    """Get GA4 analytics for a specific client (if property ID is configured)"""
+    try:
+        # Get client from database
+        supabase = SupabaseService()
+        client_result = supabase.client.table("clients").select("*").eq("id", client_id).execute()
+        clients = client_result.data if hasattr(client_result, 'data') else []
+        
+        if not clients:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        client = clients[0]
+        
+        if not client.get("ga4_property_id"):
+            return {
+                "client_id": client_id,
+                "client_name": client.get("company_name"),
+                "ga4_configured": False,
+                "message": "No GA4 property ID configured for this client"
+            }
+        
+        property_id = client["ga4_property_id"]
+        
+        # Get comprehensive GA4 analytics with error handling
+        analytics = {}
+        
+        # Set default date range if not provided
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        if not end_date:
+            end_date = datetime.now().strftime("%Y-%m-%d")
+        
+        date_range = {"startDate": start_date, "endDate": end_date}
+        
+        # Store data when fetched to ensure all data is persisted
+        supabase = SupabaseService()
+        scrunch_brand_id = client.get("scrunch_brand_id")  # For backward compatibility
+        
+        try:
+            analytics["trafficOverview"] = await ga4_client.get_traffic_overview(property_id, start_date, end_date)
+            # Store traffic overview
+            if analytics["trafficOverview"]:
+                try:
+                    supabase.upsert_ga4_traffic_overview(property_id, end_date, analytics["trafficOverview"], client_id=client_id, brand_id=scrunch_brand_id)
+                except Exception as store_error:
+                    logger.warning(f"Error storing traffic overview: {str(store_error)}")
+        except Exception as e:
+            logger.warning(f"Error fetching traffic overview: {str(e)}")
+            analytics["trafficOverview"] = None
+        
+        try:
+            analytics["topPages"] = await ga4_client.get_top_pages(property_id, start_date, end_date, limit=10)
+            # Store top pages
+            if analytics["topPages"]:
+                try:
+                    supabase.upsert_ga4_top_pages(property_id, end_date, analytics["topPages"], client_id=client_id, brand_id=scrunch_brand_id)
+                except Exception as store_error:
+                    logger.warning(f"Error storing top pages: {str(store_error)}")
+        except Exception as e:
+            logger.warning(f"Error fetching top pages: {str(e)}")
+            analytics["topPages"] = []
+        
+        try:
+            analytics["trafficSources"] = await ga4_client.get_traffic_sources(property_id, start_date, end_date)
+            # Store traffic sources
+            if analytics["trafficSources"]:
+                try:
+                    supabase.upsert_ga4_traffic_sources(property_id, end_date, analytics["trafficSources"], client_id=client_id, brand_id=scrunch_brand_id)
+                except Exception as store_error:
+                    logger.warning(f"Error storing traffic sources: {str(store_error)}")
+        except Exception as e:
+            logger.warning(f"Error fetching traffic sources: {str(e)}")
+            analytics["trafficSources"] = []
+        
+        try:
+            analytics["geographic"] = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10)
+            # Store geographic data
+            if analytics["geographic"]:
+                try:
+                    supabase.upsert_ga4_geographic(property_id, end_date, analytics["geographic"], client_id=client_id, brand_id=scrunch_brand_id)
+                except Exception as store_error:
+                    logger.warning(f"Error storing geographic data: {str(store_error)}")
+        except Exception as e:
+            logger.warning(f"Error fetching geographic data: {str(e)}")
+            analytics["geographic"] = []
+        
+        try:
+            analytics["devices"] = await ga4_client.get_device_breakdown(property_id, start_date, end_date)
+            # Store device data
+            if analytics["devices"]:
+                try:
+                    supabase.upsert_ga4_devices(property_id, end_date, analytics["devices"], client_id=client_id, brand_id=scrunch_brand_id)
+                except Exception as store_error:
+                    logger.warning(f"Error storing device data: {str(store_error)}")
+        except Exception as e:
+            logger.warning(f"Error fetching device data: {str(e)}")
+            analytics["devices"] = []
+        
+        try:
+            analytics["conversions"] = await ga4_client.get_conversions(property_id, start_date, end_date)
+            # Store conversions
+            if analytics["conversions"]:
+                try:
+                    supabase.upsert_ga4_conversions(property_id, end_date, analytics["conversions"], client_id=client_id, brand_id=scrunch_brand_id)
+                    # Also store daily conversions summary
+                    total_conversions = sum(c.get("count", 0) for c in analytics["conversions"])
+                    if total_conversions > 0:
+                        supabase.upsert_ga4_daily_conversions(property_id, end_date, total_conversions, client_id=client_id, brand_id=scrunch_brand_id)
+                except Exception as store_error:
+                    logger.warning(f"Error storing conversions: {str(store_error)}")
+        except Exception as e:
+            logger.warning(f"Error fetching conversions: {str(e)}")
+            analytics["conversions"] = []
+        
+        try:
+            analytics["realtime"] = await ga4_client.get_realtime_snapshot(property_id)
+            # Store realtime data
+            if analytics["realtime"]:
+                try:
+                    supabase.upsert_ga4_realtime(property_id, analytics["realtime"], client_id=client_id, brand_id=scrunch_brand_id)
+                except Exception as store_error:
+                    logger.warning(f"Error storing realtime data: {str(store_error)}")
+        except Exception as e:
+            logger.warning(f"Error fetching realtime data: {str(e)}")
+            analytics["realtime"] = None
+        
+        try:
+            analytics["propertyDetails"] = await ga4_client.get_property_details(property_id)
+            # Store property details
+            if analytics["propertyDetails"]:
+                try:
+                    supabase.upsert_ga4_property_details(property_id, analytics["propertyDetails"], client_id=client_id, brand_id=scrunch_brand_id)
+                except Exception as store_error:
+                    logger.warning(f"Error storing property details: {str(store_error)}")
+        except Exception as e:
+            logger.warning(f"Error fetching property details: {str(e)}")
+            analytics["propertyDetails"] = None
+        
+        analytics["dateRange"] = date_range
+        
+        return {
+            "client_id": client_id,
+            "client_name": client.get("company_name"),
+            "ga4_configured": True,
+            "property_id": property_id,
+            "analytics": analytics
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching GA4 analytics for client {client_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/data/ga4/traffic-overview/{property_id}")
@@ -2550,6 +2746,54 @@ async def get_brand_by_slug(slug: str):
         logger.error(f"Error fetching brand by slug: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/data/reporting-dashboard/client/{client_id}")
+async def get_reporting_dashboard_by_client(
+    client_id: int,
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)")
+):
+    """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard by client ID (client-centric)
+    
+    Uses the client's scrunch_brand_id to fetch the data.
+    """
+    try:
+        supabase = SupabaseService()
+        brand_id = None
+        
+        # Get client from database
+        client_result = supabase.client.table("clients").select("*").eq("id", client_id).execute()
+        clients = client_result.data if hasattr(client_result, 'data') else []
+        
+        if not clients:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        client = clients[0]
+        
+        # Use the scrunch_brand_id from the client
+        if client.get("scrunch_brand_id"):
+            brand_id = client["scrunch_brand_id"]
+            logger.info(f"Found client {client_id}, using scrunch_brand_id: {brand_id}")
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Client found but no brand mapping configured (scrunch_brand_id is null)"
+            )
+        
+        if not brand_id:
+            raise HTTPException(status_code=404, detail="Brand ID not found")
+        
+        # Call the existing get_reporting_dashboard function directly
+        # Since it's in the same module, we can call it directly
+        return await get_reporting_dashboard(brand_id, start_date, end_date)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error fetching reporting dashboard for client {client_id}: {str(e)}\n{error_trace}")
+        raise HTTPException(status_code=500, detail=f"Error fetching reporting dashboard: {str(e)}")
+
 @router.get("/data/reporting-dashboard/slug/{slug}")
 async def get_reporting_dashboard_by_slug(
     slug: str,
@@ -3903,20 +4147,67 @@ async def get_clients(
         offset = (page - 1) * page_size if page > 0 else 0
         
         # Build query with search filter and count
-        query = supabase.client.table("clients").select("*, client_campaigns(campaign_id, agency_analytics_campaigns(*))", count="exact")
+        # First get all clients with their campaigns
+        query = supabase.client.table("clients").select(
+            "*, client_campaigns(campaign_id, agency_analytics_campaigns(*))",
+            count="exact"
+        )
         
         # Apply search filter if provided
         if search and search.strip():
             search_term = search.strip()
             query = query.ilike("company_name", f"%{search_term}%")
         
-        # Apply pagination and ordering
-        query = query.limit(page_size).offset(offset).order("created_at", desc=True)
+        # Get all results first (we'll filter for active campaigns in Python)
+        all_result = query.execute()
+        all_items = all_result.data if hasattr(all_result, 'data') else []
         
-        # Execute query (this will return both data and count)
-        result = query.execute()
-        items = result.data if hasattr(result, 'data') else []
-        total_count = result.count if hasattr(result, 'count') else len(items)
+        # Filter to only clients with active campaigns
+        filtered_items = []
+        for item in all_items:
+            campaigns = item.get("client_campaigns", [])
+            has_active = False
+            for campaign_link in campaigns:
+                campaign = campaign_link.get("agency_analytics_campaigns")
+                if campaign and campaign.get("status", "").lower() == "active":
+                    has_active = True
+                    break
+            if has_active:
+                filtered_items.append(item)
+        
+        # Calculate total count after filtering
+        total_count = len(filtered_items)
+        
+        # Apply pagination
+        start_idx = offset
+        end_idx = offset + page_size
+        items = filtered_items[start_idx:end_idx]
+        
+        # For each client, get keywords from their campaigns
+        for item in items:
+            client_id = item.get("id")
+            keywords = []
+            
+            # Get all campaigns for this client
+            campaigns = item.get("client_campaigns", [])
+            campaign_ids = [c.get("campaign_id") for c in campaigns if c.get("campaign_id")]
+            
+            if campaign_ids:
+                # Get keywords for all campaigns
+                keywords_result = supabase.client.table("agency_analytics_keywords").select(
+                    "keyword_phrase, primary_keyword"
+                ).in_("campaign_id", campaign_ids).execute()
+                
+                keywords_data = keywords_result.data if hasattr(keywords_result, 'data') else []
+                # Extract unique keyword phrases, prioritizing primary keywords
+                keyword_phrases = set()
+                for kw in keywords_data:
+                    if kw.get("keyword_phrase"):
+                        keyword_phrases.add(kw.get("keyword_phrase"))
+                
+                keywords = sorted(list(keyword_phrases))[:10]  # Limit to top 10 keywords
+            
+            item["keywords"] = keywords
         
         # Calculate pagination metadata
         total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 1
@@ -4179,9 +4470,11 @@ async def upload_client_logo(
     try:
         supabase = SupabaseService()
         
-        # Check if client exists
-        client = supabase.get_client_by_id(client_id)
-        if not client:
+        # Check if client exists (same pattern as brand logo upload)
+        client_result = supabase.client.table("clients").select("id").eq("id", client_id).execute()
+        clients = client_result.data if hasattr(client_result, 'data') else []
+        
+        if not clients:
             raise HTTPException(status_code=404, detail="Client not found")
         
         # Validate file type
@@ -4196,10 +4489,13 @@ async def upload_client_logo(
         filename = f"client-{client_id}-{uuid.uuid4().hex[:8]}.{file_extension}"
         file_path = filename
         
-        # Upload to Supabase Storage
+        # Upload to Supabase Storage using Supabase client
+        # The bucket name is 'client-logos', file path is just the filename
         try:
             logger.info(f"Uploading client logo to storage: bucket=client-logos, path={file_path}, size={len(file_content)} bytes, content-type={file.content_type}")
             
+            responseBuckets = supabase.client.storage.list_buckets()
+            logger.info(f"Buckets: {responseBuckets}")
             # Upload using Supabase storage client
             storage_response = supabase.client.storage.from_("client-logos").upload(
                 file=file_content,
@@ -4213,7 +4509,7 @@ async def upload_client_logo(
             
             logger.info(f"Storage upload successful: {storage_response}")
             
-            # Get public URL
+            # Get public URL using Supabase client
             try:
                 public_url_response = supabase.client.storage.from_("client-logos").get_public_url(file_path)
                 if isinstance(public_url_response, str):

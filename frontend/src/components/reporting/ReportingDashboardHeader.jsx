@@ -17,6 +17,7 @@ import {
   Share as ShareIcon,
   Refresh as RefreshIcon,
   CalendarToday as CalendarTodayIcon,
+  Insights as InsightsIcon,
 } from '@mui/icons-material'
 import { DATE_PRESETS } from './constants'
 
@@ -25,6 +26,7 @@ export default function ReportingDashboardHeader({
   publicBrandInfo,
   onOpenKPISelector,
   onOpenShareDialog,
+  onOpenOverview,
   onRefresh,
   selectedBrandSlug,
   brands,
@@ -69,6 +71,22 @@ export default function ReportingDashboardHeader({
           </Typography>
         </Box>
         <Box display="flex" gap={1.5}>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<InsightsIcon sx={{ fontSize: 16 }} />}
+            onClick={onOpenOverview}
+            sx={{
+              borderRadius: 2,
+              px: 2,
+              py: 0.75,
+              fontWeight: 600,
+              textTransform: 'none',
+            }}
+            title="AI Overview of all metrics"
+          >
+            AI Overview
+          </Button>
           <IconButton
             onClick={onOpenKPISelector}
             sx={{

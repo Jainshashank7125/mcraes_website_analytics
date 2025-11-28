@@ -57,6 +57,7 @@ import {
   Check as CheckIcon,
   ExpandMore as ExpandMoreIcon,
   Analytics as AnalyticsIcon,
+  Insights as InsightsIcon,
 } from "@mui/icons-material";
 import { motion } from "framer-motion";
 import {
@@ -74,7 +75,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { reportingAPI, syncAPI } from "../services/api";
+import { reportingAPI, syncAPI, clientAPI, openaiAPI } from "../services/api";
 import ScrunchVisualizations from "./reporting/charts/ScrunchVisualizations";
 // Import reusable components and utilities
 import ChartCard from "./reporting/ChartCard";
@@ -244,8 +245,9 @@ const DATE_PRESETS = [
 
 function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   const isPublic = !!publicSlug;
-  const [brands, setBrands] = useState([]);
-  const [selectedBrandId, setSelectedBrandId] = useState(null);
+  const [clients, setClients] = useState([]);
+  const [selectedClientId, setSelectedClientId] = useState(null);
+  const [selectedBrandId, setSelectedBrandId] = useState(null); // For backward compatibility with existing data loading
   const [dashboardData, setDashboardData] = useState(null);
   const [scrunchData, setScrunchData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -276,6 +278,10 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   const [shareableUrl, setShareableUrl] = useState("");
   const [copied, setCopied] = useState(false);
   const [selectedBrandSlug, setSelectedBrandSlug] = useState(null);
+  const [showOverviewDialog, setShowOverviewDialog] = useState(false);
+  const [overviewData, setOverviewData] = useState(null);
+  const [loadingOverview, setLoadingOverview] = useState(false);
+  const [overviewCacheKey, setOverviewCacheKey] = useState(null); // Track cache key (clientId/brandId + date range)
   // Pagination state for Scrunch AI Insights table
   const [insightsPage, setInsightsPage] = useState(0);
   const [insightsRowsPerPage, setInsightsRowsPerPage] = useState(10);
@@ -400,8 +406,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   // Comprehensive data loading function - loads all dashboard data including KPI selections
   const loadAllData = async () => {
     // For public view, we can use slug even without selectedBrandId
-    // For admin view, we need selectedBrandId
-    if (!selectedBrandId && !(isPublic && publicSlug)) return;
+    // For admin view, we need selectedClientId (client-centric) or selectedBrandId (fallback)
+    if (!selectedClientId && !selectedBrandId && !(isPublic && publicSlug)) return;
     
     // Load all data sources in parallel
     await Promise.all([
@@ -414,70 +420,100 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
 
   useEffect(() => {
     if (isPublic && publicSlug) {
-      // For public mode, fetch brand by slug and set selectedBrandId
-      const fetchPublicBrand = async () => {
+      // For public mode, try to fetch client by slug first, then fall back to brand
+      const fetchPublicEntity = async () => {
         try {
+          // Try client first (new client-centric approach)
+          try {
+            const client = await clientAPI.getClientBySlug(publicSlug);
+            if (client && client.scrunch_brand_id) {
+              setSelectedClientId(client.id);
+              setSelectedBrandId(client.scrunch_brand_id);
+              return;
+            }
+          } catch (clientErr) {
+            // Client not found, try brand (backward compatibility)
+            console.log("Client not found by slug, trying brand...");
+          }
+          // Fallback to brand lookup for backward compatibility
           const brand = await reportingAPI.getBrandBySlug(publicSlug);
           setSelectedBrandId(brand.id);
         } catch (err) {
-          setError(err.response?.data?.detail || "Failed to load brand");
+          setError(err.response?.data?.detail || "Failed to load client or brand");
         }
       };
-      fetchPublicBrand();
+      fetchPublicEntity();
     } else {
-      loadBrands();
+      loadClients();
     }
   }, [isPublic, publicSlug]);
 
   useEffect(() => {
     // For public mode, we can load data with just publicSlug
-    // For admin mode, we need selectedBrandId
-    if (selectedBrandId || (isPublic && publicSlug)) {
-      // Clear previous data when switching brands
+    // For admin mode, we need selectedClientId (client-centric) or selectedBrandId (fallback)
+    if (selectedClientId || selectedBrandId || (isPublic && publicSlug)) {
+      // Clear previous data when switching clients/brands
       setDashboardData(null);
       setScrunchData(null);
       setBrandAnalytics(null);
       setError(null);
       // Reset pagination when data changes
       setInsightsPage(0);
+      // Reset overview cache when client/brand or date range changes
+      setOverviewData(null);
+      setOverviewCacheKey(null);
       // Load all data sources in parallel including KPI selections
       loadAllData();
     }
-  }, [selectedBrandId, startDate, endDate, isPublic, publicSlug]);
+  }, [selectedClientId, selectedBrandId, startDate, endDate, isPublic, publicSlug]);
 
-  const loadBrands = async () => {
+  const loadClients = async () => {
     try {
-      const data = await syncAPI.getBrands();
-      const brandsList = data.items || [];
+      const data = await clientAPI.getClients(1, 100, ''); // Get first 100 clients
+      const clientsList = data.items || [];
       console.log(
-        "Loaded brands:",
-        brandsList.map((b) => ({ id: b.id, name: b.name, slug: b.slug }))
+        "Loaded clients:",
+        clientsList.map((c) => ({ id: c.id, name: c.company_name, url_slug: c.url_slug, scrunch_brand_id: c.scrunch_brand_id }))
       );
-      setBrands(brandsList);
-      if (brandsList.length > 0) {
-        setSelectedBrandId(brandsList[0].id);
-        // Set slug for first brand
-        if (brandsList[0].slug) {
-          setSelectedBrandSlug(brandsList[0].slug);
+      setClients(clientsList);
+      if (clientsList.length > 0) {
+        const firstClient = clientsList[0];
+        setSelectedClientId(firstClient.id);
+        // Set brand_id from client's scrunch_brand_id for data loading
+        if (firstClient.scrunch_brand_id) {
+          setSelectedBrandId(firstClient.scrunch_brand_id);
+        }
+        // Set slug for first client
+        if (firstClient.url_slug) {
+          setSelectedBrandSlug(firstClient.url_slug);
         }
       }
     } catch (err) {
-      console.error("Error loading brands:", err);
-      setError(err.response?.data?.detail || "Failed to load brands");
+      console.error("Error loading clients:", err);
+      setError(err.response?.data?.detail || "Failed to load clients");
     }
   };
 
-  // Update slug when brand changes
+  // Update slug and brand_id when client changes
   useEffect(() => {
-    if (selectedBrandId && brands.length > 0) {
-      const selectedBrand = brands.find((b) => b.id === selectedBrandId);
-      if (selectedBrand?.slug) {
-        setSelectedBrandSlug(selectedBrand.slug);
-      } else {
-        setSelectedBrandSlug(null);
+    if (selectedClientId && clients.length > 0) {
+      const selectedClient = clients.find((c) => c.id === selectedClientId);
+      if (selectedClient) {
+        // Update slug from client
+        if (selectedClient.url_slug) {
+          setSelectedBrandSlug(selectedClient.url_slug);
+        } else {
+          setSelectedBrandSlug(null);
+        }
+        // Update brand_id from client's scrunch_brand_id for data loading
+        if (selectedClient.scrunch_brand_id) {
+          setSelectedBrandId(selectedClient.scrunch_brand_id);
+        } else {
+          setSelectedBrandId(null);
+        }
       }
     }
-  }, [selectedBrandId, brands]);
+  }, [selectedClientId, clients]);
 
   const handleOpenShareDialog = () => {
     if (selectedBrandSlug) {
@@ -504,8 +540,79 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
     }
   };
 
+  // Generate overview automatically when KPIs are loaded
+  const generateOverviewAutomatically = async (kpiData = null) => {
+    // Use provided data or current dashboardData
+    const dataToUse = kpiData || dashboardData;
+    if (!dataToUse || !dataToUse.kpis || Object.keys(dataToUse.kpis).length === 0) {
+      return;
+    }
+    
+    // Create cache key based on client/brand and date range
+    const cacheKey = `${selectedClientId || selectedBrandId}-${startDate}-${endDate}`;
+    
+    // If we already have overview data for this cache key, don't fetch again
+    if (overviewData && overviewCacheKey === cacheKey) {
+      return;
+    }
+    
+    // Don't fetch if already loading
+    if (loadingOverview) {
+      return;
+    }
+    
+    // Set loading state
+    setLoadingOverview(true);
+    
+    try {
+      const overview = await openaiAPI.getOverallOverview(
+        selectedClientId,
+        selectedBrandId,
+        startDate || undefined,
+        endDate || undefined
+      );
+      setOverviewData(overview);
+      setOverviewCacheKey(cacheKey);
+    } catch (err) {
+      console.error("Error generating overview:", err);
+      // Don't set error here - just log it, user can retry by clicking button
+      setOverviewData(null);
+      setOverviewCacheKey(null);
+    } finally {
+      setLoadingOverview(false);
+    }
+  };
+
+  const handleOpenOverview = () => {
+    if (!dashboardData || !dashboardData.kpis || Object.keys(dashboardData.kpis).length === 0) {
+      setError("No KPIs available to generate overview. Please load dashboard data first.");
+      return;
+    }
+    
+    // Check if we need to fetch overview data
+    const cacheKey = `${selectedClientId || selectedBrandId}-${startDate}-${endDate}`;
+    
+    // If overview data exists and matches current cache key, just show dialog
+    if (overviewData && overviewCacheKey === cacheKey) {
+      setShowOverviewDialog(true);
+      return;
+    }
+    
+    // If overview is currently loading, show dialog with loading state
+    if (loadingOverview) {
+      setShowOverviewDialog(true);
+      return;
+    }
+    
+    // If no overview data or cache key doesn't match, fetch it
+    setShowOverviewDialog(true);
+    generateOverviewAutomatically();
+  };
+
   const loadDashboardData = async () => {
-    if (!selectedBrandId && !publicSlug) return;
+    // For admin view, use selectedClientId if available, otherwise fall back to selectedBrandId
+    // For public view, use publicSlug
+    if (!selectedClientId && !selectedBrandId && !publicSlug) return;
 
     try {
       setLoading(true);
@@ -518,7 +625,15 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
           startDate || undefined,
           endDate || undefined
         );
+      } else if (selectedClientId) {
+        // Use client-based endpoint for admin view (client-centric)
+        data = await reportingAPI.getReportingDashboardByClient(
+          selectedClientId,
+          startDate || undefined,
+          endDate || undefined
+        );
       } else {
+        // Fallback to brand-based endpoint
         data = await reportingAPI.getReportingDashboard(
           selectedBrandId,
           startDate || undefined,
@@ -550,6 +665,14 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
             setTempSelectedKPIs(new Set(availableKPIs));
           }
         }
+        
+        // Auto-generate overview when KPIs are available
+        if (data.kpis && Object.keys(data.kpis).length > 0) {
+          // Call with a slight delay to ensure state is updated
+          setTimeout(() => {
+            generateOverviewAutomatically(data);
+          }, 100);
+        }
       } else {
         // No data available for this brand
         console.warn(`No data available for brand ${selectedBrandId}`);
@@ -566,7 +689,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
 
   const loadScrunchData = async () => {
     // For public view, we can use slug even without selectedBrandId
-    // For admin view, we need selectedBrandId
+    // For admin view, we need selectedBrandId (which should be set from client's scrunch_brand_id)
     if (!selectedBrandId && !(isPublic && publicSlug)) return;
 
     try {
@@ -581,6 +704,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
           endDate || undefined
         );
       } else {
+        // Use brand_id (which comes from client's scrunch_brand_id)
         data = await reportingAPI.getScrunchDashboard(
           selectedBrandId,
           startDate || undefined,
@@ -1191,6 +1315,30 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
             )}
           </Box>
           <Box display="flex" gap={1.5}>
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<InsightsIcon sx={{ fontSize: 16 }} />}
+              onClick={handleOpenOverview}
+              disabled={!dashboardData || !dashboardData.kpis || Object.keys(dashboardData.kpis).length === 0}
+              sx={{
+                borderRadius: 2,
+                px: 2,
+                py: 0.75,
+                fontWeight: 600,
+                textTransform: 'none',
+                bgcolor: theme.palette.primary.main,
+                '&:hover': {
+                  bgcolor: theme.palette.primary.dark,
+                },
+                '&:disabled': {
+                  bgcolor: alpha(theme.palette.primary.main, 0.3),
+                }
+              }}
+              title="AI Overview of all metrics"
+            >
+              AI Overview
+            </Button>
             {!isPublic && (
               <IconButton
                 onClick={handleOpenKPISelector}
@@ -1264,25 +1412,33 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
             }}
           >
             <FormControl size="small" sx={{ minWidth: 200 }}>
-              <InputLabel>Select Brand</InputLabel>
+              <InputLabel>Select Client</InputLabel>
               <Select
-                value={selectedBrandId || ""}
-                label="Select Brand"
+                value={selectedClientId || ""}
+                label="Select Client"
                 onChange={(e) => {
-                  const brandId = e.target.value;
-                  setSelectedBrandId(brandId);
-                  // Update slug when brand changes
-                  const selectedBrand = brands.find((b) => b.id === brandId);
-                  if (selectedBrand?.slug) {
-                    setSelectedBrandSlug(selectedBrand.slug);
-                  } else {
-                    setSelectedBrandSlug(null);
+                  const clientId = e.target.value;
+                  setSelectedClientId(clientId);
+                  // Update slug and brand_id when client changes
+                  const selectedClient = clients.find((c) => c.id === clientId);
+                  if (selectedClient) {
+                    if (selectedClient.url_slug) {
+                      setSelectedBrandSlug(selectedClient.url_slug);
+                    } else {
+                      setSelectedBrandSlug(null);
+                    }
+                    // Set brand_id from client's scrunch_brand_id for data loading
+                    if (selectedClient.scrunch_brand_id) {
+                      setSelectedBrandId(selectedClient.scrunch_brand_id);
+                    } else {
+                      setSelectedBrandId(null);
+                    }
                   }
                 }}
               >
-                {brands.map((brand) => (
-                  <MenuItem key={brand.id} value={brand.id}>
-                    {brand.name}
+                {clients.map((client) => (
+                  <MenuItem key={client.id} value={client.id}>
+                    {client.company_name}
                   </MenuItem>
                 ))}
               </Select>
@@ -4899,6 +5055,153 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
             onClick={() => setShowShareDialog(false)}
             variant="outlined"
             sx={{ borderRadius: 2, textTransform: "none" }}
+          >
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* AI Overview Dialog */}
+      <Dialog
+        open={showOverviewDialog}
+        onClose={() => setShowOverviewDialog(false)}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 2,
+            border: `1px solid ${theme.palette.divider}`,
+          },
+        }}
+      >
+        <DialogTitle
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            fontWeight: 600,
+            pb: 1,
+          }}
+        >
+          <InsightsIcon sx={{ color: theme.palette.primary.main }} />
+          <Typography variant="h6" fontWeight={600}>
+            AI Overview - All Metrics
+          </Typography>
+        </DialogTitle>
+        <DialogContent>
+          {loadingOverview ? (
+            <Box display="flex" flexDirection="column" alignItems="center" justifyContent="center" py={4}>
+              <CircularProgress size={40} />
+              <Typography variant="body2" color="text.secondary" mt={2}>
+                Generating AI overview...
+              </Typography>
+            </Box>
+          ) : overviewData ? (
+            <Box>
+              {/* Overview Header Info */}
+              <Box mb={3}>
+                <Typography variant="body2" color="text.secondary" mb={1}>
+                  <strong>Date Range:</strong> {overviewData.date_range?.start_date || 'N/A'} to {overviewData.date_range?.end_date || 'N/A'}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  <strong>Metrics Analyzed:</strong> {overviewData.total_metrics_analyzed} total
+                  {overviewData.metrics_by_source && (
+                    <> ({overviewData.metrics_by_source.GA4 || 0} GA4, {overviewData.metrics_by_source.AgencyAnalytics || 0} SEO, {overviewData.metrics_by_source.Scrunch || 0} Brand Mentions)</>
+                  )}
+                </Typography>
+              </Box>
+
+              {/* AI Generated Overview */}
+              <Paper
+                elevation={0}
+                sx={{
+                  p: 3,
+                  bgcolor: alpha(theme.palette.primary.main, 0.05),
+                  border: `1px solid ${theme.palette.divider}`,
+                  borderRadius: 2,
+                  mb: 3,
+                }}
+              >
+                <Typography
+                  variant="body1"
+                  sx={{
+                    whiteSpace: 'pre-line',
+                    lineHeight: 1.8,
+                    fontSize: '0.95rem',
+                  }}
+                >
+                  {overviewData.overview}
+                </Typography>
+              </Paper>
+
+              {/* Metrics Summary by Source */}
+              {overviewData.metrics && overviewData.metrics.length > 0 && (
+                <Box>
+                  <Typography variant="subtitle1" fontWeight={600} mb={2}>
+                    Metrics Summary
+                  </Typography>
+                  <Grid container spacing={2}>
+                    {['GA4', 'AgencyAnalytics', 'Scrunch'].map((source) => {
+                      const sourceMetrics = overviewData.metrics.filter(m => m.source === source);
+                      if (sourceMetrics.length === 0) return null;
+                      
+                      return (
+                        <Grid item xs={12} md={4} key={source}>
+                          <Paper
+                            elevation={0}
+                            sx={{
+                              p: 2,
+                              border: `1px solid ${theme.palette.divider}`,
+                              borderRadius: 2,
+                              bgcolor: 'background.paper',
+                            }}
+                          >
+                            <Typography variant="subtitle2" fontWeight={600} mb={1.5}>
+                              {source === 'GA4' ? 'Google Analytics 4' : source === 'AgencyAnalytics' ? 'SEO Rankings' : 'Brand Mentions'}
+                            </Typography>
+                            <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                              {sourceMetrics.slice(0, 5).map((metric, idx) => (
+                                <li key={idx}>
+                                  <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
+                                    <strong>{metric.metric}:</strong> {formatValue({
+                                      value: metric.value,
+                                      format: metric.format,
+                                    })}
+                                    {metric.change !== null && metric.change !== undefined && (
+                                      <span style={{ 
+                                        color: metric.change > 0 ? theme.palette.success.main : metric.change < 0 ? theme.palette.error.main : 'inherit',
+                                        marginLeft: '8px'
+                                      }}>
+                                        ({metric.change > 0 ? '↑' : metric.change < 0 ? '↓' : '→'} {Math.abs(metric.change).toFixed(1)}%)
+                                      </span>
+                                    )}
+                                  </Typography>
+                                </li>
+                              ))}
+                              {sourceMetrics.length > 5 && (
+                                <Typography variant="caption" color="text.secondary">
+                                  +{sourceMetrics.length - 5} more
+                                </Typography>
+                              )}
+                            </Box>
+                          </Paper>
+                        </Grid>
+                      );
+                    })}
+                  </Grid>
+                </Box>
+              )}
+            </Box>
+          ) : (
+            <Alert severity="info">
+              No overview data available. Please try again.
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ p: 2, borderTop: `1px solid ${theme.palette.divider}` }}>
+          <Button
+            onClick={() => setShowOverviewDialog(false)}
+            variant="outlined"
           >
             Close
           </Button>

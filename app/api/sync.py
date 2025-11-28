@@ -342,21 +342,21 @@ async def sync_agency_analytics(
 @router.post("/sync/ga4")
 @handle_api_errors(context="syncing Google Analytics data")
 async def sync_ga4(
-    brand_id: Optional[int] = Query(None, description="Sync GA4 data for specific brand ID (if not provided, syncs all brands with GA4 configured)"),
+    client_id: Optional[int] = Query(None, description="Sync GA4 data for specific client ID (if not provided, syncs all clients with GA4 configured)"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD), defaults to 30 days ago"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD), defaults to today"),
     sync_realtime: bool = Query(True, description="Whether to sync realtime data"),
     request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """Start async sync of GA4 data. Returns immediately with job ID."""
+    """Start async sync of GA4 data. Returns immediately with job ID. Now uses client_id instead of brand_id."""
     # Create job
     job_id = await sync_job_service.create_job(
         sync_type="sync_ga4",
         user_id=current_user["id"],
         user_email=current_user["email"],
         parameters={
-            "brand_id": brand_id,
+            "client_id": client_id,
             "start_date": start_date,
             "end_date": end_date,
             "sync_realtime": sync_realtime
@@ -365,7 +365,7 @@ async def sync_ga4(
     
     # Start background task
     sync_job_service.run_background_task(
-        sync_ga4_background(job_id, current_user["id"], current_user["email"], brand_id, start_date, end_date, sync_realtime, request),
+        sync_ga4_background(job_id, current_user["id"], current_user["email"], client_id, start_date, end_date, sync_realtime, request),
         job_id
     )
     

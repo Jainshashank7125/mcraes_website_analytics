@@ -263,6 +263,7 @@ function ClientsList() {
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Company</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>URL</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Campaigns</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Keywords</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Integrations</TableCell>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Slug</TableCell>
                 <TableCell align="right" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Actions</TableCell>
@@ -376,6 +377,30 @@ function ClientsList() {
                             fontWeight: 600,
                           }}
                         />
+                      </TableCell>
+                      <TableCell>
+                        {client.keywords && client.keywords.length > 0 ? (
+                          <Box>
+                            <Typography 
+                              variant="body2" 
+                              sx={{ 
+                                fontSize: '0.875rem',
+                                maxWidth: 200,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                              title={client.keywords.join(', ')}
+                            >
+                              {client.keywords.slice(0, 3).join(', ')}
+                              {client.keywords.length > 3 ? ` +${client.keywords.length - 3} more` : ''}
+                            </Typography>
+                          </Box>
+                        ) : (
+                          <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.875rem' }}>
+                            -
+                          </Typography>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Box display="flex" gap={0.5} alignItems="center">

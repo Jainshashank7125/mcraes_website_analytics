@@ -198,13 +198,13 @@ async def sync_ga4_background(
     job_id: str,
     user_id: str,
     user_email: str,
-    brand_id: Optional[int] = None,
+    client_id: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     sync_realtime: bool = True,
     request = None
 ):
-    """Background task to sync GA4 data"""
+    """Background task to sync GA4 data - now iterates over Clients instead of Brands"""
     ga4_client = GA4APIClient()
     supabase = SupabaseService()
     
@@ -217,33 +217,33 @@ async def sync_ga4_background(
         
         await sync_job_service.update_job_status(
             job_id, "running", progress=0,
-            current_step="Fetching brands with GA4...", total_steps=1
+            current_step="Fetching clients with GA4...", total_steps=1
         )
         
-        # Get brands with GA4 configured
-        if brand_id:
-            brand_result = supabase.client.table("brands").select("*").eq("id", brand_id).execute()
-            brands = brand_result.data if brand_result.data else []
+        # Get clients with GA4 configured
+        if client_id:
+            client_result = supabase.client.table("clients").select("*").eq("id", client_id).execute()
+            clients = client_result.data if client_result.data else []
         else:
-            brands_result = supabase.client.table("brands").select("*").not_.is_("ga4_property_id", "null").execute()
-            brands = brands_result.data if brands_result.data else []
+            clients_result = supabase.client.table("clients").select("*").not_.is_("ga4_property_id", "null").execute()
+            clients = clients_result.data if clients_result.data else []
         
-        if not brands:
+        if not clients:
             # Check for cancellation before completing
             if sync_job_service.is_cancelled(job_id):
                 logger.info(f"[Job {job_id}] Job was cancelled")
                 return
             result = {
                 "status": "success",
-                "message": "No brands with GA4 configured found",
+                "message": "No clients with GA4 configured found",
                 "total_synced": {},
-                "brand_results": []
+                "client_results": []
             }
             await sync_job_service.complete_job(job_id, result)
             return
         
         total_synced = {
-            "brands": 0,
+            "clients": 0,
             "traffic_overview": 0,
             "top_pages": 0,
             "traffic_sources": 0,
@@ -253,32 +253,33 @@ async def sync_ga4_background(
             "realtime": 0
         }
         
-        brand_results = []
-        total_brands = len(brands)
+        client_results = []
+        total_clients = len(clients)
         
-        for idx, brand in enumerate(brands):
-            # Check for cancellation before each brand
+        for idx, client in enumerate(clients):
+            # Check for cancellation before each client
             if sync_job_service.is_cancelled(job_id):
                 logger.info(f"[Job {job_id}] Job cancelled during GA4 sync")
                 return
             
-            brand_id_val = brand.get("id")
-            property_id = brand.get("ga4_property_id")
-            brand_name = brand.get("name", f"Brand {brand_id_val}")
+            client_id_val = client.get("id")
+            property_id = client.get("ga4_property_id")
+            client_name = client.get("company_name", f"Client {client_id_val}")
+            scrunch_brand_id = client.get("scrunch_brand_id")  # For backward compatibility
             
             if not property_id:
                 continue
             
             try:
-                progress = int((idx / total_brands) * 80)
+                progress = int((idx / total_clients) * 80)
                 await sync_job_service.update_job_status(
                     job_id, "running", progress=progress,
-                    current_step=f"Syncing GA4 for {brand_name} ({idx + 1}/{total_brands})..."
+                    current_step=f"Syncing GA4 for {client_name} ({idx + 1}/{total_clients})..."
                 )
                 
                 # Check for cancellation after status update
                 if sync_job_service.is_cancelled(job_id):
-                    logger.info(f"[Job {job_id}] Job cancelled before syncing brand {brand_name}")
+                    logger.info(f"[Job {job_id}] Job cancelled before syncing client {client_name}")
                     return
                 
                 # Calculate date ranges for 30-day periods
@@ -294,21 +295,21 @@ async def sync_ga4_background(
                 prev_period_start_date = prev_period_start_dt.strftime("%Y-%m-%d")
                 prev_period_end_date = prev_period_end_dt.strftime("%Y-%m-%d")
                 
-                logger.info(f"[Job {job_id}] Calculating KPIs for brand {brand_id_val}")
+                logger.info(f"[Job {job_id}] Calculating KPIs for client {client_id_val} ({client_name})")
                 logger.info(f"[Job {job_id}] Current period: {period_start_date} to {period_end_date}")
                 logger.info(f"[Job {job_id}] Previous period: {prev_period_start_date} to {prev_period_end_date}")
                 
                 # Fetch current period data
                 await sync_job_service.update_job_status(
                     job_id, "running", progress=progress + 5,
-                    current_step=f"Fetching current period data for {brand_name}..."
+                    current_step=f"Fetching current period data for {client_name}..."
                 )
                 
                 current_traffic_overview = await ga4_client.get_traffic_overview(property_id, period_start_date, period_end_date)
                 
                 # Check for cancellation after API call
                 if sync_job_service.is_cancelled(job_id):
-                    logger.info(f"[Job {job_id}] Job cancelled after fetching traffic overview for {brand_name}")
+                    logger.info(f"[Job {job_id}] Job cancelled after fetching traffic overview for {client_name}")
                     return
                 
                 # Get conversions and revenue for current period
@@ -342,20 +343,20 @@ async def sync_ga4_background(
                 
                 # Check for cancellation before fetching previous period
                 if sync_job_service.is_cancelled(job_id):
-                    logger.info(f"[Job {job_id}] Job cancelled after fetching current period data for {brand_name}")
+                    logger.info(f"[Job {job_id}] Job cancelled after fetching current period data for {client_name}")
                     return
                 
                 # Fetch previous period data
                 await sync_job_service.update_job_status(
                     job_id, "running", progress=progress + 10,
-                    current_step=f"Fetching previous period data for {brand_name}..."
+                    current_step=f"Fetching previous period data for {client_name}..."
                 )
                 
                 prev_traffic_overview = await ga4_client.get_traffic_overview(property_id, prev_period_start_date, prev_period_end_date)
                 
                 # Check for cancellation after API call
                 if sync_job_service.is_cancelled(job_id):
-                    logger.info(f"[Job {job_id}] Job cancelled after fetching previous period traffic overview for {brand_name}")
+                    logger.info(f"[Job {job_id}] Job cancelled after fetching previous period traffic overview for {client_name}")
                     return
                 
                 # Get conversions and revenue for previous period
@@ -434,11 +435,10 @@ async def sync_ga4_background(
                 # Store KPI snapshot
                 await sync_job_service.update_job_status(
                     job_id, "running", progress=progress + 15,
-                    current_step=f"Storing KPI snapshot for {brand_name}..."
+                    current_step=f"Storing KPI snapshot for {client_name}..."
                 )
                 
                 supabase.upsert_ga4_kpi_snapshot(
-                    brand_id=brand_id_val,
                     property_id=property_id,
                     period_end_date=period_end_date,
                     period_start_date=period_start_date,
@@ -446,19 +446,21 @@ async def sync_ga4_background(
                     prev_period_end_date=prev_period_end_date,
                     current_values=current_values,
                     previous_values=previous_values,
-                    changes=changes
+                    changes=changes,
+                    client_id=client_id_val,
+                    brand_id=scrunch_brand_id  # For backward compatibility
                 )
                 
                 # Store all GA4 data types for the current period
                 await sync_job_service.update_job_status(
                     job_id, "running", progress=progress + 20,
-                    current_step=f"Storing all GA4 data for {brand_name}..."
+                    current_step=f"Storing all GA4 data for {client_name}..."
                 )
                 
                 # Store daily traffic overview records (one per day for the entire 30-day period)
                 if current_traffic_overview and current_traffic_overview.get("daily_data"):
                     daily_records = current_traffic_overview.get("daily_data", [])
-                    logger.info(f"[Job {job_id}] Storing {len(daily_records)} daily traffic overview records for {brand_name}")
+                    logger.info(f"[Job {job_id}] Storing {len(daily_records)} daily traffic overview records for {client_name}")
                     
                     # Get daily conversions and revenue if available
                     daily_conversions_data = {}
@@ -507,119 +509,119 @@ async def sync_ga4_background(
                             daily_record_with_extras = daily_record.copy()
                             daily_record_with_extras["conversions"] = daily_conversions_data.get(date_str, 0)
                             daily_record_with_extras["revenue"] = daily_revenue_data.get(date_str, 0)
-                            supabase.upsert_ga4_traffic_overview(brand_id_val, property_id, date_str, daily_record_with_extras)
+                            supabase.upsert_ga4_traffic_overview(property_id, date_str, daily_record_with_extras, client_id=client_id_val, brand_id=scrunch_brand_id)
                             total_synced["traffic_overview"] += 1
                     
-                    logger.info(f"[Job {job_id}] Stored {total_synced['traffic_overview']} daily traffic overview records for {brand_name}")
+                    logger.info(f"[Job {job_id}] Stored {total_synced['traffic_overview']} daily traffic overview records for {client_name}")
                 elif current_traffic_overview:
                     # Fallback: Store aggregated record if daily data not available
                     traffic_overview_with_extras = current_traffic_overview.copy()
                     traffic_overview_with_extras["conversions"] = current_conversions
                     traffic_overview_with_extras["revenue"] = current_revenue
-                    supabase.upsert_ga4_traffic_overview(brand_id_val, property_id, period_end_date, traffic_overview_with_extras)
+                    supabase.upsert_ga4_traffic_overview(property_id, period_end_date, traffic_overview_with_extras, client_id=client_id_val, brand_id=scrunch_brand_id)
                     total_synced["traffic_overview"] += 1
                 
                 # Store revenue separately for historical tracking
                 if current_revenue > 0:
-                    supabase.upsert_ga4_revenue(brand_id_val, property_id, period_end_date, current_revenue)
+                    supabase.upsert_ga4_revenue(property_id, period_end_date, current_revenue, client_id=client_id_val, brand_id=scrunch_brand_id)
                 
                 # Store daily conversions summary
                 if current_conversions > 0:
-                    supabase.upsert_ga4_daily_conversions(brand_id_val, property_id, period_end_date, current_conversions)
+                    supabase.upsert_ga4_daily_conversions(property_id, period_end_date, current_conversions, client_id=client_id_val, brand_id=scrunch_brand_id)
                 
                 # Fetch and store additional GA4 data
                 try:
                     # Top pages
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled before fetching top pages for {brand_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled before fetching top pages for {client_name}")
                         return
                     top_pages = await ga4_client.get_top_pages(property_id, period_start_date, period_end_date, limit=50)
                     if sync_job_service.is_cancelled(job_id):
                         logger.info(f"[Job {job_id}] Job cancelled after fetching top pages for {brand_name}")
                         return
                     if top_pages:
-                        count = supabase.upsert_ga4_top_pages(brand_id_val, property_id, period_end_date, top_pages)
+                        count = supabase.upsert_ga4_top_pages(property_id, period_end_date, top_pages, client_id=client_id_val, brand_id=scrunch_brand_id)
                         total_synced["top_pages"] += count
                     
                     # Traffic sources
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled before fetching traffic sources for {brand_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled before fetching traffic sources for {client_name}")
                         return
                     traffic_sources = await ga4_client.get_traffic_sources(property_id, period_start_date, period_end_date)
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled after fetching traffic sources for {brand_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled after fetching traffic sources for {client_name}")
                         return
                     if traffic_sources:
-                        count = supabase.upsert_ga4_traffic_sources(brand_id_val, property_id, period_end_date, traffic_sources)
+                        count = supabase.upsert_ga4_traffic_sources(property_id, period_end_date, traffic_sources, client_id=client_id_val, brand_id=scrunch_brand_id)
                         total_synced["traffic_sources"] += count
                     
                     # Geographic breakdown
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled before fetching geographic data for {brand_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled before fetching geographic data for {client_name}")
                         return
                     geographic = await ga4_client.get_geographic_breakdown(property_id, period_start_date, period_end_date, limit=50)
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled after fetching geographic data for {brand_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled after fetching geographic data for {client_name}")
                         return
                     if geographic:
-                        count = supabase.upsert_ga4_geographic(brand_id_val, property_id, period_end_date, geographic)
+                        count = supabase.upsert_ga4_geographic(property_id, period_end_date, geographic, client_id=client_id_val, brand_id=scrunch_brand_id)
                         total_synced["geographic"] += count
                     
                     # Device breakdown
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled before fetching device data for {brand_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled before fetching device data for {client_name}")
                         return
                     devices = await ga4_client.get_device_breakdown(property_id, period_start_date, period_end_date)
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled after fetching device data for {brand_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled after fetching device data for {client_name}")
                         return
                     if devices:
-                        count = supabase.upsert_ga4_devices(brand_id_val, property_id, period_end_date, devices)
+                        count = supabase.upsert_ga4_devices(property_id, period_end_date, devices, client_id=client_id_val, brand_id=scrunch_brand_id)
                         total_synced["devices"] += count
                     
                     # Conversions (individual events)
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled before fetching conversions for {brand_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled before fetching conversions for {client_name}")
                         return
                     conversions = await ga4_client.get_conversions(property_id, period_start_date, period_end_date)
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled after fetching conversions for {brand_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled after fetching conversions for {client_name}")
                         return
                     if conversions:
-                        count = supabase.upsert_ga4_conversions(brand_id_val, property_id, period_end_date, conversions)
+                        count = supabase.upsert_ga4_conversions(property_id, period_end_date, conversions, client_id=client_id_val, brand_id=scrunch_brand_id)
                         total_synced["conversions"] += count
                     
                     # Realtime snapshot (if enabled)
                     if sync_realtime:
                         if sync_job_service.is_cancelled(job_id):
-                            logger.info(f"[Job {job_id}] Job cancelled before fetching realtime data for {brand_name}")
+                            logger.info(f"[Job {job_id}] Job cancelled before fetching realtime data for {client_name}")
                             return
                         realtime = await ga4_client.get_realtime_snapshot(property_id)
                         if sync_job_service.is_cancelled(job_id):
-                            logger.info(f"[Job {job_id}] Job cancelled after fetching realtime data for {brand_name}")
+                            logger.info(f"[Job {job_id}] Job cancelled after fetching realtime data for {client_name}")
                             return
                         if realtime:
-                            supabase.upsert_ga4_realtime(brand_id_val, property_id, realtime)
+                            supabase.upsert_ga4_realtime(property_id, realtime, client_id=client_id_val, brand_id=scrunch_brand_id)
                             total_synced["realtime"] += 1
                     
                     # Property details (static, only fetch once or periodically)
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled before fetching property details for {brand_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled before fetching property details for {client_name}")
                         return
                     property_details = await ga4_client.get_property_details(property_id)
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled after fetching property details for {brand_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled after fetching property details for {client_name}")
                         return
                     if property_details:
-                        supabase.upsert_ga4_property_details(brand_id_val, property_id, property_details)
+                        supabase.upsert_ga4_property_details(property_id, property_details, client_id=client_id_val, brand_id=scrunch_brand_id)
                     
                 except Exception as e:
-                    logger.warning(f"[Job {job_id}] Error storing additional GA4 data for brand {brand_id_val}: {str(e)}")
+                    logger.warning(f"[Job {job_id}] Error storing additional GA4 data for client {client_id_val}: {str(e)}")
                     # Continue even if some data fails to store
                 
-                brand_results.append({
-                    "brand_id": brand_id_val,
-                    "brand_name": brand_name,
+                client_results.append({
+                    "client_id": client_id_val,
+                    "client_name": client_name,
                     "property_id": property_id,
                     "status": "success",
                     "kpi_snapshot_stored": True,
@@ -633,13 +635,13 @@ async def sync_ga4_background(
                         "realtime": total_synced.get("realtime", 0)
                     }
                 })
-                total_synced["brands"] += 1
+                total_synced["clients"] += 1
                 
             except Exception as e:
-                logger.error(f"[Job {job_id}] Error syncing GA4 for brand {brand_id_val}: {str(e)}")
-                brand_results.append({
-                    "brand_id": brand_id_val,
-                    "brand_name": brand_name,
+                logger.error(f"[Job {job_id}] Error syncing GA4 for client {client_id_val}: {str(e)}")
+                client_results.append({
+                    "client_id": client_id_val,
+                    "client_name": client_name,
                     "status": "error",
                     "error": str(e)
                 })
@@ -649,14 +651,14 @@ async def sync_ga4_background(
             logger.info(f"[Job {job_id}] Job was cancelled, not completing")
             return
         
-        status = "partial" if any(r.get("status") == "error" for r in brand_results) else "success"
+        status = "partial" if any(r.get("status") == "error" for r in client_results) else "success"
         
         result = {
             "status": "success",
-            "message": f"Synced GA4 data for {total_synced['brands']} brand(s)",
+            "message": f"Synced GA4 data for {total_synced['clients']} client(s)",
             "date_range": {"start_date": start_date, "end_date": end_date},
             "total_synced": total_synced,
-            "brand_results": brand_results
+            "client_results": client_results
         }
         
         await sync_job_service.complete_job(job_id, result)
@@ -668,11 +670,11 @@ async def sync_ga4_background(
             user_email=user_email,
             status=status,
             details={
-                "brand_id": brand_id,
+                "client_id": client_id,
                 "start_date": start_date,
                 "end_date": end_date,
                 "total_synced": total_synced,
-                "brand_results": brand_results,
+                "client_results": client_results,
                 "job_id": job_id
             },
             request=request
@@ -688,7 +690,7 @@ async def sync_ga4_background(
             user_email=user_email,
             status="error",
             error_message=str(e),
-            details={"brand_id": brand_id, "job_id": job_id},
+            details={"client_id": client_id, "job_id": job_id},
             request=request
         )
         raise

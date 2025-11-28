@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   Box,
   Dialog,
@@ -24,6 +24,7 @@ import {
   useTheme,
   Grid,
   Alert,
+  Autocomplete,
 } from '@mui/material'
 import {
   Close as CloseIcon,
@@ -35,11 +36,11 @@ import {
   Business as BusinessIcon,
   Campaign as CampaignIcon,
   Warning as WarningIcon,
+  Refresh as RefreshIcon,
 } from '@mui/icons-material'
 import { clientAPI, dataAPI, ga4API } from '../services/api'
 import { useToast } from '../contexts/ToastContext'
 import { getErrorMessage } from '../utils/errorHandler'
-import { useResourceSubscription } from '../hooks/useResourceSubscription'
 
 function ClientManagement({ open, onClose, client }) {
   const theme = useTheme()
@@ -66,27 +67,30 @@ function ClientManagement({ open, onClose, client }) {
   const [saving, setSaving] = useState(false)
   const [brandsLoading, setBrandsLoading] = useState(false)
   const [ga4PropertiesLoading, setGa4PropertiesLoading] = useState(false)
-  const [clientVersion, setClientVersion] = useState(null)
-  const [conflictDialog, setConflictDialog] = useState(null)
-  
-  // Subscribe to client updates
-  useResourceSubscription(
-    'client',
-    client?.id,
-    {
-      showNotifications: true,
-      onUpdate: (message) => {
-        // Reload client data when updated by another user
-        if (open && client) {
-          loadClientData()
-        }
-      }
-    }
-  )
+  const [brandSearchTerm, setBrandSearchTerm] = useState('')
+  const [brandsPage, setBrandsPage] = useState(0)
+  const [hasMoreBrands, setHasMoreBrands] = useState(true)
+  const searchTimeoutRef = useRef(null)
+  const [conflictDialogOpen, setConflictDialogOpen] = useState(false)
+  const [conflictData, setConflictData] = useState(null)
+  const [pendingMappings, setPendingMappings] = useState(null)
 
   useEffect(() => {
     if (open && client) {
       loadClientData()
+    } else if (open && !client) {
+      // Reset state when dialog opens without client
+      setAvailableBrands([])
+      setBrandSearchTerm('')
+      setBrandsPage(0)
+      setHasMoreBrands(true)
+    }
+    
+    // Cleanup timeout on unmount
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current)
+      }
     }
   }, [open, client])
 
@@ -95,67 +99,62 @@ function ClientManagement({ open, onClose, client }) {
     
     setLoading(true)
     try {
-      // Reload client to get latest version
-      const freshClient = await clientAPI.getClient(client.id)
-      
-      // Store version
-      setClientVersion(freshClient.version || 1)
-      
       // Load GA4 property ID
-      setGa4PropertyId(freshClient.ga4_property_id || '')
+      setGa4PropertyId(client.ga4_property_id || '')
       
       // Load Scrunch brand ID
-      setScrunchBrandId(freshClient.scrunch_brand_id || '')
+      setScrunchBrandId(client.scrunch_brand_id || '')
       
       // Load logo URL
-      setLogoUrl(freshClient.logo_url || '')
+      setLogoUrl(client.logo_url || '')
       setLogoFile(null)
       setLogoPreview(null)
       
       // Load theme
       setClientTheme({
-        theme_color: freshClient.theme_color || '',
-        secondary_color: freshClient.secondary_color || '',
-        font_family: freshClient.font_family || '',
+        theme_color: client.theme_color || '',
+        secondary_color: client.secondary_color || '',
+        font_family: client.font_family || '',
       })
       
       // Load whitelabeling fields
-      setReportTitle(freshClient.report_title || '')
-      setCustomCss(freshClient.custom_css || '')
-      setFooterText(freshClient.footer_text || '')
-      setHeaderText(freshClient.header_text || '')
+      setReportTitle(client.report_title || '')
+      setCustomCss(client.custom_css || '')
+      setFooterText(client.footer_text || '')
+      setHeaderText(client.header_text || '')
       
       // Load linked campaigns
       await loadLinkedCampaigns()
       
-      // Load available brands and GA4 properties
+      // Load available GA4 properties
       await loadAvailableOptions()
+      
+      // Load initial brands (first page)
+      await loadBrands('', 0, false)
+      
+      // If client has a scrunch_brand_id, find and set it in autocomplete
+      if (client.scrunch_brand_id) {
+        try {
+          // Search for the brand by loading brands and finding the matching one
+          const brandsResponse = await dataAPI.getBrands(100, 0, '')
+          const matchingBrand = brandsResponse.items?.find(b => b.id === client.scrunch_brand_id)
+          if (matchingBrand) {
+            setBrandSearchTerm(matchingBrand.name || '')
+            // Add to available brands if not already there
+            setAvailableBrands(prev => {
+              const exists = prev.find(b => b.id === matchingBrand.id)
+              return exists ? prev : [matchingBrand, ...prev]
+            })
+          }
+        } catch (err) {
+          console.error('Error loading selected brand:', err)
+        }
+      }
     } catch (err) {
       showError(getErrorMessage(err))
     } finally {
       setLoading(false)
     }
-  }
-  
-  const handleConflict = (error) => {
-    const conflictData = error.response?.data?.detail
-    if (conflictData && conflictData.error === 'conflict') {
-      setConflictDialog({
-        open: true,
-        message: conflictData.message,
-        currentVersion: conflictData.current_version,
-        currentData: conflictData.current_data,
-        onRefresh: () => {
-          setConflictDialog(null)
-          loadClientData()
-        },
-        onCancel: () => {
-          setConflictDialog(null)
-        }
-      })
-      return true
-    }
-    return false
   }
 
   const loadLinkedCampaigns = async () => {
@@ -170,22 +169,66 @@ function ClientManagement({ open, onClose, client }) {
   }
 
   const loadAvailableOptions = async () => {
-    setBrandsLoading(true)
     setGa4PropertiesLoading(true)
     
     try {
-      // Load available brands
-      const brandsResponse = await dataAPI.getBrands(100, 0)
-      setAvailableBrands(brandsResponse.items || [])
-      
       // Load available GA4 properties
       const ga4Response = await ga4API.getProperties()
       setAvailableGA4Properties(ga4Response.items || [])
     } catch (err) {
       showError(getErrorMessage(err))
     } finally {
-      setBrandsLoading(false)
       setGa4PropertiesLoading(false)
+    }
+  }
+
+  const loadBrands = async (searchTerm = '', page = 0, append = false) => {
+    setBrandsLoading(true)
+    try {
+      const limit = 50
+      const offset = page * limit
+      console.log('Loading brands:', { searchTerm, page, offset, limit })
+      const brandsResponse = await dataAPI.getBrands(limit, offset, searchTerm)
+      console.log('Brands response:', brandsResponse)
+      const newBrands = brandsResponse.items || []
+      
+      if (append) {
+        setAvailableBrands(prev => [...prev, ...newBrands])
+      } else {
+        setAvailableBrands(newBrands)
+      }
+      
+      setHasMoreBrands(newBrands.length === limit)
+    } catch (err) {
+      console.error('Error loading brands:', err)
+      showError(getErrorMessage(err))
+    } finally {
+      setBrandsLoading(false)
+    }
+  }
+
+  const handleBrandSearchChange = (event, newValue) => {
+    // This handles when a brand is selected from the dropdown
+    if (newValue === null) {
+      setScrunchBrandId('')
+      setBrandSearchTerm('')
+    } else if (typeof newValue === 'object' && newValue !== null) {
+      // Brand object selected
+      setScrunchBrandId(newValue.id.toString())
+      setBrandSearchTerm(newValue.name || '')
+    }
+  }
+
+  const handleBrandListboxScroll = (event) => {
+    const listboxNode = event.currentTarget
+    if (
+      listboxNode.scrollTop + listboxNode.clientHeight >= listboxNode.scrollHeight - 5 &&
+      hasMoreBrands &&
+      !brandsLoading
+    ) {
+      const nextPage = brandsPage + 1
+      setBrandsPage(nextPage)
+      loadBrands(brandSearchTerm, nextPage, true)
     }
   }
 
@@ -194,26 +237,84 @@ function ClientManagement({ open, onClose, client }) {
     
     setSaving(true)
     try {
-      const response = await clientAPI.updateClientMappings(client.id, {
+      const mappings = {
         ga4_property_id: ga4PropertyId || null,
         scrunch_brand_id: scrunchBrandId ? parseInt(scrunchBrandId) : null,
-        version: clientVersion,
-      })
-      
-      // Update version from response
-      if (response.version) {
-        setClientVersion(response.version)
       }
       
+      // Include version for optimistic locking if available
+      if (client.version !== undefined && client.version !== null) {
+        mappings.version = client.version
+      }
+      
+      await clientAPI.updateClientMappings(client.id, mappings)
       showSuccess('Client mappings updated successfully')
       onClose()
     } catch (err) {
-      if (err.response?.status === 409) {
-        if (!handleConflict(err)) {
-          showError(getErrorMessage(err))
-        }
+      // Check if it's a conflict error (409)
+      if (err.response?.status === 409 && err.response?.data?.detail?.error === 'conflict') {
+        setConflictData(err.response.data.detail)
+        setPendingMappings({
+          ga4_property_id: ga4PropertyId || null,
+          scrunch_brand_id: scrunchBrandId ? parseInt(scrunchBrandId) : null,
+        })
+        setConflictDialogOpen(true)
       } else {
         showError(getErrorMessage(err))
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleConflictRefresh = async () => {
+    setConflictDialogOpen(false)
+    setConflictData(null)
+    setPendingMappings(null)
+    // Fetch latest client data from server
+    if (!client) return
+    try {
+      const updatedClient = await clientAPI.getClient(client.id)
+      // Update form fields with latest values
+      if (updatedClient) {
+        setGa4PropertyId(updatedClient.ga4_property_id || '')
+        setScrunchBrandId(updatedClient.scrunch_brand_id || '')
+      }
+      // Reload all client data
+      await loadClientData()
+    } catch (err) {
+      showError(getErrorMessage(err))
+      // Still reload what we have
+      await loadClientData()
+    }
+  }
+
+  const handleConflictOverwrite = async () => {
+    if (!client || !pendingMappings) return
+    
+    setSaving(true)
+    try {
+      // Overwrite with current values, using the latest version from conflict data
+      const mappings = {
+        ...pendingMappings,
+        version: conflictData?.current_version, // Use the current version from conflict
+      }
+      
+      await clientAPI.updateClientMappings(client.id, mappings)
+      showSuccess('Client mappings updated successfully')
+      setConflictDialogOpen(false)
+      setConflictData(null)
+      setPendingMappings(null)
+      onClose()
+    } catch (err) {
+      // If still a conflict, show error
+      if (err.response?.status === 409) {
+        setConflictData(err.response.data.detail)
+      } else {
+        showError(getErrorMessage(err))
+        setConflictDialogOpen(false)
+        setConflictData(null)
+        setPendingMappings(null)
       }
     } finally {
       setSaving(false)
@@ -276,7 +377,7 @@ function ClientManagement({ open, onClose, client }) {
     
     setSaving(true)
     try {
-      const response = await clientAPI.updateClientTheme(client.id, {
+      await clientAPI.updateClientTheme(client.id, {
         theme_color: clientTheme.theme_color,
         secondary_color: clientTheme.secondary_color,
         font_family: clientTheme.font_family,
@@ -285,24 +386,11 @@ function ClientManagement({ open, onClose, client }) {
         custom_css: customCss,
         footer_text: footerText,
         header_text: headerText,
-        version: clientVersion,
       })
-      
-      // Update version from response
-      if (response.version) {
-        setClientVersion(response.version)
-      }
-      
       showSuccess('Client theme updated successfully')
       onClose()
     } catch (err) {
-      if (err.response?.status === 409) {
-        if (!handleConflict(err)) {
-          showError(getErrorMessage(err))
-        }
-      } else {
-        showError(getErrorMessage(err))
-      }
+      showError(getErrorMessage(err))
     } finally {
       setSaving(false)
     }
@@ -331,6 +419,7 @@ function ClientManagement({ open, onClose, client }) {
   if (!client) return null
 
   return (
+    <>
     <Dialog
       open={open}
       onClose={onClose}
@@ -420,24 +509,63 @@ function ClientManagement({ open, onClose, client }) {
                 </Grid>
                 
                 <Grid item xs={12}>
-                  <FormControl fullWidth>
-                    <InputLabel>Scrunch Brand</InputLabel>
-                    <Select
-                      value={scrunchBrandId || ''}
-                      onChange={(e) => setScrunchBrandId(e.target.value)}
-                      label="Scrunch Brand"
-                      disabled={brandsLoading || saving}
-                    >
-                      <MenuItem value="">
-                        <em>None</em>
-                      </MenuItem>
-                      {availableBrands.map((brand) => (
-                        <MenuItem key={brand.id} value={brand.id}>
-                          {brand.name} (ID: {brand.id})
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
+                  <Autocomplete
+                    options={availableBrands}
+                    getOptionLabel={(option) => {
+                      if (typeof option === 'string') return option
+                      return option.name || `Brand ${option.id}`
+                    }}
+                    value={availableBrands.find(b => b.id.toString() === scrunchBrandId) || null}
+                    onChange={handleBrandSearchChange}
+                    onInputChange={(event, newInputValue, reason) => {
+                      // Handle search input changes
+                      if (reason === 'input') {
+                        setBrandSearchTerm(newInputValue)
+                        setBrandsPage(0)
+                        // Clear previous timeout
+                        if (searchTimeoutRef.current) {
+                          clearTimeout(searchTimeoutRef.current)
+                        }
+                        // Debounce the search
+                        searchTimeoutRef.current = setTimeout(() => {
+                          loadBrands(newInputValue, 0, false)
+                        }, 300)
+                      }
+                    }}
+                    inputValue={brandSearchTerm}
+                    loading={brandsLoading}
+                    disabled={saving}
+                    filterOptions={(x) => x} // Disable client-side filtering, we do it server-side
+                    ListboxProps={{
+                      onScroll: handleBrandListboxScroll,
+                      style: { maxHeight: 300 }
+                    }}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="Scrunch Brand"
+                        placeholder="Search brands..."
+                        InputProps={{
+                          ...params.InputProps,
+                          endAdornment: (
+                            <>
+                              {brandsLoading ? <CircularProgress color="inherit" size={20} /> : null}
+                              {params.InputProps.endAdornment}
+                            </>
+                          ),
+                        }}
+                      />
+                    )}
+                    renderOption={(props, option) => (
+                      <Box component="li" {...props} key={option.id}>
+                        <Typography variant="body2">
+                          {option.name} {option.id ? `(ID: ${option.id})` : ''}
+                        </Typography>
+                      </Box>
+                    )}
+                    isOptionEqualToValue={(option, value) => option.id === value.id}
+                    noOptionsText={brandsLoading ? 'Loading...' : 'No brands found'}
+                  />
                 </Grid>
               </Grid>
 
@@ -799,49 +927,169 @@ function ClientManagement({ open, onClose, client }) {
         </Button>
       </DialogActions>
     </Dialog>
-    
+
     {/* Conflict Dialog */}
     <Dialog
-      open={conflictDialog?.open || false}
-      onClose={() => setConflictDialog(null)}
+      open={conflictDialogOpen}
+      onClose={() => {
+        setConflictDialogOpen(false)
+        setConflictData(null)
+        setPendingMappings(null)
+      }}
       maxWidth="sm"
       fullWidth
+      PaperProps={{
+        sx: {
+          borderRadius: 2,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+        },
+      }}
     >
-      <DialogTitle>
+      <DialogTitle
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          pb: 1,
+        }}
+      >
         <Box display="flex" alignItems="center" gap={1}>
-          <WarningIcon color="warning" />
-          Conflict Detected
+          <WarningIcon sx={{ color: theme.palette.warning.main }} />
+          <Typography variant="h6" fontWeight={600}>
+            Conflict Detected
+          </Typography>
         </Box>
+        <IconButton
+          onClick={() => {
+            setConflictDialogOpen(false)
+            setConflictData(null)
+            setPendingMappings(null)
+          }}
+          size="small"
+          sx={{
+            color: 'text.secondary',
+            '&:hover': {
+              bgcolor: alpha(theme.palette.error.main, 0.1),
+              color: theme.palette.error.main,
+            },
+          }}
+        >
+          <CloseIcon />
+        </IconButton>
       </DialogTitle>
+
       <DialogContent>
         <Alert severity="warning" sx={{ mb: 2 }}>
-          {conflictDialog?.message || 'This resource was modified by another user.'}
-        </Alert>
-        {conflictDialog?.currentData?.last_modified_by && (
-          <Typography variant="body2" color="text.secondary" paragraph>
-            Last modified by: <strong>{conflictDialog.currentData.last_modified_by}</strong>
+          <Typography variant="body2" fontWeight={600} mb={0.5}>
+            {conflictData?.message || 'Resource was modified by another user.'}
           </Typography>
+        </Alert>
+
+        {conflictData?.current_data && (
+          <Box mb={3}>
+            <Typography variant="subtitle2" fontWeight={600} mb={1}>
+              Current Values:
+            </Typography>
+            <Box
+              sx={{
+                p: 2,
+                borderRadius: 1,
+                bgcolor: alpha(theme.palette.info.main, 0.05),
+                border: `1px solid ${theme.palette.divider}`,
+              }}
+            >
+              <Typography variant="body2" mb={1}>
+                <strong>GA4 Property ID:</strong>{' '}
+                {conflictData.current_data.ga4_property_id || 'None'}
+              </Typography>
+              <Typography variant="body2" mb={1}>
+                <strong>Scrunch Brand ID:</strong>{' '}
+                {conflictData.current_data.scrunch_brand_id || 'None'}
+              </Typography>
+              {conflictData.current_data.last_modified_by && (
+                <Typography variant="body2" color="text.secondary">
+                  <strong>Last modified by:</strong>{' '}
+                  {conflictData.current_data.last_modified_by}
+                </Typography>
+              )}
+            </Box>
+          </Box>
         )}
+
+        {pendingMappings && (
+          <Box mb={3}>
+            <Typography variant="subtitle2" fontWeight={600} mb={1}>
+              Your Changes:
+            </Typography>
+            <Box
+              sx={{
+                p: 2,
+                borderRadius: 1,
+                bgcolor: alpha(theme.palette.warning.main, 0.05),
+                border: `1px solid ${theme.palette.divider}`,
+              }}
+            >
+              <Typography variant="body2" mb={1}>
+                <strong>GA4 Property ID:</strong>{' '}
+                {pendingMappings.ga4_property_id || 'None'}
+              </Typography>
+              <Typography variant="body2">
+                <strong>Scrunch Brand ID:</strong>{' '}
+                {pendingMappings.scrunch_brand_id || 'None'}
+              </Typography>
+            </Box>
+          </Box>
+        )}
+
         <Typography variant="body2" color="text.secondary">
-          Current version: <strong>{conflictDialog?.currentVersion || 'Unknown'}</strong>
-        </Typography>
-        <Typography variant="body2" sx={{ mt: 2 }}>
-          Would you like to refresh and see the latest changes?
+          Would you like to refresh and see the current values, or overwrite with your changes?
         </Typography>
       </DialogContent>
-      <DialogActions>
-        <Button onClick={() => setConflictDialog(null)}>
+
+      <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
+        <Button
+          onClick={() => {
+            setConflictDialogOpen(false)
+            setConflictData(null)
+            setPendingMappings(null)
+          }}
+          sx={{
+            borderRadius: 1.5,
+            textTransform: 'none',
+            fontWeight: 600,
+          }}
+        >
           Cancel
         </Button>
         <Button
-          variant="contained"
-          color="primary"
-          onClick={conflictDialog?.onRefresh}
+          onClick={handleConflictRefresh}
+          variant="outlined"
+          startIcon={<RefreshIcon />}
+          sx={{
+            borderRadius: 1.5,
+            textTransform: 'none',
+            fontWeight: 600,
+          }}
         >
           Refresh
         </Button>
+        <Button
+          onClick={handleConflictOverwrite}
+          variant="contained"
+          color="warning"
+          disabled={saving}
+          startIcon={saving ? <CircularProgress size={16} /> : <CheckCircleIcon />}
+          sx={{
+            borderRadius: 1.5,
+            textTransform: 'none',
+            fontWeight: 600,
+          }}
+        >
+          {saving ? 'Overwriting...' : 'Overwrite'}
+        </Button>
       </DialogActions>
     </Dialog>
+    </>
   )
 }
 

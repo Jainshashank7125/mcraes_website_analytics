@@ -51,8 +51,8 @@ async def create_chat_completion(
         result = await openai_client.create_chat_completion(
             messages=messages,
             model=request.model,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
+            # temperature=request.temperature,
+            # max_tokens=request.max_tokens,
             stream=request.stream
         )
         
@@ -159,6 +159,12 @@ class MetricReviewRequest(BaseModel):
     start_date: Optional[str] = Field(None, description="Start date (YYYY-MM-DD)")
     end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
 
+class OverallOverviewRequest(BaseModel):
+    client_id: Optional[int] = Field(None, description="Client ID to analyze (client-centric)")
+    brand_id: Optional[int] = Field(None, description="Brand ID to analyze (fallback if client_id not provided)")
+    start_date: Optional[str] = Field(None, description="Start date (YYYY-MM-DD)")
+    end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
+
 @router.post("/openai/metrics/review")
 @handle_api_errors(context="generating metric review")
 async def generate_metric_review(
@@ -248,7 +254,7 @@ Metrics Data:
 
 Date Range: {dashboard_data.get('date_range', {}).get('start_date', 'N/A')} to {dashboard_data.get('date_range', {}).get('end_date', 'N/A')}
 
-Provide a clear, professional review (2-3 paragraphs) that highlights what's good and performing well. Be specific about the metrics and their significance. Use a positive, analytical tone."""
+Provide a clear, professional review (4-5 bullet points) that highlights what's good and performing well. Be specific about the metrics and their significance. Use a positive, analytical tone."""
         
         # Generate review using OpenAI
         messages = [
@@ -264,9 +270,7 @@ Provide a clear, professional review (2-3 paragraphs) that highlights what's goo
         
         result = await openai_client.create_chat_completion(
             messages=messages,
-            model="gpt-4o-mini",
-            temperature=0.7,
-            max_tokens=500
+            model="gpt-5-mini",
         )
         
         # Extract the review text
@@ -290,6 +294,156 @@ Provide a clear, professional review (2-3 paragraphs) that highlights what's goo
         logger.error(f"Error generating metric review: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating metric review: {str(e)}")
 
+@router.post("/openai/metrics/overview")
+@handle_api_errors(context="generating overall metrics overview")
+async def generate_overall_overview(
+    request: OverallOverviewRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Generate an AI-powered overall overview of all metrics from all data sources
+    
+    Analyzes all KPIs from GA4, Agency Analytics, and Scrunch together
+    to provide a comprehensive overview of overall performance.
+    """
+    try:
+        if not request.client_id and not request.brand_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Either client_id or brand_id must be provided"
+            )
+        
+        # Import the dashboard function to fetch KPIs
+        from app.api.data import get_reporting_dashboard, get_reporting_dashboard_by_client
+        
+        # Fetch dashboard data to get all KPIs
+        if request.client_id:
+            # Use client-based endpoint
+            dashboard_data = await get_reporting_dashboard_by_client(
+                request.client_id,
+                request.start_date,
+                request.end_date
+            )
+        else:
+            # Use brand-based endpoint
+            dashboard_data = await get_reporting_dashboard(
+                request.brand_id,
+                request.start_date,
+                request.end_date
+            )
+        
+        if not dashboard_data.get("kpis"):
+            raise HTTPException(
+                status_code=404,
+                detail=f"No KPIs found for {'client' if request.client_id else 'brand'} {request.client_id or request.brand_id}"
+            )
+        
+        # Get all KPIs grouped by source
+        all_kpis = dashboard_data.get("kpis", {})
+        kpis_by_source = {
+            "GA4": [],
+            "AgencyAnalytics": [],
+            "Scrunch": []
+        }
+        
+        for kpi_key, kpi_data in all_kpis.items():
+            source = kpi_data.get("source", "Unknown")
+            if source in kpis_by_source:
+                metric_info = {
+                    "metric": kpi_data.get("label", kpi_key),
+                    "value": kpi_data.get("value"),
+                    "change": kpi_data.get("change"),
+                    "format": kpi_data.get("format", "number"),
+                    "source": source
+                }
+                kpis_by_source[source].append(metric_info)
+        
+        # Prepare overall metrics summary
+        all_metrics = []
+        for source, metrics in kpis_by_source.items():
+            all_metrics.extend(metrics)
+        
+        if not all_metrics:
+            raise HTTPException(
+                status_code=404,
+                detail="No metrics found to analyze"
+            )
+        
+        # Create comprehensive prompt for OpenAI
+        date_range = dashboard_data.get('date_range', {})
+        start_date_str = date_range.get('start_date', 'N/A')
+        end_date_str = date_range.get('end_date', 'N/A')
+        
+        # Format metrics by source for better context
+        metrics_by_source_text = ""
+        for source, metrics in kpis_by_source.items():
+            if metrics:
+                source_name = {
+                    "GA4": "Google Analytics 4 (Web Analytics)",
+                    "AgencyAnalytics": "Agency Analytics (SEO Rankings)",
+                    "Scrunch": "Scrunch AI (Brand Mentions & Sentiment)"
+                }.get(source, source)
+                metrics_by_source_text += f"\n\n{source_name} Metrics:\n"
+                metrics_by_source_text += format_metrics_for_prompt(metrics)
+        
+        prompt = f"""You are an expert analytics consultant providing a comprehensive overview of all marketing and analytics metrics for a brand.
+
+Analyze the following metrics from all data sources and provide a holistic overview focusing on:
+1. Overall Performance Summary - What's performing exceptionally well across all channels
+2. Key Highlights - Top performing metrics and positive trends
+3. Cross-Channel Insights - How different data sources complement each other
+4. Notable Changes - Significant improvements or trends from the previous period
+5. Strategic Recommendations - High-level insights for continued success
+
+{metrics_by_source_text}
+
+Date Range: {start_date_str} to {end_date_str}
+
+Provide a comprehensive, professional overview (6-8 bullet points) that synthesizes insights across all data sources. Be specific about metrics and their business significance. Use a positive, analytical tone that highlights strengths and opportunities."""
+        
+        # Generate overview using OpenAI
+        messages = [
+            {
+                "role": "system",
+                "content": "You are an expert analytics consultant who provides comprehensive, insightful overviews of marketing and analytics metrics across multiple data sources. Focus on synthesizing insights from web analytics, SEO, and brand mentions to provide a holistic view of performance."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+        
+        result = await openai_client.create_chat_completion(
+            messages=messages,
+            model="gpt-5-mini",
+            # temperature=0.7,
+            # max_tokens=800
+        )
+        
+        # Extract the overview text
+        overview_text = ""
+        if result.get("choices") and len(result["choices"]) > 0:
+            overview_text = result["choices"][0].get("message", {}).get("content", "")
+        
+        return {
+            "client_id": request.client_id,
+            "brand_id": request.brand_id,
+            "brand_name": dashboard_data.get("brand_name"),
+            "date_range": date_range,
+            "total_metrics_analyzed": len(all_metrics),
+            "metrics_by_source": {
+                source: len(metrics) for source, metrics in kpis_by_source.items()
+            },
+            "overview": overview_text,
+            "metrics": all_metrics
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating overall overview: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generating overall overview: {str(e)}")
+
 def format_metrics_for_prompt(metrics: List[Dict]) -> str:
     """Format metrics data for OpenAI prompt"""
     formatted = []
@@ -303,9 +457,29 @@ def format_metrics_for_prompt(metrics: List[Dict]) -> str:
             value_str = f"{metric['value']:,}" if isinstance(metric['value'], (int, float)) else str(metric['value'])
         
         change_str = ""
-        if metric.get("change") is not None:
-            change_direction = "↑" if metric["change"] > 0 else "↓" if metric["change"] < 0 else "→"
-            change_str = f" ({change_direction} {abs(metric['change']):.1f}% vs previous period)"
+        change_value = metric.get("change")
+        if change_value is not None:
+            # Handle case where change might be a dict or a number
+            if isinstance(change_value, dict):
+                # If it's a dict, try to extract a numeric value
+                # Common patterns: {"value": X}, {"percent": X}, or just use the first numeric value
+                numeric_change = None
+                for key in ["value", "percent", "percentage", "change"]:
+                    if key in change_value and isinstance(change_value[key], (int, float)):
+                        numeric_change = change_value[key]
+                        break
+                # If no numeric value found in dict, try to find any numeric value
+                if numeric_change is None:
+                    for val in change_value.values():
+                        if isinstance(val, (int, float)):
+                            numeric_change = val
+                            break
+                change_value = numeric_change
+            
+            # Only format if we have a valid numeric value
+            if isinstance(change_value, (int, float)):
+                change_direction = "↑" if change_value > 0 else "↓" if change_value < 0 else "→"
+                change_str = f" ({change_direction} {abs(change_value):.1f}% vs previous period)"
         
         formatted.append(f"- {metric['metric']}: {value_str}{change_str}")
     

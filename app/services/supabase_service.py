@@ -220,11 +220,13 @@ class SupabaseService:
             logger.error(f"Error getting GA4 traffic overview from stored data: {str(e)}")
             return None
     
-    def upsert_ga4_traffic_overview(self, brand_id: int, property_id: str, date: str, data: Dict) -> int:
-        """Upsert GA4 traffic overview data"""
+    def upsert_ga4_traffic_overview(self, property_id: str, date: str, data: Dict, client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
+        """Upsert GA4 traffic overview data - now uses client_id (with brand_id for backward compatibility)"""
+        if client_id is None and brand_id is None:
+            raise ValueError("Either client_id or brand_id must be provided")
+        
         try:
             record = {
-                "brand_id": brand_id,
                 "property_id": property_id,
                 "date": date,
                 "users": data.get("users", 0),
@@ -243,22 +245,51 @@ class SupabaseService:
                 "updated_at": datetime.now().isoformat()
             }
             
-            # Check if record exists
-            existing = self.client.table("ga4_traffic_overview").select("id").eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).limit(1).execute()
+            # Add client_id if provided, otherwise use brand_id for backward compatibility
+            if client_id is not None:
+                record["client_id"] = client_id
+                entity_id = client_id
+                entity_type = "client"
+            if brand_id is not None:
+                record["brand_id"] = brand_id
+                if client_id is None:
+                    entity_id = brand_id
+                    entity_type = "brand"
+            
+            # Check if record exists - use client_id if available, otherwise brand_id
+            query = self.client.table("ga4_traffic_overview").select("id").eq("property_id", property_id).eq("date", date)
+            if client_id is not None:
+                query = query.eq("client_id", client_id)
+            else:
+                query = query.eq("brand_id", brand_id)
+            existing = query.limit(1).execute()
+            
+            # Build update query
+            update_query = self.client.table("ga4_traffic_overview").update(record).eq("property_id", property_id).eq("date", date)
+            if client_id is not None:
+                update_query = update_query.eq("client_id", client_id)
+            else:
+                update_query = update_query.eq("brand_id", brand_id)
             
             if existing.data and len(existing.data) > 0:
-                result = self.client.table("ga4_traffic_overview").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).execute()
-                logger.info(f"Updated GA4 traffic overview for brand {brand_id}, property {property_id}, date {date}")
+                result = update_query.execute()
+                logger.info(f"Updated GA4 traffic overview for {entity_type} {entity_id}, property {property_id}, date {date}")
             else:
                 result = self.client.table("ga4_traffic_overview").insert(record).execute()
-                logger.info(f"Inserted GA4 traffic overview for brand {brand_id}, property {property_id}, date {date}")
+                logger.info(f"Inserted GA4 traffic overview for {entity_type} {entity_id}, property {property_id}, date {date}")
             return 1
         except Exception as e:
             error_str = str(e)
             if "23505" in error_str or "duplicate key" in error_str.lower() or "unique constraint" in error_str.lower():
                 try:
-                    result = self.client.table("ga4_traffic_overview").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).execute()
-                    logger.info(f"Updated existing GA4 traffic overview for brand {brand_id}, property {property_id}, date {date}")
+                    # Build update query for conflict resolution
+                    update_query = self.client.table("ga4_traffic_overview").update(record).eq("property_id", property_id).eq("date", date)
+                    if client_id is not None:
+                        update_query = update_query.eq("client_id", client_id)
+                    else:
+                        update_query = update_query.eq("brand_id", brand_id)
+                    result = update_query.execute()
+                    logger.info(f"Updated existing GA4 traffic overview for {entity_type} {entity_id}, property {property_id}, date {date}")
                     return 1
                 except Exception as update_error:
                     logger.error(f"Error updating GA4 traffic overview after conflict: {str(update_error)}")
@@ -266,22 +297,31 @@ class SupabaseService:
             logger.error(f"Error upserting GA4 traffic overview: {error_str}")
             raise
     
-    def upsert_ga4_top_pages(self, brand_id: int, property_id: str, date: str, pages: List[Dict]) -> int:
-        """Upsert GA4 top pages data"""
+    def upsert_ga4_top_pages(self, property_id: str, date: str, pages: List[Dict], client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
+        """Upsert GA4 top pages data - now uses client_id (with brand_id for backward compatibility)"""
+        if client_id is None and brand_id is None:
+            raise ValueError("Either client_id or brand_id must be provided")
         if not pages:
             return 0
+        
+        entity_id = client_id if client_id is not None else brand_id
+        entity_type = "client" if client_id is not None else "brand"
         
         # Delete existing records for this date first, then insert new ones
         # This ensures we don't have stale data from previous syncs
         try:
-            self.client.table("ga4_top_pages").delete().eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).execute()
+            delete_query = self.client.table("ga4_top_pages").delete().eq("property_id", property_id).eq("date", date)
+            if client_id is not None:
+                delete_query = delete_query.eq("client_id", client_id)
+            else:
+                delete_query = delete_query.eq("brand_id", brand_id)
+            delete_query.execute()
         except Exception as delete_error:
             logger.warning(f"Error deleting existing top pages (may not exist): {str(delete_error)}")
         
         records = []
         for idx, page in enumerate(pages):
-            records.append({
-                "brand_id": brand_id,
+            record = {
                 "property_id": property_id,
                 "date": date,
                 "page_path": page.get("pagePath", ""),
@@ -290,7 +330,12 @@ class SupabaseService:
                 "avg_session_duration": page.get("avgSessionDuration", 0),
                 "rank": idx + 1,
                 "updated_at": datetime.now().isoformat()
-            })
+            }
+            if client_id is not None:
+                record["client_id"] = client_id
+            if brand_id is not None:
+                record["brand_id"] = brand_id
+            records.append(record)
         
         try:
             # Insert in batches
@@ -301,7 +346,7 @@ class SupabaseService:
                 result = self.client.table("ga4_top_pages").insert(batch).execute()
                 total_inserted += len(batch)
             
-            logger.info(f"Upserted {total_inserted} GA4 top pages for brand {brand_id}, property {property_id}, date {date}")
+            logger.info(f"Upserted {total_inserted} GA4 top pages for {entity_type} {entity_id}, property {property_id}, date {date}")
             return total_inserted
         except Exception as e:
             error_str = str(e)
@@ -310,34 +355,55 @@ class SupabaseService:
                 total_upserted = 0
                 for record in records:
                     try:
-                        existing = self.client.table("ga4_top_pages").select("id").eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).eq("page_path", record["page_path"]).limit(1).execute()
+                        query = self.client.table("ga4_top_pages").select("id").eq("property_id", property_id).eq("date", date).eq("page_path", record["page_path"])
+                        if client_id is not None:
+                            query = query.eq("client_id", client_id)
+                        else:
+                            query = query.eq("brand_id", brand_id)
+                        existing = query.limit(1).execute()
+                        
+                        update_query = self.client.table("ga4_top_pages").update(record).eq("property_id", property_id).eq("date", date).eq("page_path", record["page_path"])
+                        if client_id is not None:
+                            update_query = update_query.eq("client_id", client_id)
+                        else:
+                            update_query = update_query.eq("brand_id", brand_id)
+                        
                         if existing.data:
-                            self.client.table("ga4_top_pages").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).eq("page_path", record["page_path"]).execute()
+                            update_query.execute()
                         else:
                             self.client.table("ga4_top_pages").insert(record).execute()
                         total_upserted += 1
                     except Exception:
                         pass
-                logger.info(f"Upserted {total_upserted} GA4 top pages (individual) for brand {brand_id}, property {property_id}, date {date}")
+                logger.info(f"Upserted {total_upserted} GA4 top pages (individual) for {entity_type} {entity_id}, property {property_id}, date {date}")
                 return total_upserted
             logger.error(f"Error upserting GA4 top pages: {error_str}")
             raise
     
-    def upsert_ga4_traffic_sources(self, brand_id: int, property_id: str, date: str, sources: List[Dict]) -> int:
-        """Upsert GA4 traffic sources data"""
+    def upsert_ga4_traffic_sources(self, property_id: str, date: str, sources: List[Dict], client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
+        """Upsert GA4 traffic sources data - now uses client_id (with brand_id for backward compatibility)"""
+        if client_id is None and brand_id is None:
+            raise ValueError("Either client_id or brand_id must be provided")
         if not sources:
             return 0
         
+        entity_id = client_id if client_id is not None else brand_id
+        entity_type = "client" if client_id is not None else "brand"
+        
         # Delete existing records for this date first
         try:
-            self.client.table("ga4_traffic_sources").delete().eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).execute()
+            delete_query = self.client.table("ga4_traffic_sources").delete().eq("property_id", property_id).eq("date", date)
+            if client_id is not None:
+                delete_query = delete_query.eq("client_id", client_id)
+            else:
+                delete_query = delete_query.eq("brand_id", brand_id)
+            delete_query.execute()
         except Exception as delete_error:
             logger.warning(f"Error deleting existing traffic sources (may not exist): {str(delete_error)}")
         
         records = []
         for source in sources:
-            records.append({
-                "brand_id": brand_id,
+            record = {
                 "property_id": property_id,
                 "date": date,
                 "source": source.get("source", ""),
@@ -345,11 +411,16 @@ class SupabaseService:
                 "users": source.get("users", 0),
                 "bounce_rate": source.get("bounceRate", 0),
                 "updated_at": datetime.now().isoformat()
-            })
+            }
+            if client_id is not None:
+                record["client_id"] = client_id
+            if brand_id is not None:
+                record["brand_id"] = brand_id
+            records.append(record)
         
         try:
             result = self.client.table("ga4_traffic_sources").insert(records).execute()
-            logger.info(f"Upserted {len(records)} GA4 traffic sources for brand {brand_id}, property {property_id}, date {date}")
+            logger.info(f"Upserted {len(records)} GA4 traffic sources for {entity_type} {entity_id}, property {property_id}, date {date}")
             return len(records)
         except Exception as e:
             error_str = str(e)
@@ -358,45 +429,71 @@ class SupabaseService:
                 total_upserted = 0
                 for record in records:
                     try:
-                        existing = self.client.table("ga4_traffic_sources").select("id").eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).eq("source", record["source"]).limit(1).execute()
+                        query = self.client.table("ga4_traffic_sources").select("id").eq("property_id", property_id).eq("date", date).eq("source", record["source"])
+                        if client_id is not None:
+                            query = query.eq("client_id", client_id)
+                        else:
+                            query = query.eq("brand_id", brand_id)
+                        existing = query.limit(1).execute()
+                        
+                        update_query = self.client.table("ga4_traffic_sources").update(record).eq("property_id", property_id).eq("date", date).eq("source", record["source"])
+                        if client_id is not None:
+                            update_query = update_query.eq("client_id", client_id)
+                        else:
+                            update_query = update_query.eq("brand_id", brand_id)
+                        
                         if existing.data:
-                            self.client.table("ga4_traffic_sources").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).eq("source", record["source"]).execute()
+                            update_query.execute()
                         else:
                             self.client.table("ga4_traffic_sources").insert(record).execute()
                         total_upserted += 1
                     except Exception:
                         pass
-                logger.info(f"Upserted {total_upserted} GA4 traffic sources (individual) for brand {brand_id}, property {property_id}, date {date}")
+                logger.info(f"Upserted {total_upserted} GA4 traffic sources (individual) for {entity_type} {entity_id}, property {property_id}, date {date}")
                 return total_upserted
             logger.error(f"Error upserting GA4 traffic sources: {error_str}")
             raise
     
-    def upsert_ga4_geographic(self, brand_id: int, property_id: str, date: str, geographic: List[Dict]) -> int:
-        """Upsert GA4 geographic data"""
+    def upsert_ga4_geographic(self, property_id: str, date: str, geographic: List[Dict], client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
+        """Upsert GA4 geographic data - now uses client_id (with brand_id for backward compatibility)"""
+        if client_id is None and brand_id is None:
+            raise ValueError("Either client_id or brand_id must be provided")
         if not geographic:
             return 0
         
+        entity_id = client_id if client_id is not None else brand_id
+        entity_type = "client" if client_id is not None else "brand"
+        
         # Delete existing records for this date first
         try:
-            self.client.table("ga4_geographic").delete().eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).execute()
+            delete_query = self.client.table("ga4_geographic").delete().eq("property_id", property_id).eq("date", date)
+            if client_id is not None:
+                delete_query = delete_query.eq("client_id", client_id)
+            else:
+                delete_query = delete_query.eq("brand_id", brand_id)
+            delete_query.execute()
         except Exception as delete_error:
             logger.warning(f"Error deleting existing geographic data (may not exist): {str(delete_error)}")
         
         records = []
         for geo in geographic:
-            records.append({
-                "brand_id": brand_id,
+            record = {
                 "property_id": property_id,
                 "date": date,
                 "country": geo.get("country", ""),
                 "users": geo.get("users", 0),
                 "sessions": geo.get("sessions", 0),
                 "updated_at": datetime.now().isoformat()
-            })
+            }
+            if client_id is not None:
+                record["client_id"] = client_id
+            if brand_id is not None:
+                record["brand_id"] = brand_id
+            records.append(record)
         
         try:
             result = self.client.table("ga4_geographic").insert(records).execute()
-            logger.info(f"Upserted {len(records)} GA4 geographic records for brand {brand_id}, property {property_id}, date {date}")
+            logger.info(f"Upserted {len(records)} GA4 geographic records for {entity_type} {entity_id}, property {property_id}, date {date}")
             return len(records)
         except Exception as e:
             error_str = str(e)
@@ -405,34 +502,55 @@ class SupabaseService:
                 total_upserted = 0
                 for record in records:
                     try:
-                        existing = self.client.table("ga4_geographic").select("id").eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).eq("country", record["country"]).limit(1).execute()
+                        query = self.client.table("ga4_geographic").select("id").eq("property_id", property_id).eq("date", date).eq("country", record["country"])
+                        if client_id is not None:
+                            query = query.eq("client_id", client_id)
+                        else:
+                            query = query.eq("brand_id", brand_id)
+                        existing = query.limit(1).execute()
+                        
+                        update_query = self.client.table("ga4_geographic").update(record).eq("property_id", property_id).eq("date", date).eq("country", record["country"])
+                        if client_id is not None:
+                            update_query = update_query.eq("client_id", client_id)
+                        else:
+                            update_query = update_query.eq("brand_id", brand_id)
+                        
                         if existing.data:
-                            self.client.table("ga4_geographic").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).eq("country", record["country"]).execute()
+                            update_query.execute()
                         else:
                             self.client.table("ga4_geographic").insert(record).execute()
                         total_upserted += 1
                     except Exception:
                         pass
-                logger.info(f"Upserted {total_upserted} GA4 geographic records (individual) for brand {brand_id}, property {property_id}, date {date}")
+                logger.info(f"Upserted {total_upserted} GA4 geographic records (individual) for {entity_type} {entity_id}, property {property_id}, date {date}")
                 return total_upserted
             logger.error(f"Error upserting GA4 geographic: {error_str}")
             raise
     
-    def upsert_ga4_devices(self, brand_id: int, property_id: str, date: str, devices: List[Dict]) -> int:
-        """Upsert GA4 devices data"""
+    def upsert_ga4_devices(self, property_id: str, date: str, devices: List[Dict], client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
+        """Upsert GA4 devices data - now uses client_id (with brand_id for backward compatibility)"""
+        if client_id is None and brand_id is None:
+            raise ValueError("Either client_id or brand_id must be provided")
         if not devices:
             return 0
         
+        entity_id = client_id if client_id is not None else brand_id
+        entity_type = "client" if client_id is not None else "brand"
+        
         # Delete existing records for this date first
         try:
-            self.client.table("ga4_devices").delete().eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).execute()
+            delete_query = self.client.table("ga4_devices").delete().eq("property_id", property_id).eq("date", date)
+            if client_id is not None:
+                delete_query = delete_query.eq("client_id", client_id)
+            else:
+                delete_query = delete_query.eq("brand_id", brand_id)
+            delete_query.execute()
         except Exception as delete_error:
             logger.warning(f"Error deleting existing devices data (may not exist): {str(delete_error)}")
         
         records = []
         for device in devices:
-            records.append({
-                "brand_id": brand_id,
+            record = {
                 "property_id": property_id,
                 "date": date,
                 "device_category": device.get("deviceCategory", ""),
@@ -441,11 +559,16 @@ class SupabaseService:
                 "sessions": device.get("sessions", 0),
                 "bounce_rate": device.get("bounceRate", 0),
                 "updated_at": datetime.now().isoformat()
-            })
+            }
+            if client_id is not None:
+                record["client_id"] = client_id
+            if brand_id is not None:
+                record["brand_id"] = brand_id
+            records.append(record)
         
         try:
             result = self.client.table("ga4_devices").insert(records).execute()
-            logger.info(f"Upserted {len(records)} GA4 devices for brand {brand_id}, property {property_id}, date {date}")
+            logger.info(f"Upserted {len(records)} GA4 devices for {entity_type} {entity_id}, property {property_id}, date {date}")
             return len(records)
         except Exception as e:
             error_str = str(e)
@@ -454,45 +577,71 @@ class SupabaseService:
                 total_upserted = 0
                 for record in records:
                     try:
-                        existing = self.client.table("ga4_devices").select("id").eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).eq("device_category", record["device_category"]).eq("operating_system", record["operating_system"]).limit(1).execute()
+                        query = self.client.table("ga4_devices").select("id").eq("property_id", property_id).eq("date", date).eq("device_category", record["device_category"]).eq("operating_system", record["operating_system"])
+                        if client_id is not None:
+                            query = query.eq("client_id", client_id)
+                        else:
+                            query = query.eq("brand_id", brand_id)
+                        existing = query.limit(1).execute()
+                        
+                        update_query = self.client.table("ga4_devices").update(record).eq("property_id", property_id).eq("date", date).eq("device_category", record["device_category"]).eq("operating_system", record["operating_system"])
+                        if client_id is not None:
+                            update_query = update_query.eq("client_id", client_id)
+                        else:
+                            update_query = update_query.eq("brand_id", brand_id)
+                        
                         if existing.data:
-                            self.client.table("ga4_devices").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).eq("device_category", record["device_category"]).eq("operating_system", record["operating_system"]).execute()
+                            update_query.execute()
                         else:
                             self.client.table("ga4_devices").insert(record).execute()
                         total_upserted += 1
                     except Exception:
                         pass
-                logger.info(f"Upserted {total_upserted} GA4 devices (individual) for brand {brand_id}, property {property_id}, date {date}")
+                logger.info(f"Upserted {total_upserted} GA4 devices (individual) for {entity_type} {entity_id}, property {property_id}, date {date}")
                 return total_upserted
             logger.error(f"Error upserting GA4 devices: {error_str}")
             raise
     
-    def upsert_ga4_conversions(self, brand_id: int, property_id: str, date: str, conversions: List[Dict]) -> int:
-        """Upsert GA4 conversions data"""
+    def upsert_ga4_conversions(self, property_id: str, date: str, conversions: List[Dict], client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
+        """Upsert GA4 conversions data - now uses client_id (with brand_id for backward compatibility)"""
+        if client_id is None and brand_id is None:
+            raise ValueError("Either client_id or brand_id must be provided")
         if not conversions:
             return 0
         
+        entity_id = client_id if client_id is not None else brand_id
+        entity_type = "client" if client_id is not None else "brand"
+        
         # Delete existing records for this date first
         try:
-            self.client.table("ga4_conversions").delete().eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).execute()
+            delete_query = self.client.table("ga4_conversions").delete().eq("property_id", property_id).eq("date", date)
+            if client_id is not None:
+                delete_query = delete_query.eq("client_id", client_id)
+            else:
+                delete_query = delete_query.eq("brand_id", brand_id)
+            delete_query.execute()
         except Exception as delete_error:
             logger.warning(f"Error deleting existing conversions data (may not exist): {str(delete_error)}")
         
         records = []
         for conversion in conversions:
-            records.append({
-                "brand_id": brand_id,
+            record = {
                 "property_id": property_id,
                 "date": date,
                 "event_name": conversion.get("eventName", ""),
                 "event_count": conversion.get("count", 0),
                 "users": conversion.get("users", 0),
                 "updated_at": datetime.now().isoformat()
-            })
+            }
+            if client_id is not None:
+                record["client_id"] = client_id
+            if brand_id is not None:
+                record["brand_id"] = brand_id
+            records.append(record)
         
         try:
             result = self.client.table("ga4_conversions").insert(records).execute()
-            logger.info(f"Upserted {len(records)} GA4 conversions for brand {brand_id}, property {property_id}, date {date}")
+            logger.info(f"Upserted {len(records)} GA4 conversions for {entity_type} {entity_id}, property {property_id}, date {date}")
             return len(records)
         except Exception as e:
             error_str = str(e)
@@ -501,47 +650,82 @@ class SupabaseService:
                 total_upserted = 0
                 for record in records:
                     try:
-                        existing = self.client.table("ga4_conversions").select("id").eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).eq("event_name", record["event_name"]).limit(1).execute()
+                        query = self.client.table("ga4_conversions").select("id").eq("property_id", property_id).eq("date", date).eq("event_name", record["event_name"])
+                        if client_id is not None:
+                            query = query.eq("client_id", client_id)
+                        else:
+                            query = query.eq("brand_id", brand_id)
+                        existing = query.limit(1).execute()
+                        
+                        update_query = self.client.table("ga4_conversions").update(record).eq("property_id", property_id).eq("date", date).eq("event_name", record["event_name"])
+                        if client_id is not None:
+                            update_query = update_query.eq("client_id", client_id)
+                        else:
+                            update_query = update_query.eq("brand_id", brand_id)
+                        
                         if existing.data:
-                            self.client.table("ga4_conversions").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).eq("event_name", record["event_name"]).execute()
+                            update_query.execute()
                         else:
                             self.client.table("ga4_conversions").insert(record).execute()
                         total_upserted += 1
                     except Exception:
                         pass
-                logger.info(f"Upserted {total_upserted} GA4 conversions (individual) for brand {brand_id}, property {property_id}, date {date}")
+                logger.info(f"Upserted {total_upserted} GA4 conversions (individual) for {entity_type} {entity_id}, property {property_id}, date {date}")
                 return total_upserted
             logger.error(f"Error upserting GA4 conversions: {error_str}")
             raise
     
-    def upsert_ga4_realtime(self, brand_id: int, property_id: str, realtime_data: Dict) -> int:
-        """Upsert GA4 realtime data"""
+    def upsert_ga4_realtime(self, property_id: str, realtime_data: Dict, client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
+        """Upsert GA4 realtime data - now uses client_id (with brand_id for backward compatibility)"""
+        if client_id is None and brand_id is None:
+            raise ValueError("Either client_id or brand_id must be provided")
+        
         try:
             snapshot_time = datetime.now().isoformat()
             record = {
-                "brand_id": brand_id,
                 "property_id": property_id,
                 "snapshot_time": snapshot_time,
                 "total_active_users": realtime_data.get("totalActiveUsers", 0),
                 "active_pages": realtime_data.get("activePages", []),
             }
             
+            if client_id is not None:
+                record["client_id"] = client_id
+                entity_id = client_id
+                entity_type = "client"
+            if brand_id is not None:
+                record["brand_id"] = brand_id
+                if client_id is None:
+                    entity_id = brand_id
+                    entity_type = "brand"
+            
             # Check if record exists (realtime uses snapshot_time as part of unique constraint)
-            existing = self.client.table("ga4_realtime").select("id").eq("brand_id", brand_id).eq("property_id", property_id).eq("snapshot_time", snapshot_time).limit(1).execute()
+            query = self.client.table("ga4_realtime").select("id").eq("property_id", property_id).eq("snapshot_time", snapshot_time)
+            if client_id is not None:
+                query = query.eq("client_id", client_id)
+            else:
+                query = query.eq("brand_id", brand_id)
+            existing = query.limit(1).execute()
+            
+            update_query = self.client.table("ga4_realtime").update(record).eq("property_id", property_id).eq("snapshot_time", snapshot_time)
+            if client_id is not None:
+                update_query = update_query.eq("client_id", client_id)
+            else:
+                update_query = update_query.eq("brand_id", brand_id)
             
             if existing.data and len(existing.data) > 0:
-                result = self.client.table("ga4_realtime").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("snapshot_time", snapshot_time).execute()
-                logger.info(f"Updated GA4 realtime data for brand {brand_id}, property {property_id}")
+                result = update_query.execute()
+                logger.info(f"Updated GA4 realtime data for {entity_type} {entity_id}, property {property_id}")
             else:
                 result = self.client.table("ga4_realtime").insert(record).execute()
-                logger.info(f"Inserted GA4 realtime data for brand {brand_id}, property {property_id}")
+                logger.info(f"Inserted GA4 realtime data for {entity_type} {entity_id}, property {property_id}")
             return 1
         except Exception as e:
             error_str = str(e)
             if "23505" in error_str or "duplicate key" in error_str.lower() or "unique constraint" in error_str.lower():
                 try:
-                    result = self.client.table("ga4_realtime").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("snapshot_time", snapshot_time).execute()
-                    logger.info(f"Updated existing GA4 realtime data for brand {brand_id}, property {property_id}")
+                    result = update_query.execute()
+                    logger.info(f"Updated existing GA4 realtime data for {entity_type} {entity_id}, property {property_id}")
                     return 1
                 except Exception as update_error:
                     logger.error(f"Error updating GA4 realtime after conflict: {str(update_error)}")
@@ -549,11 +733,13 @@ class SupabaseService:
             logger.error(f"Error upserting GA4 realtime: {error_str}")
             raise
     
-    def upsert_ga4_property_details(self, brand_id: int, property_id: str, property_details: Dict) -> int:
-        """Upsert GA4 property details (static configuration)"""
+    def upsert_ga4_property_details(self, property_id: str, property_details: Dict, client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
+        """Upsert GA4 property details (static configuration) - now uses client_id (with brand_id for backward compatibility)"""
+        if client_id is None and brand_id is None:
+            raise ValueError("Either client_id or brand_id must be provided")
+        
         try:
             record = {
-                "brand_id": brand_id,
                 "property_id": property_id,
                 "display_name": property_details.get("displayName"),
                 "time_zone": property_details.get("timeZone"),
@@ -562,22 +748,43 @@ class SupabaseService:
                 "updated_at": datetime.now().isoformat()
             }
             
+            if client_id is not None:
+                record["client_id"] = client_id
+                entity_id = client_id
+                entity_type = "client"
+            if brand_id is not None:
+                record["brand_id"] = brand_id
+                if client_id is None:
+                    entity_id = brand_id
+                    entity_type = "brand"
+            
             # Check if record exists
-            existing = self.client.table("ga4_property_details").select("id").eq("brand_id", brand_id).eq("property_id", property_id).limit(1).execute()
+            query = self.client.table("ga4_property_details").select("id").eq("property_id", property_id)
+            if client_id is not None:
+                query = query.eq("client_id", client_id)
+            else:
+                query = query.eq("brand_id", brand_id)
+            existing = query.limit(1).execute()
+            
+            update_query = self.client.table("ga4_property_details").update(record).eq("property_id", property_id)
+            if client_id is not None:
+                update_query = update_query.eq("client_id", client_id)
+            else:
+                update_query = update_query.eq("brand_id", brand_id)
             
             if existing.data and len(existing.data) > 0:
-                result = self.client.table("ga4_property_details").update(record).eq("brand_id", brand_id).eq("property_id", property_id).execute()
-                logger.info(f"Updated GA4 property details for brand {brand_id}, property {property_id}")
+                result = update_query.execute()
+                logger.info(f"Updated GA4 property details for {entity_type} {entity_id}, property {property_id}")
             else:
                 result = self.client.table("ga4_property_details").insert(record).execute()
-                logger.info(f"Inserted GA4 property details for brand {brand_id}, property {property_id}")
+                logger.info(f"Inserted GA4 property details for {entity_type} {entity_id}, property {property_id}")
             return 1
         except Exception as e:
             error_str = str(e)
             if "23505" in error_str or "duplicate key" in error_str.lower() or "unique constraint" in error_str.lower():
                 try:
-                    result = self.client.table("ga4_property_details").update(record).eq("brand_id", brand_id).eq("property_id", property_id).execute()
-                    logger.info(f"Updated existing GA4 property details for brand {brand_id}, property {property_id}")
+                    result = update_query.execute()
+                    logger.info(f"Updated existing GA4 property details for {entity_type} {entity_id}, property {property_id}")
                     return 1
                 except Exception as update_error:
                     logger.error(f"Error updating GA4 property details after conflict: {str(update_error)}")
@@ -585,33 +792,56 @@ class SupabaseService:
             logger.error(f"Error upserting GA4 property details: {error_str}")
             raise
     
-    def upsert_ga4_revenue(self, brand_id: int, property_id: str, date: str, revenue: float) -> int:
-        """Upsert GA4 revenue data for a specific date"""
+    def upsert_ga4_revenue(self, property_id: str, date: str, revenue: float, client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
+        """Upsert GA4 revenue data for a specific date - now uses client_id (with brand_id for backward compatibility)"""
+        if client_id is None and brand_id is None:
+            raise ValueError("Either client_id or brand_id must be provided")
+        
         try:
             record = {
-                "brand_id": brand_id,
                 "property_id": property_id,
                 "date": date,
                 "total_revenue": revenue,
                 "updated_at": datetime.now().isoformat()
             }
             
+            if client_id is not None:
+                record["client_id"] = client_id
+                entity_id = client_id
+                entity_type = "client"
+            if brand_id is not None:
+                record["brand_id"] = brand_id
+                if client_id is None:
+                    entity_id = brand_id
+                    entity_type = "brand"
+            
             # Check if record exists
-            existing = self.client.table("ga4_revenue").select("id").eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).limit(1).execute()
+            query = self.client.table("ga4_revenue").select("id").eq("property_id", property_id).eq("date", date)
+            if client_id is not None:
+                query = query.eq("client_id", client_id)
+            else:
+                query = query.eq("brand_id", brand_id)
+            existing = query.limit(1).execute()
+            
+            update_query = self.client.table("ga4_revenue").update(record).eq("property_id", property_id).eq("date", date)
+            if client_id is not None:
+                update_query = update_query.eq("client_id", client_id)
+            else:
+                update_query = update_query.eq("brand_id", brand_id)
             
             if existing.data and len(existing.data) > 0:
-                result = self.client.table("ga4_revenue").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).execute()
-                logger.info(f"Updated GA4 revenue for brand {brand_id}, property {property_id}, date {date}: {revenue}")
+                result = update_query.execute()
+                logger.info(f"Updated GA4 revenue for {entity_type} {entity_id}, property {property_id}, date {date}: {revenue}")
             else:
                 result = self.client.table("ga4_revenue").insert(record).execute()
-                logger.info(f"Inserted GA4 revenue for brand {brand_id}, property {property_id}, date {date}: {revenue}")
+                logger.info(f"Inserted GA4 revenue for {entity_type} {entity_id}, property {property_id}, date {date}: {revenue}")
             return 1
         except Exception as e:
             error_str = str(e)
             if "23505" in error_str or "duplicate key" in error_str.lower() or "unique constraint" in error_str.lower():
                 try:
-                    result = self.client.table("ga4_revenue").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).execute()
-                    logger.info(f"Updated existing GA4 revenue for brand {brand_id}, property {property_id}, date {date}: {revenue}")
+                    result = update_query.execute()
+                    logger.info(f"Updated existing GA4 revenue for {entity_type} {entity_id}, property {property_id}, date {date}: {revenue}")
                     return 1
                 except Exception as update_error:
                     logger.error(f"Error updating GA4 revenue after conflict: {str(update_error)}")
@@ -619,33 +849,56 @@ class SupabaseService:
             logger.error(f"Error upserting GA4 revenue: {error_str}")
             raise
     
-    def upsert_ga4_daily_conversions(self, brand_id: int, property_id: str, date: str, total_conversions: float) -> int:
-        """Upsert GA4 daily conversions summary"""
+    def upsert_ga4_daily_conversions(self, property_id: str, date: str, total_conversions: float, client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
+        """Upsert GA4 daily conversions summary - now uses client_id (with brand_id for backward compatibility)"""
+        if client_id is None and brand_id is None:
+            raise ValueError("Either client_id or brand_id must be provided")
+        
         try:
             record = {
-                "brand_id": brand_id,
                 "property_id": property_id,
                 "date": date,
                 "total_conversions": total_conversions,
                 "updated_at": datetime.now().isoformat()
             }
             
+            if client_id is not None:
+                record["client_id"] = client_id
+                entity_id = client_id
+                entity_type = "client"
+            if brand_id is not None:
+                record["brand_id"] = brand_id
+                if client_id is None:
+                    entity_id = brand_id
+                    entity_type = "brand"
+            
             # Check if record exists
-            existing = self.client.table("ga4_daily_conversions").select("id").eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).limit(1).execute()
+            query = self.client.table("ga4_daily_conversions").select("id").eq("property_id", property_id).eq("date", date)
+            if client_id is not None:
+                query = query.eq("client_id", client_id)
+            else:
+                query = query.eq("brand_id", brand_id)
+            existing = query.limit(1).execute()
+            
+            update_query = self.client.table("ga4_daily_conversions").update(record).eq("property_id", property_id).eq("date", date)
+            if client_id is not None:
+                update_query = update_query.eq("client_id", client_id)
+            else:
+                update_query = update_query.eq("brand_id", brand_id)
             
             if existing.data and len(existing.data) > 0:
-                result = self.client.table("ga4_daily_conversions").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).execute()
-                logger.info(f"Updated GA4 daily conversions for brand {brand_id}, property {property_id}, date {date}: {total_conversions}")
+                result = update_query.execute()
+                logger.info(f"Updated GA4 daily conversions for {entity_type} {entity_id}, property {property_id}, date {date}: {total_conversions}")
             else:
                 result = self.client.table("ga4_daily_conversions").insert(record).execute()
-                logger.info(f"Inserted GA4 daily conversions for brand {brand_id}, property {property_id}, date {date}: {total_conversions}")
+                logger.info(f"Inserted GA4 daily conversions for {entity_type} {entity_id}, property {property_id}, date {date}: {total_conversions}")
             return 1
         except Exception as e:
             error_str = str(e)
             if "23505" in error_str or "duplicate key" in error_str.lower() or "unique constraint" in error_str.lower():
                 try:
-                    result = self.client.table("ga4_daily_conversions").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("date", date).execute()
-                    logger.info(f"Updated existing GA4 daily conversions for brand {brand_id}, property {property_id}, date {date}: {total_conversions}")
+                    result = update_query.execute()
+                    logger.info(f"Updated existing GA4 daily conversions for {entity_type} {entity_id}, property {property_id}, date {date}: {total_conversions}")
                     return 1
                 except Exception as update_error:
                     logger.error(f"Error updating GA4 daily conversions after conflict: {str(update_error)}")
@@ -655,7 +908,6 @@ class SupabaseService:
     
     def upsert_ga4_kpi_snapshot(
         self,
-        brand_id: int,
         property_id: str,
         period_end_date: str,
         period_start_date: str,
@@ -663,12 +915,16 @@ class SupabaseService:
         prev_period_end_date: str,
         current_values: Dict,
         previous_values: Dict,
-        changes: Dict
+        changes: Dict,
+        client_id: Optional[int] = None,
+        brand_id: Optional[int] = None
     ) -> int:
-        """Upsert GA4 KPI snapshot for a 30-day period"""
+        """Upsert GA4 KPI snapshot for a 30-day period - now uses client_id (with brand_id for backward compatibility)"""
+        if client_id is None and brand_id is None:
+            raise ValueError("Either client_id or brand_id must be provided")
+        
         try:
             record = {
-                "brand_id": brand_id,
                 "property_id": property_id,
                 "period_end_date": period_end_date,
                 "period_start_date": period_start_date,
@@ -707,17 +963,38 @@ class SupabaseService:
                 "updated_at": datetime.now().isoformat()
             }
             
+            if client_id is not None:
+                record["client_id"] = client_id
+                entity_id = client_id
+                entity_type = "client"
+            if brand_id is not None:
+                record["brand_id"] = brand_id
+                if client_id is None:
+                    entity_id = brand_id
+                    entity_type = "brand"
+            
             # Check if record exists first
-            existing = self.client.table("ga4_kpi_snapshots").select("id").eq("brand_id", brand_id).eq("property_id", property_id).eq("period_end_date", period_end_date).limit(1).execute()
+            query = self.client.table("ga4_kpi_snapshots").select("id").eq("property_id", property_id).eq("period_end_date", period_end_date)
+            if client_id is not None:
+                query = query.eq("client_id", client_id)
+            else:
+                query = query.eq("brand_id", brand_id)
+            existing = query.limit(1).execute()
+            
+            update_query = self.client.table("ga4_kpi_snapshots").update(record).eq("property_id", property_id).eq("period_end_date", period_end_date)
+            if client_id is not None:
+                update_query = update_query.eq("client_id", client_id)
+            else:
+                update_query = update_query.eq("brand_id", brand_id)
             
             if existing.data and len(existing.data) > 0:
                 # Update existing record
-                result = self.client.table("ga4_kpi_snapshots").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("period_end_date", period_end_date).execute()
-                logger.info(f"Updated GA4 KPI snapshot for brand {brand_id}, property {property_id}, period_end_date {period_end_date}")
+                result = update_query.execute()
+                logger.info(f"Updated GA4 KPI snapshot for {entity_type} {entity_id}, property {property_id}, period_end_date {period_end_date}")
             else:
                 # Insert new record
                 result = self.client.table("ga4_kpi_snapshots").insert(record).execute()
-                logger.info(f"Inserted GA4 KPI snapshot for brand {brand_id}, property {property_id}, period_end_date {period_end_date}")
+                logger.info(f"Inserted GA4 KPI snapshot for {entity_type} {entity_id}, property {property_id}, period_end_date {period_end_date}")
             
             return 1
         except Exception as e:
@@ -726,8 +1003,8 @@ class SupabaseService:
             if "23505" in error_str or "duplicate key" in error_str.lower() or "unique constraint" in error_str.lower():
                 try:
                     # Try to update the existing record
-                    result = self.client.table("ga4_kpi_snapshots").update(record).eq("brand_id", brand_id).eq("property_id", property_id).eq("period_end_date", period_end_date).execute()
-                    logger.info(f"Updated existing GA4 KPI snapshot for brand {brand_id}, property {property_id}, period_end_date {period_end_date}")
+                    result = update_query.execute()
+                    logger.info(f"Updated existing GA4 KPI snapshot for {entity_type} {entity_id}, property {property_id}, period_end_date {period_end_date}")
                     return 1
                 except Exception as update_error:
                     logger.error(f"Error updating GA4 KPI snapshot after conflict: {str(update_error)}")

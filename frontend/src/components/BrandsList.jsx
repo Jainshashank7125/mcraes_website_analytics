@@ -14,58 +14,58 @@ import {
   useTheme,
   Skeleton,
   IconButton,
-  Tooltip
+  Tooltip,
+  TablePagination
 } from '@mui/material'
 import {
   Business as BusinessIcon,
   Language as LanguageIcon,
   ArrowForward as ArrowForwardIcon,
-  Refresh as RefreshIcon,
-  Settings as SettingsIcon
+  Refresh as RefreshIcon
 } from '@mui/icons-material'
 import { motion } from 'framer-motion'
-import { useBrandsWithAnalytics } from '../hooks/useBrands'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../hooks/queryKeys'
-import BrandManagement from './BrandManagement'
+import { dataAPI } from '../services/api'
 
 function BrandsList() {
-  const [managementOpen, setManagementOpen] = useState(false)
-  const [selectedBrand, setSelectedBrand] = useState(null)
+  const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState(25)
   const navigate = useNavigate()
   const theme = useTheme()
   const queryClient = useQueryClient()
   
-  // Use React Query hook for brands with analytics
-  const { data: brandsWithAnalytics = [], isLoading: loading } = useBrandsWithAnalytics()
-
-  const getBrandStats = (brandId) => {
-    const brandWithAnalytics = brandsWithAnalytics.find(b => b.id === brandId)
-    if (!brandWithAnalytics?.analytics) return null
-    
-    const analytics = brandWithAnalytics.analytics
-    return {
-      totalResponses: analytics.total_responses || 0,
-      brandPresence: analytics.brand_presence?.present || 0,
-      topCompetitors: analytics.top_competitors?.length || 0
-    }
+  // Use React Query hook for brands with pagination
+  const { data: brandsData = {}, isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.brands.list({ page, pageSize }),
+    queryFn: async () => {
+      const offset = page * pageSize
+      const response = await dataAPI.getBrands(pageSize, offset)
+      return response
+    },
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000, // 10 minutes
+  })
+  
+  // Log error if any
+  if (error) {
+    console.error('Error loading brands:', error)
   }
 
-  const handleManageClick = (e, brand) => {
-    e.stopPropagation() // Prevent card click navigation
-    setSelectedBrand(brand)
-    setManagementOpen(true)
-  }
-
-  const handleManagementClose = () => {
-    setManagementOpen(false)
-    setSelectedBrand(null)
-    // Invalidate brands cache to refetch updated data
-    queryClient.invalidateQueries({ queryKey: queryKeys.brands.all })
-  }
+  const brands = brandsData.items || []
+  const totalCount = brandsData.total_count || 0
 
   const handleRefresh = () => {
     queryClient.invalidateQueries({ queryKey: queryKeys.brands.all })
+  }
+
+  const handleChangePage = (event, newPage) => {
+    setPage(newPage)
+  }
+
+  const handleChangePageSize = (event) => {
+    setPageSize(parseInt(event.target.value, 10))
+    setPage(0)
   }
 
 
@@ -87,7 +87,7 @@ function BrandsList() {
     )
   }
 
-  if (!loading && brandsWithAnalytics.length === 0) {
+  if (!loading && brands.length === 0) {
     return (
       <Card
         sx={{
@@ -148,7 +148,7 @@ function BrandsList() {
             color="text.secondary"
             sx={{ fontSize: '0.875rem' }}
           >
-            {brandsWithAnalytics.length} {brandsWithAnalytics.length === 1 ? 'brand' : 'brands'} available
+            {totalCount} {totalCount === 1 ? 'brand' : 'brands'} available
           </Typography>
         </Box>
         <Button 
@@ -175,8 +175,7 @@ function BrandsList() {
       </Box>
 
       <Grid container spacing={2.5}>
-        {brandsWithAnalytics.map((brand, index) => {
-          const stats = getBrandStats(brand.id)
+        {brands.map((brand, index) => {
           return (
             <Grid item xs={12} sm={6} md={4} key={brand.id}>
               <motion.div
@@ -289,139 +288,27 @@ function BrandsList() {
                             </Box>
                           )}
                         </Box>
-                        <Box display="flex" alignItems="center" gap={0.5}>
-                          <Tooltip title="Manage Brand Settings" arrow>
-                            <IconButton
-                              size="small"
-                              onClick={(e) => handleManageClick(e, brand)}
-                              sx={{
-                                color: theme.palette.primary.main,
-                                transition: 'all 0.2s',
-                                '&:hover': {
-                                  bgcolor: alpha(theme.palette.primary.main, 0.1),
-                                },
-                              }}
-                            >
-                              <SettingsIcon sx={{ fontSize: 18 }} />
-                            </IconButton>
-                          </Tooltip>
-                          <IconButton
-                            className="brand-arrow"
-                            size="small"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              navigate(`/brands/${brand.id}`)
-                            }}
-                            sx={{
-                              color: 'text.secondary',
-                              transition: 'all 0.2s',
-                              opacity: 0.6,
-                              '&:hover': {
-                                opacity: 1,
-                                bgcolor: alpha(theme.palette.primary.main, 0.1),
-                                color: theme.palette.primary.main,
-                              },
-                            }}
-                          >
-                            <ArrowForwardIcon sx={{ fontSize: 16 }} />
-                          </IconButton>
-                        </Box>
-                      </Box>
-
-                      {stats && (
-                        <Box 
-                          mt={2} 
-                          pt={2}
-                          borderTop={`1px solid ${theme.palette.divider}`}
+                        <IconButton
+                          className="brand-arrow"
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            navigate(`/brands/${brand.id}`)
+                          }}
+                          sx={{
+                            color: 'text.secondary',
+                            transition: 'all 0.2s',
+                            opacity: 0.6,
+                            '&:hover': {
+                              opacity: 1,
+                              bgcolor: alpha(theme.palette.primary.main, 0.1),
+                              color: theme.palette.primary.main,
+                            },
+                          }}
                         >
-                          <Grid container spacing={1.5}>
-                            <Grid item xs={4}>
-                              <Box textAlign="center">
-                                <Typography 
-                                  variant="h6" 
-                                  fontWeight={700}
-                                  sx={{
-                                    fontSize: '1.25rem',
-                                    letterSpacing: '-0.02em',
-                                    mb: 0.25,
-                                    color: 'text.primary',
-                                  }}
-                                >
-                                  {stats.totalResponses.toLocaleString()}
-                                </Typography>
-                                <Typography 
-                                  variant="caption" 
-                                  color="text.secondary"
-                                  sx={{ 
-                                    fontSize: '0.7rem',
-                                    fontWeight: 500,
-                                    textTransform: 'uppercase',
-                                    letterSpacing: '0.05em',
-                                  }}
-                                >
-                                  Responses
-                                </Typography>
-                              </Box>
-                            </Grid>
-                            <Grid item xs={4}>
-                              <Box textAlign="center">
-                                <Typography 
-                                  variant="h6" 
-                                  fontWeight={700}
-                                  sx={{
-                                    fontSize: '1.25rem',
-                                    letterSpacing: '-0.02em',
-                                    mb: 0.25,
-                                    color: 'text.primary',
-                                  }}
-                                >
-                                  {stats.brandPresence.toLocaleString()}
-                                </Typography>
-                                <Typography 
-                                  variant="caption" 
-                                  color="text.secondary"
-                                  sx={{ 
-                                    fontSize: '0.7rem',
-                                    fontWeight: 500,
-                                    textTransform: 'uppercase',
-                                    letterSpacing: '0.05em',
-                                  }}
-                                >
-                                  Mentions
-                                </Typography>
-                              </Box>
-                            </Grid>
-                            <Grid item xs={4}>
-                              <Box textAlign="center">
-                                <Typography 
-                                  variant="h6" 
-                                  fontWeight={700}
-                                  sx={{
-                                    fontSize: '1.25rem',
-                                    letterSpacing: '-0.02em',
-                                    mb: 0.25,
-                                    color: 'text.primary',
-                                  }}
-                                >
-                                  {stats.topCompetitors}
-                                </Typography>
-                                <Typography 
-                                  variant="caption" 
-                                  color="text.secondary"
-                                  sx={{ 
-                                    fontSize: '0.7rem',
-                                    fontWeight: 500,
-                                    textTransform: 'uppercase',
-                                    letterSpacing: '0.05em',
-                                  }}
-                                >
-                                  Competitors
-                                </Typography>
-                              </Box>
-                            </Grid>
-                          </Grid>
-                        </Box>
-                      )}
+                          <ArrowForwardIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Box>
                     </CardContent>
                   </Card>
                 </motion.div>
@@ -430,11 +317,19 @@ function BrandsList() {
           })}
         </Grid>
 
-      <BrandManagement
-        open={managementOpen}
-        onClose={handleManagementClose}
-        brand={selectedBrand}
-      />
+        {brands.length > 0 && (
+          <Box width="100%" mt={3}>
+            <TablePagination
+              component="div"
+              count={totalCount}
+              page={page}
+              onPageChange={handleChangePage}
+              rowsPerPage={pageSize}
+              onRowsPerPageChange={handleChangePageSize}
+              rowsPerPageOptions={[10, 25, 50, 100]}
+            />
+          </Box>
+        )}
     </Box>
   )
 }

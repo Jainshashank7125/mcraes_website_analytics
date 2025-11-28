@@ -46,7 +46,7 @@ def sync_scrunch_data():
         return False
 
 def sync_ga4_data():
-    """Sync GA4 data for all brands with GA4 configured"""
+    """Sync GA4 data for all clients with GA4 configured"""
     print()
     print("=" * 70)
     print("Syncing GA4 Data")
@@ -56,6 +56,7 @@ def sync_ga4_data():
     
     try:
         # Sync GA4 data (last 30 days, skip realtime to avoid errors)
+        # Now syncs all clients with GA4 configured (client_id not specified = all clients)
         response = requests.post(
             f"{API_BASE}/sync/ga4",
             params={"sync_realtime": False},  # Skip realtime to avoid API errors
@@ -66,7 +67,7 @@ def sync_ga4_data():
             data = response.json()
             total_synced = data.get("total_synced", {})
             print("[SUCCESS] GA4 sync completed")
-            print(f"  Brands synced: {total_synced.get('brands', 0)}")
+            print(f"  Clients synced: {total_synced.get('clients', 0)}")
             print(f"  Traffic overview: {total_synced.get('traffic_overview', 0)}")
             print(f"  Top pages: {total_synced.get('top_pages', 0)}")
             print(f"  Traffic sources: {total_synced.get('traffic_sources', 0)}")
