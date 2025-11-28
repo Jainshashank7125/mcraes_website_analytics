@@ -34,6 +34,7 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
+  LinearProgress,
 } from "@mui/material";
 import {
   TrendingUp as TrendingUpIcon,
@@ -82,6 +83,7 @@ import ChartCard from "./reporting/ChartCard";
 import SectionContainer from "./reporting/SectionContainer";
 import KPICard from "./reporting/KPICard";
 import KPIGrid from "./reporting/KPIGrid";
+import PromptsAnalyticsTable from "./reporting/PromptsAnalyticsTable";
 import { formatValue, getSourceColor, getSourceLabel, getMonthName, getChannelLabel, getChannelColor } from "./reporting/utils";
 import { CHART_COLORS } from "./reporting/constants";
 import { useChartData, formatDateForAxis, getDateRangeLabel as getDateRangeLabelUtil } from "./reporting/hooks/useChartData";
@@ -253,6 +255,9 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   const [loading, setLoading] = useState(false);
   const [loadingScrunch, setLoadingScrunch] = useState(false);
   const [error, setError] = useState(null);
+  // Loading state for public reporting page
+  const [isLoadingReport, setIsLoadingReport] = useState(false);
+  const [loadingCaption, setLoadingCaption] = useState("");
   const [selectedKPIs, setSelectedKPIs] = useState(new Set(KPI_ORDER));
   const [tempSelectedKPIs, setTempSelectedKPIs] = useState(new Set(KPI_ORDER)); // For dialog
   const [showKPISelector, setShowKPISelector] = useState(false);
@@ -297,6 +302,25 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   const [publicVisibleSections, setPublicVisibleSections] = useState(null);
   const [publicSelectedCharts, setPublicSelectedCharts] = useState(null);
   const theme = useTheme();
+
+  // Loading captions for public reporting page
+  const loadingCaptions = [
+    "Fetching the latest insights...",
+    "Crunching numbers for clarity...",
+    "Hang tight — building the report...",
+    "Pulling public data — almost there!",
+    "Preparing your public report...",
+    "Analyzing performance metrics...",
+    "Gathering analytics data...",
+    "Compiling your insights...",
+    "Processing report data...",
+    "Loading comprehensive analytics...",
+  ];
+
+  // Get a random loading caption
+  const getRandomCaption = () => {
+    return loadingCaptions[Math.floor(Math.random() * loadingCaptions.length)];
+  };
 
   // Load KPI selections from database when brand changes (for authenticated users)
   useEffect(() => {
@@ -409,17 +433,34 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
     // For admin view, we need selectedClientId (client-centric) or selectedBrandId (fallback)
     if (!selectedClientId && !selectedBrandId && !(isPublic && publicSlug)) return;
     
-    // Load all data sources in parallel
-    await Promise.all([
-      loadDashboardData(),
-      loadScrunchData(),
-      !isPublic ? loadBrandAnalytics() : Promise.resolve(),
-      !isPublic ? loadKPISelections() : loadPublicKPISelections(),
-    ]);
+    // Set loading state for public mode
+    if (isPublic) {
+      setIsLoadingReport(true);
+      setLoadingCaption(getRandomCaption());
+    }
+    
+    try {
+      // Load all data sources in parallel
+      await Promise.all([
+        loadDashboardData(),
+        loadScrunchData(),
+        !isPublic ? loadBrandAnalytics() : Promise.resolve(),
+        !isPublic ? loadKPISelections() : loadPublicKPISelections(),
+      ]);
+    } finally {
+      // Clear loading state for public mode
+      if (isPublic) {
+        setIsLoadingReport(false);
+      }
+    }
   };
 
   useEffect(() => {
     if (isPublic && publicSlug) {
+      // Set loading state for initial public page load
+      setIsLoadingReport(true);
+      setLoadingCaption(getRandomCaption());
+      
       // For public mode, try to fetch client by slug first, then fall back to brand
       const fetchPublicEntity = async () => {
         try {
@@ -440,6 +481,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
           setSelectedBrandId(brand.id);
         } catch (err) {
           setError(err.response?.data?.detail || "Failed to load client or brand");
+          setIsLoadingReport(false);
         }
       };
       fetchPublicEntity();
@@ -916,6 +958,20 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   };
 
   const getSourceLabel = (source) => {
+    // For public view, use generic KPI-focused labels
+    if (isPublic) {
+      switch (source) {
+        case "GA4":
+          return "Website Analytics";
+        case "AgencyAnalytics":
+          return "SEO Performance";
+        case "Scrunch":
+          return "Brand Intelligence";
+        default:
+          return source;
+      }
+    }
+    // For authenticated view, show actual source names
     switch (source) {
       case "GA4":
         return "Google Analytics";
@@ -926,6 +982,23 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
       default:
         return source;
     }
+  };
+
+  // Helper function to get generic badge label for public view
+  const getBadgeLabel = (source) => {
+    if (isPublic) {
+      switch (source) {
+        case "GA4":
+          return "Analytics";
+        case "AgencyAnalytics":
+          return "SEO";
+        case "Scrunch":
+          return "Brand";
+        default:
+          return source;
+      }
+    }
+    return source;
   };
 
   const handleDatePresetChange = (preset) => {
@@ -1272,6 +1345,32 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
 
   return (
     <Box sx={{ p: 3 }}>
+      {/* Progress loader for public reporting page */}
+      {isPublic && isLoadingReport && (
+        <Box
+          sx={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            bgcolor: 'background.paper',
+          }}
+          role="status"
+          aria-live="polite"
+          aria-label="Loading report data"
+        >
+          <CircularProgress size={60} sx={{ mb: 3 }} />
+          <Typography variant="h2" color="text.secondary" sx={{ textAlign: 'center' }}>
+            &ldquo;{loadingCaption}&rdquo;
+          </Typography>
+        </Box>
+      )}
       {/* Header */}
       <Box mb={4}>
         <Box
@@ -1516,34 +1615,32 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                 {!dashboardData.diagnostics.ga4_configured && (
                   <li>
                     <Typography variant="body2">
-                      <strong>GA4:</strong> No GA4 property ID configured.
-                      Configure it in the brands table or use the GA4 sync
-                      endpoint.
+                      <strong>{isPublic ? "Website Analytics" : "GA4"}:</strong> {isPublic ? "Website analytics data is not available." : "No GA4 property ID configured. Configure it in the brands table or use the GA4 sync endpoint."}
                     </Typography>
                   </li>
                 )}
                 {!dashboardData.diagnostics.agency_analytics_configured && (
                   <li>
                     <Typography variant="body2">
-                      <strong>AgencyAnalytics:</strong> No campaigns linked to
-                      this brand. Sync Agency Analytics data and link campaigns
-                      to brands.
+                      <strong>{isPublic ? "SEO Performance" : "AgencyAnalytics"}:</strong> {isPublic ? "SEO performance data is not available." : "No campaigns linked to this brand. Sync Agency Analytics data and link campaigns to brands."}
                     </Typography>
                   </li>
                 )}
               </Box>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                mt={1}
-                display="block"
-              >
-                Currently showing: {dashboardData.diagnostics.kpi_counts.ga4}{" "}
-                GA4 KPIs,{" "}
-                {dashboardData.diagnostics.kpi_counts.agency_analytics}{" "}
-                AgencyAnalytics KPIs,{" "}
-                {dashboardData.diagnostics.kpi_counts.scrunch} Scrunch KPIs
-              </Typography>
+              {!isPublic && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  mt={1}
+                  display="block"
+                >
+                  Currently showing: {dashboardData.diagnostics.kpi_counts.ga4}{" "}
+                  GA4 KPIs,{" "}
+                  {dashboardData.diagnostics.kpi_counts.agency_analytics}{" "}
+                  AgencyAnalytics KPIs,{" "}
+                  {dashboardData.diagnostics.kpi_counts.scrunch} Scrunch KPIs
+                </Typography>
+              )}
             </Alert>
           )}
         </Box>
@@ -1564,7 +1661,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
           {isSectionVisible("ga4") && (dashboardData?.kpis?.users ||
             dashboardData?.chart_data?.ga4_traffic_overview) && (
             <SectionContainer
-              title="Google Analytics 4"
+              title={isPublic ? "Website Analytics" : "Google Analytics 4"}
               description="Website traffic and engagement metrics"
               loading={loading}
             >
@@ -2424,7 +2521,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                       <Grid item xs={12}>
                         <ChartCard
                           title="Active Users"
-                          badge="GA4"
+                          badge={getBadgeLabel("GA4")}
                           badgeColor={CHART_COLORS.ga4.primary}
                           height={500}
                           animationDelay={0.3}
@@ -2467,7 +2564,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                       <Grid item xs={12} md={6}>
                         <ChartCard
                           title="Sessions"
-                          badge="GA4"
+                          badge={getBadgeLabel("GA4")}
                           badgeColor={CHART_COLORS.ga4.primary}
                           height={400}
                           animationDelay={0.35}
@@ -2510,7 +2607,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                       <Grid item xs={12} md={6}>
                         <ChartCard
                           title="New Users"
-                          badge="GA4"
+                          badge={getBadgeLabel("GA4")}
                           badgeColor={CHART_COLORS.ga4.primary}
                           height={400}
                           animationDelay={0.4}
@@ -2558,7 +2655,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                         <Grid item xs={12} md={6}>
                           <ChartCard
                             title="Conversions"
-                            badge="GA4"
+                            badge={getBadgeLabel("GA4")}
                             badgeColor={CHART_COLORS.ga4.primary}
                             height={400}
                             animationDelay={0.45}
@@ -2611,7 +2708,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                         <Grid item xs={12} md={6}>
                           <ChartCard
                             title="Revenue"
-                            badge="GA4"
+                            badge={getBadgeLabel("GA4")}
                             badgeColor={CHART_COLORS.ga4.primary}
                             height={400}
                             animationDelay={0.5}
@@ -2988,7 +3085,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                       <Grid item xs={12} md={7}>
                         <ChartCard
                           title="Geographic Distribution"
-                          badge="GA4"
+                          badge={getBadgeLabel("GA4")}
                           badgeColor={CHART_COLORS.ga4.primary}
                           height="100%"
                           animationDelay={1.2}
@@ -3020,7 +3117,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                       <Grid item xs={12} md={5}>
                         <ChartCard
                           title="Top Countries"
-                          badge="GA4"
+                          badge={getBadgeLabel("GA4")}
                           badgeColor={CHART_COLORS.ga4.primary}
                           height={450}
                           animationDelay={1.25}
@@ -3185,7 +3282,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                     <Grid item xs={12} sm={6} md={4}>
                       <ChartCard
                         title="Brand Presence Rate"
-                        badge="Scrunch"
+                        badge={getBadgeLabel("Scrunch")}
                         badgeColor={CHART_COLORS.scrunch.primary}
                         height="100%"
                         animationDelay={1.4}
@@ -3247,7 +3344,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                   dashboardData.chart_data.all_keywords_ranking.length > 0 && (
                     <ChartCard
                       title="Top Keywords Ranking"
-                      badge="AgencyAnalytics"
+                      badge={getBadgeLabel("AgencyAnalytics")}
                       badgeColor={CHART_COLORS.agencyAnalytics.primary}
                       height={500}
                       animationDelay={0.2}
@@ -3352,7 +3449,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
               return shouldShow;
             })() && (
               <SectionContainer
-                title="Scrunch AI"
+                title={isPublic ? "Brand Intelligence" : "Scrunch AI"}
                 description="AI platform presence and engagement metrics"
                 loading={loadingScrunch}
               >
@@ -3456,7 +3553,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                                 <Grid item xs={12} sm={6} md={4}>
                                   <ChartCard
                                     title="Brand Presence Rate"
-                                    badge="Scrunch"
+                                    badge={getBadgeLabel("Scrunch")}
                                     badgeColor={CHART_COLORS.scrunch.primary}
                                     height="100%"
                                     animationDelay={0.1}
@@ -4017,6 +4114,14 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                                 </Box>
                               );
                             })()}
+
+                          {/* Prompts Analytics Table - Scrunch-like interface */}
+                          <PromptsAnalyticsTable
+                            clientId={selectedClientId}
+                            slug={publicSlug}
+                            startDate={startDate}
+                            endDate={endDate}
+                          />
                         </>
                       );
                     })()}
@@ -4536,6 +4641,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                       kpiKey={key}
                       index={index}
                       theme={theme}
+                      getSourceLabel={getSourceLabel}
                     />
                   ))}
                       </Grid>
@@ -5157,7 +5263,10 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                             }}
                           >
                             <Typography variant="subtitle2" fontWeight={600} mb={1.5}>
-                              {source === 'GA4' ? 'Google Analytics 4' : source === 'AgencyAnalytics' ? 'SEO Rankings' : 'Brand Mentions'}
+                              {isPublic 
+                                ? (source === 'GA4' ? 'Website Analytics' : source === 'AgencyAnalytics' ? 'SEO Performance' : 'Brand Intelligence')
+                                : (source === 'GA4' ? 'Google Analytics 4' : source === 'AgencyAnalytics' ? 'SEO Rankings' : 'Brand Mentions')
+                              }
                             </Typography>
                             <Box component="ul" sx={{ m: 0, pl: 2 }}>
                               {sourceMetrics.slice(0, 5).map((metric, idx) => (

@@ -1,13 +1,13 @@
 import { Box, Card, CardContent, Chip, Grid, Typography, alpha } from '@mui/material'
 import { TrendingUp as TrendingUpIcon, TrendingDown as TrendingDownIcon } from '@mui/icons-material'
 import { motion } from 'framer-motion'
-import { formatValue, getSourceColor, getSourceLabel } from './utils'
+import { formatValue, getSourceColor, getSourceLabel as getSourceLabelUtil } from './utils'
 
-export default function KPICard({ kpi, kpiKey, index = 0, theme }) {
+export default function KPICard({ kpi, kpiKey, index = 0, theme, getSourceLabel }) {
   if (!kpi) return null
 
   const sourceColor = getSourceColor(kpi.source, theme)
-  const sourceLabel = getSourceLabel(kpi.source)
+  const sourceLabel = getSourceLabel ? getSourceLabel(kpi.source) : getSourceLabelUtil(kpi.source)
 
   return (
     <Grid item xs={12} sm={6} md={3} key={kpiKey}>
@@ -77,7 +77,7 @@ export default function KPICard({ kpi, kpiKey, index = 0, theme }) {
             </Typography>
             
             {/* Change Indicator - Only show when positive or zero */}
-            {sourceLabel !== 'Scrunch' && <Box
+            {kpi.source !== 'Scrunch' && <Box
               sx={{
                 minHeight: '24px',
                 display: 'flex',

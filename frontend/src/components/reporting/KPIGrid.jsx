@@ -30,6 +30,7 @@ export default function KPIGrid({ displayedKPIs, formatValue, getSourceColor, ge
             kpiKey={key}
             index={index}
             theme={theme}
+            getSourceLabel={getSourceLabel}
           />
         ))}
       </Grid>
