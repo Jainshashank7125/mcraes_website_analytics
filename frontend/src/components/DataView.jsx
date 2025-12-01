@@ -32,7 +32,9 @@ import {
   ChatBubble as ChatBubbleIcon
 } from '@mui/icons-material'
 import { motion } from 'framer-motion'
-import { useBrands } from '../hooks/useBrands'
+import { useQuery } from '@tanstack/react-query'
+import { dataAPI } from '../services/api'
+import { queryKeys } from '../hooks/queryKeys'
 import { usePrompts, useResponses } from '../hooks/useData'
 import { useToast } from '../contexts/ToastContext'
 
@@ -56,7 +58,17 @@ function DataView() {
   }, [dataType])
 
   // Use React Query hooks for data fetching
-  const { data: brandsData = [], isLoading: brandsLoading } = useBrands()
+  const { data: brandsData = {}, isLoading: brandsLoading } = useQuery({
+    queryKey: queryKeys.brands.list({ page, pageSize }),
+    queryFn: async () => {
+      const offset = (page - 1) * pageSize
+      const response = await dataAPI.getBrands(pageSize, offset)
+      return response
+    },
+    enabled: dataType === 'brands',
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000, // 10 minutes
+  })
 
   const { data: promptsData, isLoading: promptsLoading } = usePrompts(
     {
@@ -84,14 +96,10 @@ function DataView() {
   const getCurrentData = () => {
     switch (dataType) {
       case 'brands':
-        // For brands, we need to handle pagination manually since useBrands returns all brands
-        const startIndex = (page - 1) * pageSize
-        const endIndex = startIndex + pageSize
-        const paginatedBrands = brandsData.slice(startIndex, endIndex)
         return {
-          data: paginatedBrands,
+          data: brandsData.items || [],
           loading: brandsLoading,
-          totalCount: brandsData.length,
+          totalCount: brandsData.total_count || 0,
         }
       case 'prompts':
         return {
@@ -617,7 +625,6 @@ function DataView() {
                   size="small"
                   onClick={() => {
                     setPage(1)
-                    loadData()
                   }}
                   sx={{
                     mt: 0.25,

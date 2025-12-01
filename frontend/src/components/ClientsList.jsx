@@ -23,6 +23,7 @@ import {
   Avatar,
   TablePagination,
   Alert,
+  LinearProgress,
 } from '@mui/material'
 import {
   Business as BusinessIcon,
@@ -34,8 +35,9 @@ import {
   Link as LinkIcon,
   Search as SearchIcon,
   OpenInNew as OpenInNewIcon,
+  Tag as TagIcon,
 } from '@mui/icons-material'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { clientAPI } from '../services/api'
 import { queryKeys } from '../hooks/queryKeys'
 import ClientManagement from './ClientManagement'
@@ -47,6 +49,7 @@ function ClientsList() {
   const [pageSize, setPageSize] = useState(25)
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [persistedTotalCount, setPersistedTotalCount] = useState(0)
   const navigate = useNavigate()
   const theme = useTheme()
   const queryClient = useQueryClient()
@@ -61,7 +64,7 @@ function ClientsList() {
   }, [searchTerm])
   
   // Use React Query hook for clients with pagination
-  const { data: clientsData = {}, isLoading: loading, error } = useQuery({
+  const { data: clientsData = {}, isLoading: loading, isFetching, error } = useQuery({
     queryKey: queryKeys.clients.list({ page: page + 1, pageSize, search: debouncedSearch }),
     queryFn: async () => {
       const response = await clientAPI.getClients(page + 1, pageSize, debouncedSearch)
@@ -69,10 +72,21 @@ function ClientsList() {
     },
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 10 * 60 * 1000, // 10 minutes
+    placeholderData: keepPreviousData, // Keep previous data while fetching new data (React Query v5)
   })
 
+  // Persist total count - only update when we have new data
+  useEffect(() => {
+    if (clientsData.total_count !== undefined && clientsData.total_count !== null) {
+      setPersistedTotalCount(clientsData.total_count)
+    }
+  }, [clientsData.total_count])
+
   const clients = clientsData.items || []
-  const totalCount = clientsData.total_count || 0
+  // Use persisted count if current data doesn't have it (during loading)
+  const totalCount = clientsData.total_count !== undefined && clientsData.total_count !== null 
+    ? clientsData.total_count 
+    : persistedTotalCount
   const totalPages = clientsData.total_pages || 0
 
   const getClientStats = (client) => {
@@ -247,7 +261,7 @@ function ClientsList() {
         </Paper>
       )}
 
-      {clients.length > 0 && (
+      {(clients.length > 0 || loading || isFetching) && (
         <TableContainer 
           component={Paper}
           sx={{
@@ -255,9 +269,48 @@ function ClientsList() {
             border: `1px solid ${theme.palette.divider}`,
             boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
             overflow: 'hidden',
+            position: 'relative',
           }}
         >
-          <Table>
+          {/* Linear progress bar at top of table when fetching */}
+          {isFetching && (
+            <LinearProgress 
+              sx={{ 
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                zIndex: 10,
+                height: 3,
+              }} 
+            />
+          )}
+          {/* Loading indicator overlay when fetching new page */}
+          {isFetching && (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 9,
+                bgcolor: alpha(theme.palette.background.paper, 0.7),
+                backdropFilter: 'blur(2px)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Box display="flex" flexDirection="column" alignItems="center" gap={2}>
+                <CircularProgress size={40} />
+                <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.875rem' }}>
+                  Loading clients...
+                </Typography>
+              </Box>
+            </Box>
+          )}
+          <Table sx={{ position: 'relative', zIndex: 1 }}>
             <TableHead>
               <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.02) }}>
                 <TableCell sx={{ fontWeight: 600, fontSize: '0.875rem' }}>Company</TableCell>
@@ -270,7 +323,7 @@ function ClientsList() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {loading ? (
+              {loading && page === 0 && clients.length === 0 ? (
                 Array.from({ length: pageSize }).map((_, index) => (
                   <TableRow key={index}>
                     <TableCell><Skeleton variant="text" width={150} /></TableCell>
@@ -278,10 +331,11 @@ function ClientsList() {
                     <TableCell><Skeleton variant="text" width={80} /></TableCell>
                     <TableCell><Skeleton variant="text" width={100} /></TableCell>
                     <TableCell><Skeleton variant="text" width={120} /></TableCell>
+                    <TableCell><Skeleton variant="text" width={100} /></TableCell>
                     <TableCell align="right"><Skeleton variant="circular" width={32} height={32} /></TableCell>
                   </TableRow>
                 ))
-              ) : (
+              ) : clients.length > 0 ? (
                 clients.map((client) => {
                   const stats = getClientStats(client)
                   return (
@@ -379,23 +433,17 @@ function ClientsList() {
                         />
                       </TableCell>
                       <TableCell>
-                        {client.keywords && client.keywords.length > 0 ? (
-                          <Box>
-                            <Typography 
-                              variant="body2" 
-                              sx={{ 
-                                fontSize: '0.875rem',
-                                maxWidth: 200,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                              title={client.keywords.join(', ')}
-                            >
-                              {client.keywords.slice(0, 3).join(', ')}
-                              {client.keywords.length > 3 ? ` +${client.keywords.length - 3} more` : ''}
-                            </Typography>
-                          </Box>
+                        {client.keywords_count && client.keywords_count > 0 ? (
+                          <Chip
+                            label={client.keywords_count.toLocaleString()}
+                            size="small"
+                            icon={<TagIcon sx={{ fontSize: 14 }} />}
+                            sx={{
+                              height: 24,
+                              fontSize: '0.75rem',
+                              fontWeight: 600,
+                            }}
+                          />
                         ) : (
                           <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.875rem' }}>
                             -
@@ -495,7 +543,7 @@ function ClientsList() {
                     </TableRow>
                   )
                 })
-              )}
+              ) : null}
             </TableBody>
           </Table>
           <TablePagination
@@ -506,8 +554,10 @@ function ClientsList() {
             rowsPerPage={pageSize}
             onRowsPerPageChange={handleChangePageSize}
             rowsPerPageOptions={[10, 25, 50, 100]}
+            disabled={isFetching}
             sx={{
               borderTop: `1px solid ${theme.palette.divider}`,
+              opacity: isFetching ? 0.6 : 1,
             }}
           />
         </TableContainer>

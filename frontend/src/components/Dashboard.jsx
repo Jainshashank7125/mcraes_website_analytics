@@ -49,13 +49,13 @@ const cardVariants = {
 
 const statCards = [
   {
-    key: 'brands',
+    key: 'clients',
     icon: BusinessIcon,
     color: '#0f172a',
     gradient: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
     bgGradient: 'linear-gradient(135deg, rgba(15, 23, 42, 0.05) 0%, rgba(30, 41, 59, 0.05) 100%)',
-    route: '/brands',
-    label: 'Brands',
+    route: '/clients',
+    label: 'Clients',
     action: 'View Details'
   },
   {
@@ -100,7 +100,7 @@ function Dashboard() {
 
   const getValue = (key) => {
     const mapping = {
-      brands: status?.brands_count || 0,
+      clients: status?.clients_count || 0,
       prompts: status?.prompts_count || 0,
       responses: status?.responses_count || 0
     }
@@ -272,7 +272,7 @@ function Dashboard() {
                 <Button 
                   variant="contained" 
                   size="small"
-                  onClick={() => navigate('/brands')}
+                  onClick={() => navigate('/clients')}
                   sx={{
                     px: 2,
                     py: 0.75,
@@ -286,12 +286,12 @@ function Dashboard() {
                     },
                   }}
                 >
-                  View Brands
+                  View Clients
                 </Button>
                 <Button 
                   variant="outlined" 
                   size="small"
-                  onClick={() => navigate('/analytics')}
+                  onClick={() => navigate('/agency-analytics')}
                   sx={{
                     px: 2,
                     py: 0.75,

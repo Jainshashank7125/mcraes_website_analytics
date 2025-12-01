@@ -291,12 +291,12 @@ async def sync_status():
     supabase = SupabaseService()
     
     # Get counts from database
-    brands_result = supabase.client.table("brands").select("id", count="exact").execute()
+    clients_result = supabase.client.table("clients").select("id", count="exact").execute()
     prompts_result = supabase.client.table("prompts").select("id", count="exact").execute()
     responses_result = supabase.client.table("responses").select("id", count="exact").execute()
     
     return {
-        "brands_count": brands_result.count if hasattr(brands_result, 'count') else 0,
+        "clients_count": clients_result.count if hasattr(clients_result, 'count') else 0,
         "prompts_count": prompts_result.count if hasattr(prompts_result, 'count') else 0,
         "responses_count": responses_result.count if hasattr(responses_result, 'count') else 0
     }

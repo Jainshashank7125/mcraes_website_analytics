@@ -21,6 +21,7 @@ import AgencyAnalytics from './components/AgencyAnalytics'
 import ReportingDashboard from './components/ReportingDashboard'
 import PublicReportingDashboard from './components/PublicReportingDashboard'
 import KeywordsDashboard from './components/KeywordsDashboard'
+import AuditLogs from './components/AuditLogs'
 import Login from './components/Login'
 import CreateUser from './components/CreateUser'
 import NotFound from './components/NotFound'
@@ -65,6 +66,7 @@ function App() {
                           <Route path="/sync" element={<Layout><SyncPanel /></Layout>} />
                           <Route path="/data" element={<Layout><DataView /></Layout>} />
                           <Route path="/reporting" element={<Layout><ReportingDashboard /></Layout>} />
+                          <Route path="/audit-logs" element={<Layout><AuditLogs /></Layout>} />
                           <Route path="/create-user" element={<Layout><CreateUser /></Layout>} />
                           <Route path="*" element={<NotFound />} />
                         </Routes>

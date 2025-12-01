@@ -864,13 +864,15 @@ async def get_agency_analytics_campaigns(
 async def get_campaign_rankings(
     campaign_id: int,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)")
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    page: Optional[int] = Query(1, description="Page number (1-indexed)"),
+    page_size: Optional[int] = Query(50, description="Number of records per page")
 ):
-    """Get campaign rankings for a specific campaign"""
+    """Get campaign rankings for a specific campaign with pagination"""
     try:
         supabase = SupabaseService()
         
-        query = supabase.client.table("agency_analytics_campaign_rankings").select("*").eq("campaign_id", campaign_id)
+        query = supabase.client.table("agency_analytics_campaign_rankings").select("*", count="exact").eq("campaign_id", campaign_id)
         
         if start_date:
             query = query.gte("date", start_date)
@@ -878,8 +880,15 @@ async def get_campaign_rankings(
             query = query.lte("date", end_date)
         
         query = query.order("date", desc=False)
+        
+        # Apply pagination
+        offset = (page - 1) * page_size
+        query = query.range(offset, offset + page_size - 1)
+        
         result = query.execute()
         rankings = result.data if hasattr(result, 'data') else []
+        total_count = result.count if hasattr(result, 'count') else len(rankings)
+        total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
         
         # Get campaign info
         campaign_result = supabase.client.table("agency_analytics_campaigns").select("*").eq("id", campaign_id).execute()
@@ -888,7 +897,11 @@ async def get_campaign_rankings(
         return {
             "campaign": campaign,
             "rankings": rankings,
-            "count": len(rankings)
+            "count": len(rankings),
+            "total_count": total_count,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages
         }
     except Exception as e:
         logger.error(f"Error fetching campaign rankings: {str(e)}")
@@ -1042,18 +1055,58 @@ async def get_campaign_keyword_rankings(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/data/agency-analytics/campaign/{campaign_id}/keyword-ranking-summaries")
-async def get_campaign_keyword_ranking_summaries(campaign_id: int):
-    """Get all keyword ranking summaries for a campaign"""
+async def get_campaign_keyword_ranking_summaries(
+    campaign_id: int,
+    page: Optional[int] = Query(1, description="Page number (1-indexed)"),
+    page_size: Optional[int] = Query(50, description="Number of records per page"),
+    search: Optional[str] = Query(None, description="Search by keyword phrase")
+):
+    """Get keyword ranking summaries for a campaign with pagination and search"""
     try:
         supabase = SupabaseService()
         
-        result = supabase.client.table("agency_analytics_keyword_ranking_summaries").select("*").eq("campaign_id", campaign_id).order("keyword_id", desc=True).execute()
-        summaries = result.data if hasattr(result, 'data') else []
+        query = supabase.client.table("agency_analytics_keyword_ranking_summaries").select("*", count="exact").eq("campaign_id", campaign_id)
+        
+        # Apply search filter if provided
+        if search and search.strip():
+            search_term = search.strip().lower()
+            # Fetch a larger set for filtering (since Supabase doesn't support case-insensitive search directly)
+            fetch_size = page_size * 10
+            temp_result = query.limit(fetch_size).execute()
+            all_summaries = temp_result.data if hasattr(temp_result, 'data') else []
+            
+            # Filter in Python for keyword phrase
+            filtered_summaries = [
+                s for s in all_summaries
+                if (s.get("keyword_phrase", "") or "").lower().find(search_term) >= 0
+            ]
+            
+            # Calculate total count
+            total_count = len(filtered_summaries)
+            
+            # Apply pagination
+            offset = (page - 1) * page_size
+            summaries = filtered_summaries[offset:offset + page_size]
+            total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
+        else:
+            # No search - use normal pagination
+            query = query.order("keyword_id", desc=True)
+            offset = (page - 1) * page_size
+            query = query.range(offset, offset + page_size - 1)
+            
+            result = query.execute()
+            summaries = result.data if hasattr(result, 'data') else []
+            total_count = result.count if hasattr(result, 'count') else len(summaries)
+            total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
         
         return {
             "campaign_id": campaign_id,
             "summaries": summaries,
-            "count": len(summaries)
+            "count": len(summaries),
+            "total_count": total_count,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages
         }
     except Exception as e:
         logger.error(f"Error fetching campaign keyword ranking summaries: {str(e)}")
@@ -3533,6 +3586,7 @@ async def query_scrunch_analytics(
 class KPISelectionRequest(BaseModel):
     selected_kpis: List[str]
     visible_sections: Optional[List[str]] = None  # Optional for backward compatibility
+    selected_charts: Optional[List[str]] = None  # Optional chart selections
     version: Optional[int] = None  # Version for optimistic locking
 
 @router.get("/data/reporting-dashboard/{brand_id}/kpi-selections")
@@ -3553,7 +3607,7 @@ async def get_brand_kpi_selections(brand_id: int):
         # Removed unnecessary brand check - if brand doesn't exist, this will just return empty
         query_start = time.time()
         selection_result = supabase.client.table("brand_kpi_selections").select(
-            "selected_kpis,visible_sections,updated_at,version,last_modified_by"
+            "selected_kpis,visible_sections,selected_charts,updated_at,version,last_modified_by"
         ).eq("brand_id", brand_id).limit(1).execute()
         query_time = time.time() - query_start
         
@@ -3568,6 +3622,7 @@ async def get_brand_kpi_selections(brand_id: int):
                 "brand_id": brand_id,
                 "selected_kpis": selection.get("selected_kpis", []),
                 "visible_sections": selection.get("visible_sections", ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"]),
+                "selected_charts": selection.get("selected_charts", []),
                 "updated_at": selection.get("updated_at"),
                 "version": selection.get("version", 1),
                 "last_modified_by": selection.get("last_modified_by")
@@ -3578,6 +3633,7 @@ async def get_brand_kpi_selections(brand_id: int):
                 "brand_id": brand_id,
                 "selected_kpis": [],
                 "visible_sections": ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"],
+                "selected_charts": [],
                 "updated_at": None,
                 "version": 1,
                 "last_modified_by": None
@@ -3655,6 +3711,16 @@ async def save_brand_kpi_selections(
             else:
                 selection_data["visible_sections"] = ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"]
         
+        # Add selected_charts if provided, otherwise keep existing or use empty array
+        if request.selected_charts is not None:
+            selection_data["selected_charts"] = request.selected_charts
+        else:
+            # If not provided, keep existing charts or use empty array
+            if existing and len(existing) > 0 and existing[0].get("selected_charts") is not None:
+                selection_data["selected_charts"] = existing[0]["selected_charts"]
+            else:
+                selection_data["selected_charts"] = []
+        
         upsert_result = supabase.client.table("brand_kpi_selections").upsert(
             selection_data,
             on_conflict="brand_id"
@@ -3664,7 +3730,7 @@ async def save_brand_kpi_selections(
         updated_result = supabase.client.table("brand_kpi_selections").select("version").eq("brand_id", brand_id).execute()
         updated_version = updated_result.data[0].get("version", 1) if updated_result.data else 1
         
-        logger.info(f"Saved KPI selections for brand {brand_id}: {len(request.selected_kpis)} KPIs, {len(selection_data.get('visible_sections', []))} sections, version={updated_version}")
+        logger.info(f"Saved KPI selections for brand {brand_id}: {len(request.selected_kpis)} KPIs, {len(selection_data.get('visible_sections', []))} sections, {len(selection_data.get('selected_charts', []))} charts, version={updated_version}")
         
         # Broadcast WebSocket notification
         try:
@@ -3683,8 +3749,9 @@ async def save_brand_kpi_selections(
             "brand_id": brand_id,
             "selected_kpis": request.selected_kpis,
             "visible_sections": selection_data.get("visible_sections", []),
+            "selected_charts": selection_data.get("selected_charts", []),
             "version": updated_version,
-            "message": "KPI and section selections saved successfully"
+            "message": "KPI, section, and chart selections saved successfully"
         }
     except HTTPException:
         raise
@@ -4222,31 +4289,24 @@ async def get_clients(
         # Use all items (no filtering - show all clients regardless of campaign status)
         items = all_items
         
-        # For each client, get keywords from their campaigns
+        # For each client, get keyword count from their campaigns
         for item in items:
             client_id = item.get("id")
-            keywords = []
+            keywords_count = 0
             
             # Get all campaigns for this client
             campaigns = item.get("client_campaigns", [])
             campaign_ids = [c.get("campaign_id") for c in campaigns if c.get("campaign_id")]
             
             if campaign_ids:
-                # Get keywords for all campaigns
+                # Get count of keywords for all campaigns
                 keywords_result = supabase.client.table("agency_analytics_keywords").select(
-                    "keyword_phrase, primary_keyword"
+                    "id", count="exact"
                 ).in_("campaign_id", campaign_ids).execute()
                 
-                keywords_data = keywords_result.data if hasattr(keywords_result, 'data') else []
-                # Extract unique keyword phrases, prioritizing primary keywords
-                keyword_phrases = set()
-                for kw in keywords_data:
-                    if kw.get("keyword_phrase"):
-                        keyword_phrases.add(kw.get("keyword_phrase"))
-                
-                keywords = sorted(list(keyword_phrases))[:10]  # Limit to top 10 keywords
+                keywords_count = keywords_result.count if hasattr(keywords_result, 'count') else 0
             
-            item["keywords"] = keywords
+            item["keywords_count"] = keywords_count
         
         # Calculate pagination metadata
         total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 1

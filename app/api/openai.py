@@ -297,14 +297,15 @@ Provide a clear, professional review (4-5 bullet points) that highlights what's 
 @router.post("/openai/metrics/overview")
 @handle_api_errors(context="generating overall metrics overview")
 async def generate_overall_overview(
-    request: OverallOverviewRequest,
-    current_user: dict = Depends(get_current_user)
+    request: OverallOverviewRequest
 ):
     """
     Generate an AI-powered overall overview of all metrics from all data sources
     
     Analyzes all KPIs from GA4, Agency Analytics, and Scrunch together
     to provide a comprehensive overview of overall performance.
+    
+    This endpoint is accessible without authentication to support public reporting views.
     """
     try:
         if not request.client_id and not request.brand_id:

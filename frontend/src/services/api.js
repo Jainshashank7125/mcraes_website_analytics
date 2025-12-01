@@ -323,10 +323,12 @@ export const agencyAnalyticsAPI = {
   },
 
   // Get campaign rankings
-  getCampaignRankings: async (campaignId, startDate = null, endDate = null) => {
+  getCampaignRankings: async (campaignId, startDate = null, endDate = null, page = 1, pageSize = 50) => {
     const params = new URLSearchParams()
     if (startDate) params.append('start_date', startDate)
     if (endDate) params.append('end_date', endDate)
+    params.append('page', page)
+    params.append('page_size', pageSize)
     
     const response = await api.get(`/api/v1/data/agency-analytics/campaign/${campaignId}/rankings?${params.toString()}`)
     return response.data
@@ -410,8 +412,15 @@ export const agencyAnalyticsAPI = {
   },
 
   // Get campaign keyword ranking summaries
-  getCampaignKeywordRankingSummaries: async (campaignId) => {
-    const response = await api.get(`/api/v1/data/agency-analytics/campaign/${campaignId}/keyword-ranking-summaries`)
+  getCampaignKeywordRankingSummaries: async (campaignId, page = 1, pageSize = 50, search = '') => {
+    const params = new URLSearchParams()
+    params.append('page', page)
+    params.append('page_size', pageSize)
+    if (search && search.trim()) {
+      params.append('search', search.trim())
+    }
+    
+    const response = await api.get(`/api/v1/data/agency-analytics/campaign/${campaignId}/keyword-ranking-summaries?${params.toString()}`)
     return response.data
   },
 }
@@ -657,12 +666,19 @@ export const reportingAPI = {
   },
   
   // Save KPI selections for a brand (used by managers/admins)
-  saveKPISelections: async (brandId, selectedKPIs, visibleSections = null) => {
+  saveKPISelections: async (brandId, selectedKPIs, visibleSections = null, selectedCharts = null) => {
     const payload = {
       selected_kpis: Array.isArray(selectedKPIs) ? selectedKPIs : Array.from(selectedKPIs)
     }
-    if (visibleSections) {
+    // Always include visible_sections if provided (even if empty array)
+    // Empty array means "show no sections" in public view
+    if (visibleSections !== null && visibleSections !== undefined) {
       payload.visible_sections = Array.isArray(visibleSections) ? visibleSections : Array.from(visibleSections)
+    }
+    // Always include selected_charts if provided (even if empty array)
+    // Empty array means "show no charts" in public view
+    if (selectedCharts !== null && selectedCharts !== undefined) {
+      payload.selected_charts = Array.isArray(selectedCharts) ? selectedCharts : Array.from(selectedCharts)
     }
     const response = await api.put(`/api/v1/data/reporting-dashboard/${brandId}/kpi-selections`, payload)
     return response.data
@@ -827,6 +843,44 @@ export const openaiAPI = {
       start_date: startDate,
       end_date: endDate
     })
+    return response.data
+  },
+}
+
+// Audit Logs API endpoints
+export const auditAPI = {
+  // Get audit logs with filtering and pagination
+  getAuditLogs: async (action = null, userEmail = null, status = null, startDate = null, endDate = null, page = 1, pageSize = 50) => {
+    const params = new URLSearchParams()
+    if (action) params.append('action', action)
+    if (userEmail) params.append('user_email', userEmail)
+    if (status) params.append('status', status)
+    if (startDate) params.append('start_date', startDate)
+    if (endDate) params.append('end_date', endDate)
+    params.append('limit', pageSize)
+    params.append('offset', (page - 1) * pageSize)
+    
+    const response = await api.get(`/api/v1/audit/logs?${params.toString()}`)
+    return response.data
+  },
+  
+  // Get audit statistics
+  getAuditStats: async (startDate = null, endDate = null) => {
+    const params = new URLSearchParams()
+    if (startDate) params.append('start_date', startDate)
+    if (endDate) params.append('end_date', endDate)
+    
+    const response = await api.get(`/api/v1/audit/stats?${params.toString()}`)
+    return response.data
+  },
+  
+  // Get user activity
+  getUserActivity: async (userEmail = null, limit = 50) => {
+    const params = new URLSearchParams()
+    if (userEmail) params.append('user_email', userEmail)
+    params.append('limit', limit)
+    
+    const response = await api.get(`/api/v1/audit/user-activity?${params.toString()}`)
     return response.data
   },
 }

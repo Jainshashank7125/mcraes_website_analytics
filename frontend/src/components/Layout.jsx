@@ -31,23 +31,26 @@ import {
   Logout as LogoutIcon,
   AccountCircle as AccountCircleIcon,
   PersonAdd as PersonAddIcon,
+  History as HistoryIcon,
 } from '@mui/icons-material'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
 import { Button, Menu, MenuItem } from '@mui/material'
 import SyncStatusIndicator from './SyncStatusIndicator'
+import { isAdmin } from '../utils/roleUtils'
 
 const drawerWidth = 240
 
 const menuItems = [
-  { text: 'Overview', icon: DashboardIcon, path: '/' },
-  { text: 'Brands', icon: BusinessIcon, path: '/brands' },
-  { text: 'Clients', icon: PeopleIcon, path: '/clients' },
+  { text: 'Overview', icon: DashboardIcon, path: '/', adminOnly: false },
+  // { text: 'Brands', icon: BusinessIcon, path: '/brands' },
+  { text: 'Clients', icon: PeopleIcon, path: '/clients', adminOnly: false },
   // { text: 'Analytics', icon: AnalyticsIcon, path: '/analytics' },
-  { text: 'Agency Analytics', icon: AnalyticsIcon, path: '/agency-analytics' },
-  { text: 'Reporting Dashboard', icon: AssessmentIcon, path: '/reporting' },
-  { text: 'Sync Data', icon: SyncIcon, path: '/sync' },
-  { text: 'View Data', icon: StorageIcon, path: '/data' },
+  { text: 'Agency Analytics', icon: AnalyticsIcon, path: '/agency-analytics', adminOnly: false },
+  { text: 'Reporting Dashboard', icon: AssessmentIcon, path: '/reporting', adminOnly: false },
+  { text: 'Sync Data', icon: SyncIcon, path: '/sync', adminOnly: false },
+  { text: 'Scrunch Data', icon: StorageIcon, path: '/data', adminOnly: false },
+  { text: 'Audit Logs', icon: HistoryIcon, path: '/audit-logs', adminOnly: true },
 ]
 
 const itemVariants = {
@@ -131,14 +134,16 @@ function Layout({ children }) {
       
       <Box sx={{ flex: 1, overflow: 'auto', py: 1.5 }}>
         <List sx={{ px: 1.5 }}>
-          {menuItems.map((item, index) => {
+          {menuItems
+            .map((item, index) => {
             const isActive = location.pathname === item.path || 
                             (item.path === '/' && location.pathname === '/') ||
-                            (item.path === '/brands' && location.pathname.startsWith('/brands')) ||
+                            // (item.path === '/brands' && location.pathname.startsWith('/brands')) ||
                             (item.path === '/clients' && location.pathname.startsWith('/clients')) ||
-                            (item.path === '/agency-analytics' && location.pathname === '/agency-analytics') ||
-                            (item.path === '/reporting' && location.pathname === '/reporting')
-                                        const IconComponent = item.icon
+                            // (item.path === '/agency-analytics' && location.pathname === '/agency-analytics') ||
+                            (item.path === '/reporting' && location.pathname === '/reporting') ||
+                            (item.path === '/audit-logs' && location.pathname === '/audit-logs')
+            const IconComponent = item.icon
             
             return (
               <ListItem 

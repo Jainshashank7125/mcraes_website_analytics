@@ -303,7 +303,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   // Chart/visualization selections (for each section)
   const [selectedCharts, setSelectedCharts] = useState(new Set());
   const [tempSelectedCharts, setTempSelectedCharts] = useState(new Set()); // For dialog
-  // Public section visibility (loaded from database for public view)
+  // Public section visibility and chart selections (loaded from database for public view)
   const [publicVisibleSections, setPublicVisibleSections] = useState(null);
   const [publicSelectedCharts, setPublicSelectedCharts] = useState(null);
   const theme = useTheme();
@@ -366,11 +366,19 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
           const defaultSections = new Set(["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics", "keywords"]);
           setVisibleSections(defaultSections);
           setTempVisibleSections(defaultSections);
-          // Select all KPIs and charts by default
-          setSelectedKPIs(new Set(KPI_ORDER));
-          setTempSelectedKPIs(new Set(KPI_ORDER));
+        }
+        
+        // Load chart selections
+        if (data.selected_charts && data.selected_charts.length > 0) {
+          setSelectedCharts(new Set(data.selected_charts));
+          setTempSelectedCharts(new Set(data.selected_charts));
+        } else {
+          // If no chart selections saved, default to all charts
           const allCharts = new Set();
-          defaultSections.forEach((sectionKey) => {
+          const sectionsToUse = data.visible_sections && data.visible_sections.length > 0 
+            ? data.visible_sections 
+            : ["ga4", "agency_analytics", "scrunch_ai", "brand_analytics", "advanced_analytics", "keywords"];
+          sectionsToUse.forEach((sectionKey) => {
             getDashboardSectionCharts(sectionKey).forEach((chart) => {
               allCharts.add(chart.key);
             });
@@ -405,30 +413,61 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
       const data = await reportingAPI.getKPISelections(selectedBrandId);
       console.log("Loaded public KPI selections:", data);
       if (data) {
+        // Check if a selection was explicitly saved (updated_at exists means record exists in DB)
+        const hasExplicitSelection = data.updated_at !== null && data.updated_at !== undefined;
+        
         // Load public KPI selections
-        if (data.selected_kpis && data.selected_kpis.length > 0) {
-          setPublicKPISelections(new Set(data.selected_kpis));
+        if (hasExplicitSelection) {
+          // Selection was explicitly saved - use it (even if empty array means "show no KPIs")
+          if (data.selected_kpis && data.selected_kpis.length > 0) {
+            setPublicKPISelections(new Set(data.selected_kpis));
+          } else {
+            // Empty array with updated_at means admin explicitly deselected all KPIs
+            setPublicKPISelections(new Set([]));
+          }
         } else {
-          // If no selections saved, show all available KPIs
+          // No selection saved yet - show all available KPIs (default behavior)
           setPublicKPISelections(null);
         }
         
         // Load public section visibility
-        if (data.visible_sections && data.visible_sections.length > 0) {
-          const sectionsSet = new Set(data.visible_sections);
-          console.log("Setting publicVisibleSections:", Array.from(sectionsSet));
-          setPublicVisibleSections(sectionsSet);
+        if (hasExplicitSelection) {
+          // Selection was explicitly saved - use it (even if empty array means "show no sections")
+          if (data.visible_sections && data.visible_sections.length > 0) {
+            const sectionsSet = new Set(data.visible_sections);
+            console.log("Setting publicVisibleSections:", Array.from(sectionsSet));
+            setPublicVisibleSections(sectionsSet);
+          } else {
+            // Empty array with updated_at means admin explicitly deselected all sections
+            console.log("Empty visible_sections with updated_at, setting to empty Set (show no sections)");
+            setPublicVisibleSections(new Set([]));
+          }
         } else {
-          // If no selections saved, show all sections
-          console.log("No visible_sections in data, setting to null (show all)");
+          // No selection saved yet - show all sections (default behavior)
+          console.log("No visible_sections saved (updated_at is null), setting to null (show all)");
           setPublicVisibleSections(null);
+        }
+        
+        // Load public chart selections
+        if (hasExplicitSelection) {
+          // Selection was explicitly saved - use it (even if empty array means "show no charts")
+          if (data.selected_charts && data.selected_charts.length > 0) {
+            setPublicSelectedCharts(new Set(data.selected_charts));
+          } else {
+            // Empty array with updated_at means admin explicitly deselected all charts
+            setPublicSelectedCharts(new Set([]));
+          }
+        } else {
+          // No selection saved yet - show all charts (default behavior)
+          setPublicSelectedCharts(null);
         }
       }
     } catch (err) {
       console.error("Error loading public KPI selections:", err);
-      // On error, show all KPIs and sections
+      // On error, show all KPIs, sections, and charts (default behavior)
       setPublicKPISelections(null);
       setPublicVisibleSections(null);
+      setPublicSelectedCharts(null);
     }
   };
 
@@ -1147,8 +1186,9 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
           { key: "ga4_traffic_overview", label: "Traffic Overview", description: "Overall traffic metrics" },
           { key: "ga4_daily_comparison", label: "Daily Comparison", description: "Daily users, sessions, and conversions" },
           { key: "ga4_channel_performance", label: "Channel Performance", description: "Traffic by marketing channel" },
-          { key: "ga4_device_category", label: "Device Category", description: "Traffic by device type" },
-          { key: "ga4_landing_pages", label: "Top Landing Pages", description: "Most visited pages" },
+          { key: "ga4_traffic_sources", label: "Traffic Sources", description: "Sessions by channel (donut and bar charts)" },
+          { key: "ga4_top_pages", label: "Top Landing Pages", description: "Most visited pages" },
+          { key: "ga4_geographic_breakdown", label: "Geographic Distribution", description: "Traffic by country" },
         ];
       case "agency_analytics":
         return [
@@ -1271,12 +1311,24 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
     
     try {
       // Save to database (KPIs, sections, and charts)
-      await reportingAPI.saveKPISelections(selectedBrandId, tempSelectedKPIs, Array.from(tempVisibleSections));
+      // Note: Empty arrays are valid - they mean "show no KPIs/sections/charts" in public view
+      // The backend will set updated_at when saving, which allows us to distinguish
+      // between "no selection saved" (show all) vs "empty selection saved" (show none)
+      await reportingAPI.saveKPISelections(
+        selectedBrandId, 
+        Array.from(tempSelectedKPIs), // Convert Set to Array (empty Set becomes [])
+        Array.from(tempVisibleSections), // Convert Set to Array (empty Set becomes [])
+        Array.from(tempSelectedCharts) // Convert Set to Array (empty Set becomes [])
+      );
       setSelectedKPIs(new Set(tempSelectedKPIs));
       setVisibleSections(new Set(tempVisibleSections));
       setSelectedCharts(new Set(tempSelectedCharts));
       setShowKPISelector(false);
-      console.log("KPI, section, and chart selections saved successfully");
+      console.log("KPI, section, and chart selections saved successfully", {
+        kpiCount: tempSelectedKPIs.size,
+        sectionCount: tempVisibleSections.size,
+        chartCount: tempSelectedCharts.size
+      });
     } catch (err) {
       console.error("Error saving KPI selections:", err);
       setError("Failed to save KPI and section selections. Please try again.");
@@ -1298,13 +1350,84 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
     if (isPublic) {
       // In public mode, use publicVisibleSections
       if (publicVisibleSections === null) {
-        return true; // Show all if no selections saved
+        return true; // Show all if no selections saved (default behavior)
       }
-      return publicVisibleSections.has(sectionKey);
+      if (publicVisibleSections.size === 0) {
+        return false; // Empty Set means admin explicitly deselected all sections
+      }
+      return publicVisibleSections.has(sectionKey); // Check if this specific section is selected
     } else {
       // In authenticated mode, always show (managers can see everything)
       return true;
     }
+  };
+
+  // Helper function to check if a chart should be visible in public view
+  const isChartVisible = (chartKey) => {
+    if (!isPublic) {
+      // In authenticated mode, always show charts (managers can see everything)
+      return true;
+    }
+    // In public mode, check publicSelectedCharts
+    if (publicSelectedCharts === null) {
+      return true; // Show all charts if no selections saved (default behavior)
+    }
+    if (publicSelectedCharts.size === 0) {
+      return false; // Empty Set means admin explicitly deselected all charts
+    }
+    return publicSelectedCharts.has(chartKey); // Check if this specific chart is selected
+  };
+
+  // Helper function to check if KPIs for a section should be shown in public view
+  const shouldShowSectionKPIs = (sectionKey) => {
+    if (!isPublic) {
+      // In authenticated mode, always show KPIs
+      return true;
+    }
+    // In public mode, check if any KPIs for this section are selected
+    if (publicKPISelections === null) {
+      return true; // Show all KPIs if no selections saved (default behavior)
+    }
+    if (publicKPISelections.size === 0) {
+      return false; // Empty Set means admin explicitly deselected all KPIs
+    }
+    // Check if any KPIs for this section are selected
+    const sectionKPIs = getDashboardSectionKPIs(sectionKey);
+    return sectionKPIs.some((kpiKey) => publicKPISelections.has(kpiKey));
+  };
+
+  // Helper function to check if charts for a section should be shown in public view
+  const shouldShowSectionCharts = (sectionKey) => {
+    if (!isPublic) {
+      // In authenticated mode, always show charts
+      return true;
+    }
+    // In public mode, check if any charts for this section are selected
+    if (publicSelectedCharts === null) {
+      return true; // Show all charts if no selections saved (default behavior)
+    }
+    if (publicSelectedCharts.size === 0) {
+      return false; // Empty Set means admin explicitly deselected all charts
+    }
+    // Check if any charts for this section are selected
+    const sectionCharts = getDashboardSectionCharts(sectionKey);
+    return sectionCharts.some((chart) => publicSelectedCharts.has(chart.key));
+  };
+
+  // Helper function to check if a specific KPI should be shown in public view
+  const shouldShowKPI = (kpiKey) => {
+    if (!isPublic) {
+      // In authenticated mode, always show KPIs (filtered by selectedKPIs)
+      return selectedKPIs.has(kpiKey);
+    }
+    // In public mode, check publicKPISelections
+    if (publicKPISelections === null) {
+      return true; // Show all KPIs if no selections saved (default behavior)
+    }
+    if (publicKPISelections.size === 0) {
+      return false; // Empty Set means admin explicitly deselected all KPIs
+    }
+    return publicKPISelections.has(kpiKey); // Check if this specific KPI is selected
   };
 
   const handleSectionChange = (sectionKey, checked) => {
@@ -1367,13 +1490,18 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   const displayedKPIs =
     Object.keys(allKPIs).length > 0
       ? isPublic
-        ? // In public mode, use saved selections from database (or show all if none saved)
+        ? // In public mode, use saved selections from database
           (publicKPISelections === null
-            ? KPI_ORDER.filter((key) => allKPIs[key]) // Show all if no selections saved
-            : KPI_ORDER.filter(
+            ? // null means no selection saved yet - show all available KPIs (default)
+              KPI_ORDER.filter((key) => allKPIs[key]).map((key) => [key, allKPIs[key]])
+            : publicKPISelections.size === 0
+            ? // Empty Set means admin explicitly deselected all KPIs - show none
+              []
+            : // Set with items means admin selected specific KPIs - show only selected
+              KPI_ORDER.filter(
                 (key) => allKPIs[key] && publicKPISelections.has(key)
-              )
-          ).map((key) => [key, allKPIs[key]])
+              ).map((key) => [key, allKPIs[key]])
+          )
         : // In authenticated mode, use user's current selection
           KPI_ORDER.filter(
             (key) =>
@@ -1723,8 +1851,10 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
       ) : dashboardData ? (
         <>
           {/* Google Analytics 4 Section */}
-          {isSectionVisible("ga4") && (dashboardData?.kpis?.users ||
-            dashboardData?.chart_data?.ga4_traffic_overview) && (
+          {isSectionVisible("ga4") && 
+            // Show section if it has KPIs (and KPIs are selected in public view) OR charts (and charts are selected in public view)
+            ((shouldShowSectionKPIs("ga4") && (dashboardData?.kpis?.users || dashboardData?.kpis?.sessions)) ||
+             (shouldShowSectionCharts("ga4") && dashboardData?.chart_data?.ga4_traffic_overview)) && (
             <SectionContainer
               title={isPublic ? "Website Analytics" : "Google Analytics 4"}
               description="Website traffic and engagement metrics"
@@ -1743,215 +1873,218 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                 </Typography> */}
 
                 {/* Performance Metrics - Donut Charts */}
-                <Typography
-                  variant="h6"
-                  fontWeight={600}
-                  mb={2}
-                  sx={{ fontSize: "1.125rem", letterSpacing: "-0.01em" }}
-                >
-                  Performance Metrics
-                </Typography>
-                <Grid container spacing={3} sx={{ mb: 4 }}>
-                  {/* Bounce Rate Donut */}
-                  {dashboardData?.kpis?.bounce_rate && (
-                    <Grid item xs={12} sm={6} md={3}>
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.3, delay: 0.1 }}
-                      >
-                        <Card
-                          sx={{
-                            background: "#FFFFFF",
-                            border: `1px solid ${theme.palette.divider}`,
-                            borderRadius: 2,
-                            boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                            transition: "all 0.2s ease-in-out",
-                            "&:hover": {
-                              boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-                            },
-                          }}
-                        >
-                          <CardContent sx={{ p: 2.5 }}>
-                            <Box
-                              display="flex"
-                              alignItems="center"
-                              justifyContent="space-between"
-                              mb={1.5}
-                            >
-                              <Typography
-                                variant="body2"
-                                color="text.secondary"
-                                sx={{ fontSize: "0.875rem", fontWeight: 500 }}
-                              >
-                                Active users
-                              </Typography>
-                              <IconButton size="small" sx={{ p: 0.5 }}>
-                                <TrendingUpIcon
-                                  sx={{ fontSize: 16, color: "text.secondary" }}
-                                />
-                              </IconButton>
-                            </Box>
-                            <Typography
-                              variant="h4"
-                              fontWeight={700}
+                {/* Only show Performance Metrics section if KPIs are selected (in public view) */}
+                {shouldShowSectionKPIs("ga4") && (
+                  <>
+                    <Typography
+                      variant="h6"
+                      fontWeight={600}
+                      mb={2}
+                      sx={{ fontSize: "1.125rem", letterSpacing: "-0.01em" }}
+                    >
+                      Performance Metrics
+                    </Typography>
+                    <Grid container spacing={3} sx={{ mb: 4 }}>
+                      {/* Users KPI */}
+                      {dashboardData?.kpis?.users && shouldShowKPI("users") && (
+                        <Grid item xs={12} sm={6} md={3}>
+                          <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.3, delay: 0.1 }}
+                          >
+                            <Card
                               sx={{
-                                fontSize: "1.75rem",
-                                letterSpacing: "-0.02em",
-                                mb: 1,
-                                color: "text.primary",
+                                background: "#FFFFFF",
+                                border: `1px solid ${theme.palette.divider}`,
+                                borderRadius: 2,
+                                boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                                transition: "all 0.2s ease-in-out",
+                                "&:hover": {
+                                  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                                },
                               }}
                             >
-                              {(() => {
-                                const value =
-                                  dashboardData.kpis.users.value || 0;
-                                if (value >= 1000) {
-                                  return `${(value / 1000).toFixed(1)}K`;
-                                }
-                                return value.toLocaleString();
-                              })()}
-                            </Typography>
-                            <Box
-                              sx={{
-                                minHeight: '24px',
-                                display: 'flex',
-                                alignItems: 'center'
-                              }}
-                            >
-                              {dashboardData.kpis.users.change !== undefined &&
-                                dashboardData.kpis.users.change !== null &&
-                                dashboardData.kpis.users.change >= 0 && (
-                                  <Box
-                                    display="flex"
-                                    alignItems="center"
-                                    gap={0.5}
+                              <CardContent sx={{ p: 2.5 }}>
+                                <Box
+                                  display="flex"
+                                  alignItems="center"
+                                  justifyContent="space-between"
+                                  mb={1.5}
+                                >
+                                  <Typography
+                                    variant="body2"
+                                    color="text.secondary"
+                                    sx={{ fontSize: "0.875rem", fontWeight: 500 }}
                                   >
+                                    Active users
+                                  </Typography>
+                                  <IconButton size="small" sx={{ p: 0.5 }}>
                                     <TrendingUpIcon
-                                      sx={{ fontSize: 14, color: "#34A853" }}
+                                      sx={{ fontSize: 16, color: "text.secondary" }}
                                     />
-                                    <Typography
-                                      variant="body2"
-                                      sx={{
-                                        fontSize: "0.875rem",
-                                        fontWeight: 600,
-                                        color: "#34A853",
-                                      }}
-                                    >
-                                      {Math.abs(
-                                        dashboardData.kpis.users.change
-                                      ).toFixed(1)}
-                                      %
-                                    </Typography>
-                                  </Box>
-                                )}
-                            </Box>
-                          </CardContent>
-                        </Card>
-                      </motion.div>
-                    </Grid>
-                  )}
+                                  </IconButton>
+                                </Box>
+                                <Typography
+                                  variant="h4"
+                                  fontWeight={700}
+                                  sx={{
+                                    fontSize: "1.75rem",
+                                    letterSpacing: "-0.02em",
+                                    mb: 1,
+                                    color: "text.primary",
+                                  }}
+                                >
+                                  {(() => {
+                                    const value =
+                                      dashboardData.kpis.users.value || 0;
+                                    if (value >= 1000) {
+                                      return `${(value / 1000).toFixed(1)}K`;
+                                    }
+                                    return value.toLocaleString();
+                                  })()}
+                                </Typography>
+                                <Box
+                                  sx={{
+                                    minHeight: '24px',
+                                    display: 'flex',
+                                    alignItems: 'center'
+                                  }}
+                                >
+                                  {dashboardData.kpis.users.change !== undefined &&
+                                    dashboardData.kpis.users.change !== null &&
+                                    dashboardData.kpis.users.change >= 0 && (
+                                      <Box
+                                        display="flex"
+                                        alignItems="center"
+                                        gap={0.5}
+                                      >
+                                        <TrendingUpIcon
+                                          sx={{ fontSize: 14, color: "#34A853" }}
+                                        />
+                                        <Typography
+                                          variant="body2"
+                                          sx={{
+                                            fontSize: "0.875rem",
+                                            fontWeight: 600,
+                                            color: "#34A853",
+                                          }}
+                                        >
+                                          {Math.abs(
+                                            dashboardData.kpis.users.change
+                                          ).toFixed(1)}
+                                          %
+                                        </Typography>
+                                      </Box>
+                                    )}
+                                </Box>
+                              </CardContent>
+                            </Card>
+                          </motion.div>
+                        </Grid>
+                      )}
 
-                  {/* Sessions */}
-                  {dashboardData?.kpis?.sessions && (
-                    <Grid item xs={12} sm={6} md={3}>
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.3, delay: 0.15 }}
-                      >
-                        <Card
-                          sx={{
-                            background: "#FFFFFF",
-                            border: `1px solid ${theme.palette.divider}`,
-                            borderRadius: 2,
-                            boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                            transition: "all 0.2s ease-in-out",
-                            "&:hover": {
-                              boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-                            },
-                          }}
-                        >
-                          <CardContent sx={{ p: 2.5 }}>
-                            <Box
-                              display="flex"
-                              alignItems="center"
-                              justifyContent="space-between"
-                              mb={1.5}
-                            >
-                              <Typography
-                                variant="body2"
-                                color="text.secondary"
-                                sx={{ fontSize: "0.875rem", fontWeight: 500 }}
-                              >
-                                Sessions
-                              </Typography>
-                              <IconButton size="small" sx={{ p: 0.5 }}>
-                                <BarChartIcon
-                                  sx={{ fontSize: 16, color: "text.secondary" }}
-                                />
-                              </IconButton>
-                            </Box>
-                            <Typography
-                              variant="h4"
-                              fontWeight={700}
+                      {/* Sessions */}
+                      {dashboardData?.kpis?.sessions && shouldShowKPI("sessions") && (
+                        <Grid item xs={12} sm={6} md={3}>
+                          <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.3, delay: 0.15 }}
+                          >
+                            <Card
                               sx={{
-                                fontSize: "1.75rem",
-                                letterSpacing: "-0.02em",
-                                mb: 1,
-                                color: "text.primary",
+                                background: "#FFFFFF",
+                                border: `1px solid ${theme.palette.divider}`,
+                                borderRadius: 2,
+                                boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                                transition: "all 0.2s ease-in-out",
+                                "&:hover": {
+                                  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                                },
                               }}
                             >
-                              {(() => {
-                                const value =
-                                  dashboardData.kpis.sessions.value || 0;
-                                if (value >= 1000) {
-                                  return `${(value / 1000).toFixed(1)}K`;
-                                }
-                                return value.toLocaleString();
-                              })()}
-                            </Typography>
-                            <Box
-                              sx={{
-                                minHeight: '24px',
-                                display: 'flex',
-                                alignItems: 'center'
-                              }}
-                            >
-                              {dashboardData.kpis.sessions.change !== undefined &&
-                                dashboardData.kpis.sessions.change !== null &&
-                                dashboardData.kpis.sessions.change >= 0 && (
-                                  <Box
-                                    display="flex"
-                                    alignItems="center"
-                                    gap={0.5}
+                              <CardContent sx={{ p: 2.5 }}>
+                                <Box
+                                  display="flex"
+                                  alignItems="center"
+                                  justifyContent="space-between"
+                                  mb={1.5}
+                                >
+                                  <Typography
+                                    variant="body2"
+                                    color="text.secondary"
+                                    sx={{ fontSize: "0.875rem", fontWeight: 500 }}
                                   >
-                                    <TrendingUpIcon
-                                      sx={{ fontSize: 14, color: "#34A853" }}
+                                    Sessions
+                                  </Typography>
+                                  <IconButton size="small" sx={{ p: 0.5 }}>
+                                    <BarChartIcon
+                                      sx={{ fontSize: 16, color: "text.secondary" }}
                                     />
-                                    <Typography
-                                      variant="body2"
-                                      sx={{
-                                        fontSize: "0.875rem",
-                                        fontWeight: 600,
-                                        color: "#34A853",
-                                      }}
-                                    >
-                                      {Math.abs(
-                                        dashboardData.kpis.sessions.change
-                                      ).toFixed(1)}
-                                      %
-                                    </Typography>
-                                  </Box>
-                                )}
-                            </Box>
-                          </CardContent>
-                        </Card>
-                      </motion.div>
-                    </Grid>
-                  )}
+                                  </IconButton>
+                                </Box>
+                                <Typography
+                                  variant="h4"
+                                  fontWeight={700}
+                                  sx={{
+                                    fontSize: "1.75rem",
+                                    letterSpacing: "-0.02em",
+                                    mb: 1,
+                                    color: "text.primary",
+                                  }}
+                                >
+                                  {(() => {
+                                    const value =
+                                      dashboardData.kpis.sessions.value || 0;
+                                    if (value >= 1000) {
+                                      return `${(value / 1000).toFixed(1)}K`;
+                                    }
+                                    return value.toLocaleString();
+                                  })()}
+                                </Typography>
+                                <Box
+                                  sx={{
+                                    minHeight: '24px',
+                                    display: 'flex',
+                                    alignItems: 'center'
+                                  }}
+                                >
+                                  {dashboardData.kpis.sessions.change !== undefined &&
+                                    dashboardData.kpis.sessions.change !== null &&
+                                    dashboardData.kpis.sessions.change >= 0 && (
+                                      <Box
+                                        display="flex"
+                                        alignItems="center"
+                                        gap={0.5}
+                                      >
+                                        <TrendingUpIcon
+                                          sx={{ fontSize: 14, color: "#34A853" }}
+                                        />
+                                        <Typography
+                                          variant="body2"
+                                          sx={{
+                                            fontSize: "0.875rem",
+                                            fontWeight: 600,
+                                            color: "#34A853",
+                                          }}
+                                        >
+                                          {Math.abs(
+                                            dashboardData.kpis.sessions.change
+                                          ).toFixed(1)}
+                                          %
+                                        </Typography>
+                                      </Box>
+                                    )}
+                                </Box>
+                              </CardContent>
+                            </Card>
+                          </motion.div>
+                        </Grid>
+                      )}
 
-                  {/* New Users */}
-                  {dashboardData?.kpis?.new_users && (
+                      {/* New Users */}
+                      {dashboardData?.kpis?.new_users && shouldShowKPI("new_users") && (
                     <Grid item xs={12} sm={6} md={3}>
                       <motion.div
                         initial={{ opacity: 0, y: 20 }}
@@ -2050,9 +2183,9 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                     </Grid>
                   )}
 
-                  {/* Conversions or Revenue */}
-                  {(dashboardData?.kpis?.conversions ||
-                    dashboardData?.kpis?.revenue) && (
+                      {/* Conversions or Revenue */}
+                      {((dashboardData?.kpis?.conversions && shouldShowKPI("conversions")) ||
+                        (dashboardData?.kpis?.revenue && shouldShowKPI("revenue"))) && (
                     <Grid item xs={12} sm={6} md={3}>
                       <motion.div
                         initial={{ opacity: 0, y: 20 }}
@@ -2163,48 +2296,52 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                       </motion.div>
                     </Grid>
                   )}
-                </Grid>
+                    </Grid>
+                  </>
+                )}
 
                 {/* GA4 Traffic Overview Cards - Additional Metrics */}
-                {dashboardData?.chart_data?.ga4_traffic_overview && (
+                {dashboardData?.chart_data?.ga4_traffic_overview && isChartVisible("ga4_traffic_overview") && (
                   <Grid container spacing={2.5} sx={{ mb: 4 }}>
-                    <Grid item xs={12} md={3}>
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.5, delay: 0.5 }}
-                      >
-                        <Card
-                          sx={{
-                            background:
-                              "linear-gradient(135deg, rgba(52, 199, 89, 0.04) 0%, rgba(90, 200, 250, 0.04) 100%)",
-                            border: `1px solid ${alpha(
-                              theme.palette.success.main,
-                              0.08
-                            )}`,
-                            borderRadius: 2,
-                            boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                          }}
+                    {/* Total Sessions - Only show if sessions KPI is selected */}
+                    {shouldShowKPI("sessions") && (
+                      <Grid item xs={12} md={3}>
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.5, delay: 0.5 }}
                         >
-                          <CardContent sx={{ p: 3 }}>
-                            <Box
-                              display="flex"
-                              alignItems="center"
-                              justifyContent="space-between"
-                              mb={2}
-                            >
-                              <Typography
-                                variant="caption"
-                                color="text.secondary"
-                                sx={{
-                                  fontSize: "11px",
-                                  fontWeight: 600,
-                                  textTransform: "uppercase",
-                                  letterSpacing: "0.05em",
-                                }}
+                          <Card
+                            sx={{
+                              background:
+                                "linear-gradient(135deg, rgba(52, 199, 89, 0.04) 0%, rgba(90, 200, 250, 0.04) 100%)",
+                              border: `1px solid ${alpha(
+                                theme.palette.success.main,
+                                0.08
+                              )}`,
+                              borderRadius: 2,
+                              boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                            }}
+                          >
+                            <CardContent sx={{ p: 3 }}>
+                              <Box
+                                display="flex"
+                                alignItems="center"
+                                justifyContent="space-between"
+                                mb={2}
                               >
-                                Total Sessions
-                              </Typography>
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{
+                                    fontSize: "11px",
+                                    fontWeight: 600,
+                                    textTransform: "uppercase",
+                                    letterSpacing: "0.05em",
+                                  }}
+                                >
+                                  Total Sessions
+                                </Typography>
                               <BarChartIcon
                                 sx={{
                                   fontSize: 20,
@@ -2264,46 +2401,49 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                             </Box>
                           </CardContent>
                         </Card>
-                      </motion.div>
-                    </Grid>
+                        </motion.div>
+                      </Grid>
+                    )}
 
-                    <Grid item xs={12} md={3}>
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.5, delay: 0.6 }}
-                      >
-                        <Card
-                          sx={{
-                            background:
-                              "linear-gradient(135deg, rgba(0, 122, 255, 0.04) 0%, rgba(88, 86, 214, 0.04) 100%)",
-                            border: `1px solid ${alpha(
-                              theme.palette.primary.main,
-                              0.08
-                            )}`,
-                            borderRadius: 2,
-                            boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                          }}
+                    {/* Engaged Sessions - Only show if engaged_sessions KPI is selected */}
+                    {shouldShowKPI("engaged_sessions") && (
+                      <Grid item xs={12} md={3}>
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.5, delay: 0.6 }}
                         >
-                          <CardContent sx={{ p: 3 }}>
-                            <Box
-                              display="flex"
-                              alignItems="center"
-                              justifyContent="space-between"
-                              mb={2}
-                            >
-                              <Typography
-                                variant="caption"
-                                color="text.secondary"
-                                sx={{
-                                  fontSize: "11px",
-                                  fontWeight: 600,
-                                  textTransform: "uppercase",
-                                  letterSpacing: "0.05em",
-                                }}
+                          <Card
+                            sx={{
+                              background:
+                                "linear-gradient(135deg, rgba(0, 122, 255, 0.04) 0%, rgba(88, 86, 214, 0.04) 100%)",
+                              border: `1px solid ${alpha(
+                                theme.palette.primary.main,
+                                0.08
+                              )}`,
+                              borderRadius: 2,
+                              boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                            }}
+                          >
+                            <CardContent sx={{ p: 3 }}>
+                              <Box
+                                display="flex"
+                                alignItems="center"
+                                justifyContent="space-between"
+                                mb={2}
                               >
-                                Engaged Sessions
-                              </Typography>
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{
+                                    fontSize: "11px",
+                                    fontWeight: 600,
+                                    textTransform: "uppercase",
+                                    letterSpacing: "0.05em",
+                                  }}
+                                >
+                                  Engaged Sessions
+                                </Typography>
                               <PeopleIcon
                                 sx={{
                                   fontSize: 20,
@@ -2363,45 +2503,48 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                           </CardContent>
                         </Card>
                       </motion.div>
-                    </Grid>
+                      </Grid>
+                    )}
 
-                    <Grid item xs={12} md={3}>
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.5, delay: 0.7 }}
-                      >
-                        <Card
-                          sx={{
-                            background:
-                              "linear-gradient(135deg, rgba(255, 149, 0, 0.04) 0%, rgba(255, 45, 85, 0.04) 100%)",
-                            border: `1px solid ${alpha(
-                              theme.palette.warning.main,
-                              0.08
-                            )}`,
-                            borderRadius: 2,
-                            boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                          }}
+                    {/* Avg. Session Duration - Only show if avg_session_duration KPI is selected */}
+                    {shouldShowKPI("avg_session_duration") && (
+                      <Grid item xs={12} md={3}>
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.5, delay: 0.7 }}
                         >
-                          <CardContent sx={{ p: 3 }}>
-                            <Box
-                              display="flex"
-                              alignItems="center"
-                              justifyContent="space-between"
-                              mb={2}
-                            >
-                              <Typography
-                                variant="caption"
-                                color="text.secondary"
-                                sx={{
-                                  fontSize: "11px",
-                                  fontWeight: 600,
-                                  textTransform: "uppercase",
-                                  letterSpacing: "0.05em",
-                                }}
+                          <Card
+                            sx={{
+                              background:
+                                "linear-gradient(135deg, rgba(255, 149, 0, 0.04) 0%, rgba(255, 45, 85, 0.04) 100%)",
+                              border: `1px solid ${alpha(
+                                theme.palette.warning.main,
+                                0.08
+                              )}`,
+                              borderRadius: 2,
+                              boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                            }}
+                          >
+                            <CardContent sx={{ p: 3 }}>
+                              <Box
+                                display="flex"
+                                alignItems="center"
+                                justifyContent="space-between"
+                                mb={2}
                               >
-                                Avg. Session Duration
-                              </Typography>
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{
+                                    fontSize: "11px",
+                                    fontWeight: 600,
+                                    textTransform: "uppercase",
+                                    letterSpacing: "0.05em",
+                                  }}
+                                >
+                                  Avg. Session Duration
+                                </Typography>
                               <AccessTimeIcon
                                 sx={{
                                   fontSize: 20,
@@ -2470,116 +2613,120 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                             </Box>
                           </CardContent>
                         </Card>
-                      </motion.div>
-                    </Grid>
+                        </motion.div>
+                      </Grid>
+                    )}
 
-                    <Grid item xs={12} md={3}>
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.5, delay: 0.8 }}
-                      >
-                        <Card
-                          sx={{
-                            background:
-                              "linear-gradient(135deg, rgba(88, 86, 214, 0.04) 0%, rgba(0, 122, 255, 0.04) 100%)",
-                            border: `1px solid ${alpha(
-                              theme.palette.secondary.main,
-                              0.08
-                            )}`,
-                            borderRadius: 2,
-                            boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                          }}
+                    {/* Engagement Rate - Only show if ga4_engagement_rate KPI is selected */}
+                    {shouldShowKPI("ga4_engagement_rate") && (
+                      <Grid item xs={12} md={3}>
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.5, delay: 0.8 }}
                         >
-                          <CardContent sx={{ p: 3 }}>
-                            <Box
-                              display="flex"
-                              alignItems="center"
-                              justifyContent="space-between"
-                              mb={2}
-                            >
+                          <Card
+                            sx={{
+                              background:
+                                "linear-gradient(135deg, rgba(88, 86, 214, 0.04) 0%, rgba(0, 122, 255, 0.04) 100%)",
+                              border: `1px solid ${alpha(
+                                theme.palette.secondary.main,
+                                0.08
+                              )}`,
+                              borderRadius: 2,
+                              boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                            }}
+                          >
+                            <CardContent sx={{ p: 3 }}>
+                              <Box
+                                display="flex"
+                                alignItems="center"
+                                justifyContent="space-between"
+                                mb={2}
+                              >
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{
+                                    fontSize: "11px",
+                                    fontWeight: 600,
+                                    textTransform: "uppercase",
+                                    letterSpacing: "0.05em",
+                                  }}
+                                >
+                                  Engagement Rate
+                                </Typography>
+                                <VisibilityIcon
+                                  sx={{
+                                    fontSize: 20,
+                                    color: "secondary.main",
+                                    opacity: 0.6,
+                                  }}
+                                />
+                              </Box>
                               <Typography
-                                variant="caption"
-                                color="text.secondary"
+                                variant="h3"
+                                fontWeight={700}
+                                color="secondary.main"
                                 sx={{
-                                  fontSize: "11px",
-                                  fontWeight: 600,
-                                  textTransform: "uppercase",
-                                  letterSpacing: "0.05em",
+                                  fontSize: "36px",
+                                  letterSpacing: "-0.02em",
+                                  mb: 1,
                                 }}
                               >
-                                Engagement Rate
+                                {(
+                                  (dashboardData.chart_data.ga4_traffic_overview
+                                    .engagementRate || 0) * 100
+                                ).toFixed(1)}
+                                %
                               </Typography>
-                              <VisibilityIcon
+                              <Box
                                 sx={{
-                                  fontSize: 20,
-                                  color: "secondary.main",
-                                  opacity: 0.6,
+                                  minHeight: '24px',
+                                  display: 'flex',
+                                  alignItems: 'center'
                                 }}
-                              />
-                            </Box>
-                            <Typography
-                              variant="h3"
-                              fontWeight={700}
-                              color="secondary.main"
-                              sx={{
-                                fontSize: "36px",
-                                letterSpacing: "-0.02em",
-                                mb: 1,
-                              }}
-                            >
-                              {(
-                                (dashboardData.chart_data.ga4_traffic_overview
-                                  .engagementRate || 0) * 100
-                              ).toFixed(1)}
-                              %
-                            </Typography>
-                            <Box
-                              sx={{
-                                minHeight: '24px',
-                                display: 'flex',
-                                alignItems: 'center'
-                              }}
-                            >
-                              {dashboardData.chart_data.ga4_traffic_overview
-                                .engagementRateChange >= 0 && (
-                                <Box display="flex" alignItems="center" gap={0.5}>
-                                  <TrendingUpIcon
-                                    sx={{ fontSize: 14, color: "success.main" }}
-                                  />
-                                  <Typography
-                                    variant="body2"
-                                    sx={{
-                                      fontSize: "13px",
-                                      fontWeight: 600,
-                                      color: "success.main",
-                                    }}
-                                  >
-                                    {Math.abs(
-                                      dashboardData.chart_data.ga4_traffic_overview
-                                        .engagementRateChange
-                                    ).toFixed(1)}
-                                    %
-                                  </Typography>
-                                  <Typography
-                                    variant="caption"
-                                    color="text.secondary"
-                                    sx={{ fontSize: "12px" }}
-                                  >
-                                    vs last period
-                                  </Typography>
-                                </Box>
-                              )}
-                            </Box>
-                          </CardContent>
-                        </Card>
-                      </motion.div>
-                    </Grid>
+                              >
+                                {dashboardData.chart_data.ga4_traffic_overview
+                                  .engagementRateChange >= 0 && (
+                                  <Box display="flex" alignItems="center" gap={0.5}>
+                                    <TrendingUpIcon
+                                      sx={{ fontSize: 14, color: "success.main" }}
+                                    />
+                                    <Typography
+                                      variant="body2"
+                                      sx={{
+                                        fontSize: "13px",
+                                        fontWeight: 600,
+                                        color: "success.main",
+                                      }}
+                                    >
+                                      {Math.abs(
+                                        dashboardData.chart_data.ga4_traffic_overview
+                                          .engagementRateChange
+                                      ).toFixed(1)}
+                                      %
+                                    </Typography>
+                                    <Typography
+                                      variant="caption"
+                                      color="text.secondary"
+                                      sx={{ fontSize: "12px" }}
+                                    >
+                                      vs last period
+                                    </Typography>
+                                  </Box>
+                                )}
+                              </Box>
+                            </CardContent>
+                          </Card>
+                        </motion.div>
+                      </Grid>
+                    )}
                   </Grid>
                 )}
 
                 {/* GA4 Performance Charts - Prominent Line Graphs */}
-                {dashboardData.chart_data?.ga4_daily_comparison?.length > 0 && (
+                {dashboardData.chart_data?.ga4_daily_comparison?.length > 0 && isChartVisible("ga4_daily_comparison") && (
                   <Box sx={{ mt: 4 }}>
                     <Grid container spacing={3}>
                       {/* Active Users Chart - Full Width (Primary Chart) */}
@@ -2829,7 +2976,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
 
                 {/* Top Performing Pages - Horizontal Bar Chart */}
                 {dashboardData.chart_data?.top_pages &&
-                  dashboardData.chart_data.top_pages.length > 0 && (
+                  dashboardData.chart_data.top_pages.length > 0 && 
+                  isChartVisible("ga4_top_pages") && (
                     <ChartCard
                       title="Top Performing Pages"
                       badge="GA4"
@@ -2862,7 +3010,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
 
                 {/* Sessions by Channel - Donut Chart & Bar Chart */}
                 {dashboardData.chart_data?.traffic_sources &&
-                  dashboardData.chart_data.traffic_sources.length > 0 && (
+                  dashboardData.chart_data.traffic_sources.length > 0 && 
+                  isChartVisible("ga4_traffic_sources") && (
                     <Grid container spacing={3} sx={{ mb: 3 }}>
                       {/* Donut Chart */}
                       <Grid item xs={12} md={6}>
@@ -3144,7 +3293,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
 
                 {/* Geographic Breakdown - Bar Chart & Pie Chart */}
                 {dashboardData.chart_data?.geographic_breakdown &&
-                  dashboardData.chart_data.geographic_breakdown.length > 0 && (
+                  dashboardData.chart_data.geographic_breakdown.length > 0 && 
+                  isChartVisible("ga4_geographic_breakdown") && (
                     <Grid container spacing={3} sx={{ mb: 3 }}>
                       {/* Bar Chart */}
                       <Grid item xs={12} md={7}>
@@ -3208,9 +3358,11 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                   )}
 
                 {/* KPI Donut Charts - Bounce Rate, Engagement Rate, Brand Presence */}
-                <Grid container spacing={3} sx={{ mb: 3 }}>
-                  {/* Bounce Rate Donut */}
-                  {dashboardData?.kpis?.bounce_rate && (
+                {/* Only show if KPIs are selected (in public view) */}
+                {shouldShowSectionKPIs("ga4") && (
+                  <Grid container spacing={3} sx={{ mb: 3 }}>
+                    {/* Bounce Rate Donut */}
+                    {dashboardData?.kpis?.bounce_rate && shouldShowKPI("bounce_rate") && (
                     <Grid item xs={12} sm={6} md={4}>
                       <ChartCard
                         title="Bounce Rate"
@@ -3402,11 +3554,13 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                       </ChartCard>
                     </Grid>
                   )} */}
-                </Grid>
+                  </Grid>
+                )}
 
                 {/* Top Keywords Ranking - Bar Chart */}
                 {dashboardData.chart_data?.all_keywords_ranking &&
-                  dashboardData.chart_data.all_keywords_ranking.length > 0 && (
+                  dashboardData.chart_data.all_keywords_ranking.length > 0 && 
+                  isChartVisible("all_keywords_ranking") && (
                     <ChartCard
                       title="Top Keywords Ranking"
                       badge={getBadgeLabel("AgencyAnalytics")}
@@ -3687,7 +3841,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                               const topPrompts = scrunchData?.chart_data?.top_performing_prompts || 
                                                scrunchChartData?.top_performing_prompts || [];
                               
-                              if (topPrompts.length === 0) {
+                              // Only show if chart is selected (in public view) or in admin view
+                              if (topPrompts.length === 0 || (isPublic && !isChartVisible("top_performing_prompts"))) {
                                 return null;
                               }
                               
@@ -3829,7 +3984,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                               const insights = scrunchData?.chart_data?.scrunch_ai_insights || 
                                             dashboardData?.chart_data?.scrunch_ai_insights || [];
                               
-                              if (insights.length === 0) {
+                              // Only show if chart is selected (in public view) or in admin view
+                              if (insights.length === 0 || (isPublic && !isChartVisible("scrunch_ai_insights"))) {
                                 return null;
                               }
                               
@@ -4181,12 +4337,15 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                             })()}
 
                           {/* Prompts Analytics Table - Scrunch-like interface */}
-                          <PromptsAnalyticsTable
-                            clientId={selectedClientId}
-                            slug={publicSlug}
-                            startDate={startDate}
-                            endDate={endDate}
-                          />
+                          {/* Note: PromptsAnalyticsTable is always shown if section is visible - it's part of the Scrunch AI section */}
+                          {(!isPublic || isChartVisible("top_performing_prompts") || shouldShowSectionKPIs("scrunch_ai")) && (
+                            <PromptsAnalyticsTable
+                              clientId={selectedClientId}
+                              slug={publicSlug}
+                              startDate={startDate}
+                              endDate={endDate}
+                            />
+                          )}
                         </>
                       );
                     })()}
@@ -4216,7 +4375,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
             )}
 
             {/* Keywords Section */}
-            {isSectionVisible("keywords") && selectedClientId && (
+            {isSectionVisible("keywords") && selectedClientId && 
+              (shouldShowSectionKPIs("keywords") || shouldShowSectionCharts("keywords")) && (
               <SectionContainer
                 title="Keywords"
                 description="Keyword rankings, search volume, and performance metrics"
@@ -4228,7 +4388,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
             )}
 
             {/* Brand Analytics Charts Section */}
-            {isSectionVisible("brand_analytics") && brandAnalytics && (
+            {isSectionVisible("brand_analytics") && brandAnalytics && 
+              isChartVisible("brand_analytics_charts") && (
               <SectionContainer
                 title="Brand Analytics Insights"
                 loading={loadingAnalytics}
@@ -4743,7 +4904,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
         </Alert>
       ) : !loading ? (
         <Alert severity="info" sx={{ borderRadius: 2 }}>
-          Please select a brand to view the reporting dashboard.
+          Please select a client to view the reporting dashboard.
         </Alert>
       ) : null}
       {/* KPI Selector Dialog */}
