@@ -12,18 +12,18 @@ services:
       - PORT=8000
       - DEBUG=False
       
-      # Supabase Settings (REST API)
+      # Supabase Settings (REST API) - Keep for Auth only
       # Uncomment and set these if not using .env file
       # - SUPABASE_URL=${SUPABASE_URL}
       # - SUPABASE_KEY=${SUPABASE_KEY}
       
-      # Supabase Database Settings
-      # - SUPABASE_DB_HOST=${SUPABASE_DB_HOST}
-      # - SUPABASE_DB_PORT=${SUPABASE_DB_PORT}
-      # - SUPABASE_DB_NAME=${SUPABASE_DB_NAME}
-      # - SUPABASE_DB_USER=${SUPABASE_DB_USER}
-      # - SUPABASE_DB_PASSWORD=${SUPABASE_DB_PASSWORD}
-      # - SUPABASE_DB_URL=${SUPABASE_DB_URL}  # Alternative: use full connection string
+      # Local PostgreSQL Database Settings
+      # Override Supabase DB connection to use local PostgreSQL
+      - SUPABASE_DB_HOST=postgres
+      - SUPABASE_DB_PORT=5432
+      - SUPABASE_DB_NAME=postgres
+      - SUPABASE_DB_USER=postgres
+      - SUPABASE_DB_PASSWORD=${POSTGRES_PASSWORD:-changeme}
       
       # Scrunch AI API Settings
       # - SCRUNCH_API_TOKEN=${SCRUNCH_API_TOKEN}
@@ -41,9 +41,11 @@ services:
       - ./.env:/app/.env:ro
       # Mount service key if needed for GA4
       - ./service-key.json:/app/service-key.json:ro
-      - ./ga4_token.json:/app/ga4_token.json:ro
+      - ./ga4_token.json:/app/ga4_token.json
     networks:
       - mcraes-network
+    depends_on:
+      - postgres
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -51,6 +53,26 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: mcraes-postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - POSTGRES_DB=postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - mcraes-network
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   frontend:
     build:
@@ -78,3 +100,5 @@ networks:
   mcraes-network:
     driver: bridge
 
+volumes:
+  postgres_data:
