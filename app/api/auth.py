@@ -204,11 +204,24 @@ async def signin(
             pass
         
         error_msg = str(e).lower()
-        if "invalid" in error_msg or "credentials" in error_msg or "password" in error_msg:
+        error_type = type(e).__name__
+        
+        # Check for email confirmation error
+        if "email not confirmed" in error_msg or "email_not_confirmed" in error_msg or "not confirmed" in error_msg:
+            raise AuthenticationException(
+                user_message="Please check your email and confirm your account before signing in. If you didn't receive a confirmation email, please check your spam folder or request a new one.",
+                technical_message=f"Email not confirmed: {str(e)}",
+                details={"error_type": error_type, "context": "signing in", "requires_confirmation": True}
+            )
+        
+        # Check for invalid credentials
+        if "invalid" in error_msg or "credentials" in error_msg or "password" in error_msg or "wrong" in error_msg:
             raise AuthenticationException(
                 user_message="The email or password you entered is incorrect.",
-                technical_message=f"Sign in error: {str(e)}"
+                technical_message=f"Sign in error: {str(e)}",
+                details={"error_type": error_type, "context": "signing in"}
             )
+        
         raise handle_exception(e, context="signing in")
 
 @router.post("/auth/signout")

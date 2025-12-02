@@ -167,6 +167,11 @@ ERROR_MAPPINGS = {
         "user_message": "An account with this email already exists.",
         "error_code": "AUTH_EMAIL_EXISTS"
     },
+    "auth_email_not_confirmed": {
+        "patterns": ["email not confirmed", "email_not_confirmed", "not confirmed", "unconfirmed"],
+        "user_message": "Please check your email and confirm your account before signing in. If you didn't receive a confirmation email, please check your spam folder or request a new one.",
+        "error_code": "AUTH_EMAIL_NOT_CONFIRMED"
+    },
     
     # External service errors
     "ga4_error": {
@@ -288,7 +293,14 @@ def handle_exception(error: Exception, context: Optional[str] = None) -> BaseAPI
         )
     
     # Authentication errors
-    if any(pattern in error_str for pattern in ["auth", "token", "unauthorized", "credential", "password"]):
+    if any(pattern in error_str for pattern in ["auth", "token", "unauthorized", "credential", "password", "email not confirmed", "email_not_confirmed"]):
+        # Check specifically for email confirmation errors
+        if "email not confirmed" in error_str or "email_not_confirmed" in error_str or "not confirmed" in error_str:
+            return AuthenticationException(
+                user_message="Please check your email and confirm your account before signing in. If you didn't receive a confirmation email, please check your spam folder or request a new one.",
+                technical_message=technical_message,
+                details={"error_type": error_type, "context": context, "requires_confirmation": True}
+            )
         return AuthenticationException(
             user_message=user_message,
             technical_message=technical_message,

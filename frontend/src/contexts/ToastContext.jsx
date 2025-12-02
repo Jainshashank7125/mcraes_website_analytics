@@ -64,9 +64,17 @@ export const ToastProvider = ({ children }) => {
           severity={toast.severity}
           variant="filled"
           sx={{
+            maxWidth: { xs: '90vw', sm: '400px', md: '500px' },
             width: '100%',
             borderRadius: 2,
             boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            '& .MuiAlert-message': {
+              wordWrap: 'break-word',
+              whiteSpace: 'normal',
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
+              lineHeight: 1.5,
+            },
           }}
         >
           {toast.message}

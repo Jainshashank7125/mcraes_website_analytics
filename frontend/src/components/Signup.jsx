@@ -103,7 +103,20 @@ function Signup() {
               </Typography>
 
               {error && (
-                <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>
+                <Alert 
+                  severity="error" 
+                  sx={{ 
+                    mb: 3, 
+                    borderRadius: 2,
+                    '& .MuiAlert-message': {
+                      wordWrap: 'break-word',
+                      whiteSpace: 'normal',
+                      overflowWrap: 'break-word',
+                      wordBreak: 'break-word',
+                      lineHeight: 1.5,
+                    },
+                  }}
+                >
                   {error}
                 </Alert>
               )}
