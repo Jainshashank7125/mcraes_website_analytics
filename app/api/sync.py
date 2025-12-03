@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query, Request, Depends
 from typing import Optional
 import logging
 from datetime import datetime, timedelta
+from sqlalchemy.orm import Session
 from app.services.scrunch_client import ScrunchAPIClient
 from app.services.supabase_service import SupabaseService
 from app.services.ga4_client import GA4APIClient
@@ -16,6 +17,8 @@ from app.services.background_sync import (
 from app.core.config import settings
 from app.core.error_utils import handle_api_errors
 from app.api.auth import get_current_user
+from app.db.database import get_db
+from app.db.models import Brand, Prompt, Response
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +29,14 @@ ga4_client = GA4APIClient()
 @handle_api_errors(context="syncing brands")
 async def sync_brands(
     request: Request,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    """Sync brands from Scrunch AI to Supabase"""
+    """Sync brands from Scrunch AI to local PostgreSQL database"""
     from app.db.models import AuditLogAction
     
     client = ScrunchAPIClient()
-    supabase = SupabaseService()
+    supabase = SupabaseService(db=db)
     
     try:
         brands = await client.get_brands()
@@ -72,13 +76,14 @@ async def sync_prompts(
     stage: Optional[str] = Query(None, description="Filter by funnel stage"),
     persona_id: Optional[int] = Query(None, description="Filter by persona ID"),
     request: Request = None,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    """Sync prompts from Scrunch AI to Supabase for all brands or a specific brand"""
+    """Sync prompts from Scrunch AI to local PostgreSQL database for all brands or a specific brand"""
     from app.db.models import AuditLogAction
     
     client = ScrunchAPIClient()
-    supabase = SupabaseService()
+    supabase = SupabaseService(db=db)
     
     try:
         total_count = 0
@@ -166,13 +171,14 @@ async def sync_responses(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     request: Request = None,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    """Sync responses from Scrunch AI to Supabase for all brands or a specific brand"""
+    """Sync responses from Scrunch AI to local PostgreSQL database for all brands or a specific brand"""
     from app.db.models import AuditLogAction
     
     client = ScrunchAPIClient()
-    supabase = SupabaseService()
+    supabase = SupabaseService(db=db)
     
     try:
         total_count = 0
@@ -262,18 +268,21 @@ async def sync_responses(
 @handle_api_errors(context="syncing all data")
 async def sync_all(
     request: Request,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Start async sync of all Scrunch AI data. Returns immediately with job ID."""
-    # Create job
-    job_id = await sync_job_service.create_job(
+    # Create job with database session
+    from app.services.sync_job_service import SyncJobService
+    sync_job_service_instance = SyncJobService(db=db)
+    job_id = await sync_job_service_instance.create_job(
         sync_type="sync_all",
         user_id=current_user["id"],
         user_email=current_user["email"],
         parameters={}
     )
     
-    # Start background task
+    # Start background task (will create its own database session)
     sync_job_service.run_background_task(
         sync_all_background(job_id, current_user["id"], current_user["email"], request),
         job_id
@@ -286,20 +295,10 @@ async def sync_all(
     }
 @router.get("/sync/status")
 @handle_api_errors(context="fetching sync status")
-async def sync_status():
-    """Get sync status from database"""
-    supabase = SupabaseService()
-    
-    # Get counts from database
-    clients_result = supabase.client.table("clients").select("id", count="exact").execute()
-    prompts_result = supabase.client.table("prompts").select("id", count="exact").execute()
-    responses_result = supabase.client.table("responses").select("id", count="exact").execute()
-    
-    return {
-        "clients_count": clients_result.count if hasattr(clients_result, 'count') else 0,
-        "prompts_count": prompts_result.count if hasattr(prompts_result, 'count') else 0,
-        "responses_count": responses_result.count if hasattr(responses_result, 'count') else 0
-    }
+async def sync_status(db: Session = Depends(get_db)):
+    """Get sync status from local PostgreSQL database"""
+    supabase = SupabaseService(db=db)
+    return supabase.get_sync_status_counts()
 
 # =====================================================
 # Agency Analytics Sync Endpoints
@@ -311,11 +310,14 @@ async def sync_agency_analytics(
     campaign_id: Optional[int] = Query(None, description="Sync specific campaign (if not provided, syncs all campaigns)"),
     auto_match_brands: bool = Query(True, description="Automatically match campaigns to brands by URL"),
     request: Request = None,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Start async sync of Agency Analytics data. Returns immediately with job ID."""
-    # Create job
-    job_id = await sync_job_service.create_job(
+    # Create job with database session
+    from app.services.sync_job_service import SyncJobService
+    sync_job_service_instance = SyncJobService(db=db)
+    job_id = await sync_job_service_instance.create_job(
         sync_type="sync_agency_analytics",
         user_id=current_user["id"],
         user_email=current_user["email"],
@@ -325,7 +327,7 @@ async def sync_agency_analytics(
         }
     )
     
-    # Start background task
+    # Start background task (will create its own database session)
     sync_job_service.run_background_task(
         sync_agency_analytics_background(job_id, current_user["id"], current_user["email"], campaign_id, auto_match_brands, request),
         job_id
@@ -347,11 +349,14 @@ async def sync_ga4(
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD), defaults to today"),
     sync_realtime: bool = Query(True, description="Whether to sync realtime data"),
     request: Request = None,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Start async sync of GA4 data. Returns immediately with job ID. Now uses client_id instead of brand_id."""
-    # Create job
-    job_id = await sync_job_service.create_job(
+    # Create job with database session
+    from app.services.sync_job_service import SyncJobService
+    sync_job_service_instance = SyncJobService(db=db)
+    job_id = await sync_job_service_instance.create_job(
         sync_type="sync_ga4",
         user_id=current_user["id"],
         user_email=current_user["email"],
@@ -363,7 +368,7 @@ async def sync_ga4(
         }
     )
     
-    # Start background task
+    # Start background task (will create its own database session)
     sync_job_service.run_background_task(
         sync_ga4_background(job_id, current_user["id"], current_user["email"], client_id, start_date, end_date, sync_realtime, request),
         job_id
@@ -374,17 +379,4 @@ async def sync_ga4(
         "message": "GA4 sync job started. Use the job_id to check status.",
         "job_id": job_id
     }
-@router.get("/sync/status")
-@handle_api_errors(context="fetching sync status")
-async def sync_status():
-    """Get sync status from database"""
-    supabase = SupabaseService()
-
-    try:
-        result = supabase.client.table("sync_status").select("*").order("last_sync_at", desc=True).limit(1).execute()
-        if result.data:
-            return result.data[0]
-        return {"status": "never_synced"}
-    except Exception as e:
-        logger.error(f"Error fetching sync status: {str(e)}")
-        return {"status": "error", "message": str(e)}
+# Note: Removed duplicate sync_status endpoint - using the one above that returns counts

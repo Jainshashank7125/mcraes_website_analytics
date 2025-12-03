@@ -4,9 +4,12 @@ Service for managing async sync jobs
 import uuid
 import asyncio
 import logging
+import json
 from typing import Optional, Dict, Any
 from datetime import datetime
-from app.services.supabase_service import SupabaseService
+from sqlalchemy.orm import Session
+from sqlalchemy import text, Table, MetaData, select, update, insert
+from app.db.database import get_db, SessionLocal
 from app.services.audit_logger import audit_logger
 from app.db.models import AuditLogAction
 
@@ -16,10 +19,27 @@ logger = logging.getLogger(__name__)
 class SyncJobService:
     """Service for managing async sync jobs"""
     
-    def __init__(self):
-        self.supabase = SupabaseService()
+    def __init__(self, db: Optional[Session] = None):
+        """
+        Initialize service with optional database session.
+        If db is None, will create a new session when needed.
+        """
+        self.db = db
         self.running_jobs: Dict[str, asyncio.Task] = {}
         self.cancelled_jobs: set = set()  # Track cancelled job IDs
+    
+    def _get_db(self) -> Session:
+        """Get database session - creates new one if not provided"""
+        if self.db:
+            return self.db
+        return SessionLocal()
+    
+    def _get_sync_jobs_table(self) -> Table:
+        """Get sync_jobs table using reflection"""
+        db = self._get_db()
+        metadata = MetaData()
+        metadata.reflect(bind=db.bind, only=["sync_jobs"])
+        return metadata.tables["sync_jobs"]
     
     def _generate_job_id(self) -> str:
         """Generate unique job ID"""
@@ -34,25 +54,39 @@ class SyncJobService:
     ) -> str:
         """Create a new sync job and return job ID"""
         job_id = self._generate_job_id()
-        
-        job_data = {
-            "job_id": job_id,
-            "sync_type": sync_type,
-            "user_id": user_id,
-            "user_email": user_email,
-            "status": "pending",
-            "progress": 0,
-            "parameters": parameters or {},
-            "created_at": datetime.utcnow().isoformat() + "Z"
-        }
+        db = self._get_db()
         
         try:
-            result = self.supabase.client.table("sync_jobs").insert(job_data).execute()
+            # Convert parameters dict to JSON string for JSONB column
+            parameters_json = json.dumps(parameters or {})
+            created_at = datetime.utcnow()
+            
+            # Use CAST instead of ::jsonb to avoid parameter binding issues
+            query = text("""
+                INSERT INTO sync_jobs (job_id, sync_type, user_id, user_email, status, progress, parameters, created_at)
+                VALUES (:job_id, :sync_type, :user_id, :user_email, :status, :progress, CAST(:parameters AS jsonb), :created_at)
+            """)
+            
+            db.execute(query, {
+                "job_id": job_id,
+                "sync_type": sync_type,
+                "user_id": user_id,
+                "user_email": user_email,
+                "status": "pending",
+                "progress": 0,
+                "parameters": parameters_json,  # Pass as JSON string
+                "created_at": created_at
+            })
+            db.commit()
             logger.info(f"Created sync job {job_id} for {sync_type}")
             return job_id
         except Exception as e:
+            db.rollback()
             logger.error(f"Failed to create sync job: {str(e)}")
             raise
+        finally:
+            if not self.db:  # Only close if we created the session
+                db.close()
     
     async def update_job_status(
         self,
@@ -65,30 +99,43 @@ class SyncJobService:
         error_message: Optional[str] = None
     ):
         """Update job status"""
-        update_data = {
-            "status": status,
-            "updated_at": datetime.utcnow().isoformat() + "Z"
-        }
-        
-        if progress is not None:
-            update_data["progress"] = progress
-        if current_step is not None:
-            update_data["current_step"] = current_step
-        if total_steps is not None:
-            update_data["total_steps"] = total_steps
-        if completed_steps is not None:
-            update_data["completed_steps"] = completed_steps
-        if error_message is not None:
-            update_data["error_message"] = error_message
-        
-        if status == "running" and "started_at" not in update_data:
-            update_data["started_at"] = datetime.utcnow().isoformat() + "Z"
-        
-        if status in ["completed", "failed", "cancelled"]:
-            update_data["completed_at"] = datetime.utcnow().isoformat() + "Z"
+        db = self._get_db()
         
         try:
-            self.supabase.client.table("sync_jobs").update(update_data).eq("job_id", job_id).execute()
+            # Build update query dynamically
+            updates = ["status = :status", "updated_at = NOW()"]
+            params = {"job_id": job_id, "status": status}
+            
+            if progress is not None:
+                updates.append("progress = :progress")
+                params["progress"] = progress
+            if current_step is not None:
+                updates.append("current_step = :current_step")
+                params["current_step"] = current_step
+            if total_steps is not None:
+                updates.append("total_steps = :total_steps")
+                params["total_steps"] = total_steps
+            if completed_steps is not None:
+                updates.append("completed_steps = :completed_steps")
+                params["completed_steps"] = completed_steps
+            if error_message is not None:
+                updates.append("error_message = :error_message")
+                params["error_message"] = error_message
+            
+            if status == "running":
+                updates.append("started_at = COALESCE(started_at, NOW())")
+            
+            if status in ["completed", "failed", "cancelled"]:
+                updates.append("completed_at = NOW()")
+            
+            query = text(f"""
+                UPDATE sync_jobs
+                SET {', '.join(updates)}
+                WHERE job_id = :job_id
+            """)
+            
+            db.execute(query, params)
+            db.commit()
             
             # Send WebSocket notification for status changes
             try:
@@ -116,7 +163,11 @@ class SyncJobService:
             except Exception as ws_error:
                 logger.warning(f"Failed to send WebSocket notification for job {job_id}: {str(ws_error)}")
         except Exception as e:
+            db.rollback()
             logger.error(f"Failed to update job {job_id}: {str(e)}")
+        finally:
+            if not self.db:  # Only close if we created the session
+                db.close()
     
     async def complete_job(
         self,
@@ -125,16 +176,29 @@ class SyncJobService:
         status: str = "completed"
     ):
         """Mark job as completed with result"""
-        update_data = {
-            "status": status,
-            "progress": 100,
-            "result": result,
-            "completed_at": datetime.utcnow().isoformat() + "Z",
-            "updated_at": datetime.utcnow().isoformat() + "Z"
-        }
+        db = self._get_db()
         
         try:
-            self.supabase.client.table("sync_jobs").update(update_data).eq("job_id", job_id).execute()
+            # Convert result dict to JSON string for JSONB column
+            result_json = json.dumps(result)
+            
+            # Use CAST instead of ::jsonb to avoid parameter binding issues
+            query = text("""
+                UPDATE sync_jobs
+                SET status = :status,
+                    progress = 100,
+                    result = CAST(:result AS jsonb),
+                    completed_at = NOW(),
+                    updated_at = NOW()
+                WHERE job_id = :job_id
+            """)
+            
+            db.execute(query, {
+                "job_id": job_id,
+                "status": status,
+                "result": result_json  # Pass as JSON string
+            })
+            db.commit()
             logger.info(f"Completed sync job {job_id}")
             
             # Send WebSocket notification
@@ -157,7 +221,11 @@ class SyncJobService:
             except Exception as ws_error:
                 logger.warning(f"Failed to send WebSocket notification for job {job_id}: {str(ws_error)}")
         except Exception as e:
+            db.rollback()
             logger.error(f"Failed to complete job {job_id}: {str(e)}")
+        finally:
+            if not self.db:  # Only close if we created the session
+                db.close()
     
     async def fail_job(
         self,
@@ -174,14 +242,21 @@ class SyncJobService:
     
     async def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get job by ID"""
+        db = self._get_db()
+        
         try:
-            result = self.supabase.client.table("sync_jobs").select("*").eq("job_id", job_id).execute()
-            if result.data:
-                return result.data[0]
+            query = text("SELECT * FROM sync_jobs WHERE job_id = :job_id LIMIT 1")
+            result = db.execute(query, {"job_id": job_id})
+            row = result.first()
+            if row:
+                return dict(row._mapping)
             return None
         except Exception as e:
             logger.error(f"Failed to get job {job_id}: {str(e)}")
             return None
+        finally:
+            if not self.db:  # Only close if we created the session
+                db.close()
     
     async def get_user_jobs(
         self,
@@ -190,28 +265,45 @@ class SyncJobService:
         limit: int = 50
     ) -> list:
         """Get jobs for a user"""
+        db = self._get_db()
+        
         try:
-            query = self.supabase.client.table("sync_jobs").select("*").eq("user_email", user_email)
-            if status:
-                query = query.eq("status", status)
-            query = query.order("created_at", desc=True).limit(limit)
+            query_str = "SELECT * FROM sync_jobs WHERE user_email = :user_email"
+            params = {"user_email": user_email, "limit": limit}
             
-            result = query.execute()
-            return result.data if result.data else []
+            if status:
+                query_str += " AND status = :status"
+                params["status"] = status
+            
+            query_str += " ORDER BY created_at DESC LIMIT :limit"
+            
+            query = text(query_str)
+            result = db.execute(query, params)
+            return [dict(row._mapping) for row in result]
         except Exception as e:
             logger.error(f"Failed to get user jobs: {str(e)}")
             return []
+        finally:
+            if not self.db:  # Only close if we created the session
+                db.close()
     
     async def get_active_jobs(self, user_email: Optional[str] = None) -> list:
         """Get active (pending or running) jobs only - excludes completed and failed"""
+        db = self._get_db()
+        
         try:
-            query = self.supabase.client.table("sync_jobs").select("*").in_("status", ["pending", "running"])
-            if user_email:
-                query = query.eq("user_email", user_email)
-            query = query.order("created_at", desc=True)
+            query_str = "SELECT * FROM sync_jobs WHERE status IN ('pending', 'running')"
+            params = {}
             
-            result = query.execute()
-            jobs = result.data if result.data else []
+            if user_email:
+                query_str += " AND user_email = :user_email"
+                params["user_email"] = user_email
+            
+            query_str += " ORDER BY created_at DESC"
+            
+            query = text(query_str)
+            result = db.execute(query, params)
+            jobs = [dict(row._mapping) for row in result]
             
             # Double-check: filter out any completed/failed jobs that might have slipped through
             active_jobs = [j for j in jobs if j.get("status") in ["pending", "running"]]
@@ -220,6 +312,9 @@ class SyncJobService:
         except Exception as e:
             logger.error(f"Failed to get active jobs: {str(e)}")
             return []
+        finally:
+            if not self.db:  # Only close if we created the session
+                db.close()
     
     def is_cancelled(self, job_id: str) -> bool:
         """Check if a job has been cancelled"""

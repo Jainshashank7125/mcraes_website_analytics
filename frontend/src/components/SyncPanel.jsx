@@ -55,7 +55,7 @@ function SyncPanel() {
                 showSuccess(`Sync completed: Brands: ${summary.brands || 0}, Prompts: ${summary.total_prompts || 0}, Responses: ${summary.total_responses || 0}`)
               } else if (job.sync_type === 'sync_ga4') {
                 const totalSynced = result.total_synced || {}
-                showSuccess(`GA4 sync completed: Brands: ${totalSynced.brands || 0}`)
+                showSuccess(`GA4 sync completed: Clients: ${totalSynced.clients || 0}`)
               } else if (job.sync_type === 'sync_agency_analytics') {
                 const totalSynced = result.total_synced || {}
                 showSuccess(`Agency Analytics sync completed: Campaigns: ${totalSynced.campaigns || 0}`)
@@ -372,7 +372,7 @@ function SyncPanel() {
                     minHeight: { xs: '64px', sm: '72px' },
                   }}
                 >
-                  Sync Google Analytics 4 data for all brands with GA4 property IDs configured. Includes traffic overview, top pages, sources, geographic, devices, and conversions.
+                  Sync Google Analytics 4 data for all clients with GA4 property IDs configured. Includes traffic overview, top pages, sources, geographic, devices, and conversions.
                 </Typography>
                 <Button
                   variant="contained"

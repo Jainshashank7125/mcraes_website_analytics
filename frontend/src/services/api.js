@@ -427,13 +427,22 @@ export const agencyAnalyticsAPI = {
 
 // Client Management API endpoints
 export const clientAPI = {
-  // Get all clients with pagination and search
-  getClients: async (page = 1, pageSize = 25, search = '') => {
+  // Get all clients with pagination, search, and filters
+  getClients: async (page = 1, pageSize = 25, search = '', filters = {}) => {
     const params = new URLSearchParams()
     params.append('page', page)
     params.append('page_size', pageSize)
     if (search && search.trim()) {
       params.append('search', search.trim())
+    }
+    if (filters.ga4 !== null && filters.ga4 !== undefined) {
+      params.append('ga4_assigned', filters.ga4.toString())
+    }
+    if (filters.scrunch !== null && filters.scrunch !== undefined) {
+      params.append('scrunch_assigned', filters.scrunch.toString())
+    }
+    if (filters.active !== null && filters.active !== undefined) {
+      params.append('active', filters.active.toString())
     }
     
     const response = await api.get(`/api/v1/data/clients?${params.toString()}`)

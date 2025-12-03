@@ -37,10 +37,58 @@ class ScrunchAPIClient:
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPStatusError as e:
-                logger.error(f"HTTP error for {url}: {e.response.status_code} - {e.response.text}")
-                raise
+                # Enhanced error logging with detailed response information
+                status_code = e.response.status_code
+                response_text = e.response.text
+                response_headers = dict(e.response.headers)
+                
+                # Try to parse JSON error response if available
+                error_details = {}
+                try:
+                    if response_text:
+                        error_details = e.response.json()
+                except:
+                    # If not JSON, use text as-is
+                    error_details = {"raw_response": response_text}
+                
+                # Build comprehensive error log
+                error_log = {
+                    "url": url,
+                    "method": method,
+                    "status_code": status_code,
+                    "params": params,
+                    "response_body": error_details,
+                    "response_text": response_text[:1000] if response_text else None,  # Limit to 1000 chars
+                    "response_headers": {k: v for k, v in response_headers.items() if k.lower() not in ['authorization', 'cookie']}  # Exclude sensitive headers
+                }
+                
+                logger.error(
+                    f"Scrunch API HTTP error for {method} {url}: "
+                    f"Status {status_code} - {response_text[:200] if response_text else 'No response body'}"
+                )
+                logger.error(f"Scrunch API error details: {error_log}")
+                
+                # Create a more descriptive exception
+                error_message = f"Server error '{status_code} {e.response.reason_phrase}' for url '{url}'"
+                if error_details and isinstance(error_details, dict):
+                    if "error" in error_details:
+                        error_message += f" - Error: {error_details['error']}"
+                    if "message" in error_details:
+                        error_message += f" - Message: {error_details['message']}"
+                    if "detail" in error_details:
+                        error_message += f" - Detail: {error_details['detail']}"
+                
+                # Raise with more context
+                raise Exception(error_message) from e
+            except httpx.TimeoutException as e:
+                logger.error(f"Scrunch API timeout for {method} {url} (params: {params})")
+                raise Exception(f"Request to Scrunch API timed out: {url}") from e
+            except httpx.RequestError as e:
+                logger.error(f"Scrunch API request error for {method} {url}: {str(e)} (params: {params})")
+                raise Exception(f"Request error to Scrunch API: {str(e)}") from e
             except Exception as e:
-                logger.error(f"Error making request to {url}: {str(e)}")
+                logger.error(f"Scrunch API unexpected error for {method} {url}: {str(e)} (params: {params})")
+                logger.exception("Full traceback for Scrunch API error:")
                 raise
     
     async def get_brands(self) -> List[Dict]:

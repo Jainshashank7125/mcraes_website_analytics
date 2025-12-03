@@ -5410,7 +5410,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
       <Dialog
         open={showOverviewDialog}
         onClose={() => setShowOverviewDialog(false)}
-        maxWidth="md"
+        maxWidth="lg"
         fullWidth
         PaperProps={{
           sx: {

@@ -581,24 +581,54 @@ function ClientManagement({ open, onClose, client }) {
               
               <Grid container spacing={2} mb={2}>
                 <Grid item xs={12}>
-                  <FormControl fullWidth>
-                    <InputLabel>GA4 Property ID</InputLabel>
-                    <Select
-                      value={ga4PropertyId || ''}
-                      onChange={(e) => setGa4PropertyId(e.target.value)}
-                      label="GA4 Property ID"
-                      disabled={ga4PropertiesLoading || saving}
-                    >
-                      <MenuItem value="">
-                        <em>None</em>
-                      </MenuItem>
-                      {availableGA4Properties.map((prop) => (
-                        <MenuItem key={prop.propertyId} value={prop.propertyId}>
-                          {prop.propertyDisplayName} ({prop.propertyId})
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
+                  <Autocomplete
+                    freeSolo
+                    options={availableGA4Properties}
+                    getOptionLabel={(option) => {
+                      if (typeof option === 'string') return option
+                      return option.propertyDisplayName 
+                        ? `${option.propertyDisplayName} (${option.propertyId})`
+                        : option.propertyId || ''
+                    }}
+                    value={ga4PropertyId ? (availableGA4Properties.find(p => p.propertyId === ga4PropertyId) || ga4PropertyId) : null}
+                    onChange={(event, newValue) => {
+                      // Handle both object selection and string input
+                      if (typeof newValue === 'string') {
+                        setGa4PropertyId(newValue)
+                      } else if (newValue && newValue.propertyId) {
+                        setGa4PropertyId(newValue.propertyId)
+                      } else {
+                        setGa4PropertyId('')
+                      }
+                    }}
+                    onInputChange={(event, newInputValue, reason) => {
+                      // Allow free text input when user types
+                      if (reason === 'input') {
+                        setGa4PropertyId(newInputValue)
+                      }
+                    }}
+                    disabled={ga4PropertiesLoading || saving}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="GA4 Property ID"
+                        placeholder="Select from list or type property ID"
+                        helperText="You can select from available properties or enter a custom property ID"
+                      />
+                    )}
+                    renderOption={(props, option) => (
+                      <Box component="li" {...props}>
+                        <Box>
+                          <Typography variant="body1">
+                            {option.propertyDisplayName || option.propertyId}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {option.propertyId}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    )}
+                  />
                 </Grid>
                 
                 <Grid item xs={12}>

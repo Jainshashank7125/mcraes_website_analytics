@@ -24,20 +24,22 @@ services:
       - SUPABASE_DB_NAME=postgres
       - SUPABASE_DB_USER=postgres
       - SUPABASE_DB_PASSWORD=${POSTGRES_PASSWORD:-changeme}
-      
+      - JWT_SECRET_KEY=Z6MKEPG6cyDbNb6CmZS_KATrKeIKq_lb_AUldTxtFjo
       # Scrunch AI API Settings
-      # - SCRUNCH_API_TOKEN=${SCRUNCH_API_TOKEN}
+      - SCRUNCH_API_TOKEN=${SCRUNCH_API_TOKEN}
       
       # Agency Analytics API Settings (optional)
-      # - AGENCY_ANALYTICS_API_KEY=${AGENCY_ANALYTICS_API_KEY}
+      - AGENCY_ANALYTICS_API_KEY=${AGENCY_ANALYTICS_API_KEY}
       
       # OpenAI API Settings (optional)
-      # - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       
       # Google Analytics 4 Settings (optional)
-      # - GA4_CREDENTIALS_PATH=${GA4_CREDENTIALS_PATH}  # Path to service account JSON file
+      - GA4_CREDENTIALS_PATH=${GA4_CREDENTIALS_PATH}  # Path to service account JSON file
     volumes:
       # Mount .env file if you have one
+      # NOTE: Environment variables in docker-compose.yml take precedence over .env file
+      # If .env file has SUPABASE_DB_HOST set to Supabase, it will be overridden by the env vars below
       - ./.env:/app/.env:ro
       # Mount service key if needed for GA4
       - ./service-key.json:/app/service-key.json:ro
@@ -59,7 +61,7 @@ services:
     container_name: mcraes-postgres
     environment:
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data

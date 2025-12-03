@@ -1,4 +1,9 @@
 from typing import List, Dict, Optional, Any
+from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy import text, Table, MetaData, select, update, insert, delete, and_, or_, func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from app.db.database import get_db
+from app.db.models import Brand, Prompt, Response, Citation, AuditLog, Client 
 from app.core.database import get_supabase_client
 import logging
 import re
@@ -10,177 +15,847 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 class SupabaseService:
-    """Service for interacting with Supabase database"""
+    """Service for interacting with database using SQLAlchemy"""
     
-    def __init__(self):
+    def __init__(self, db: Optional[Session] = None):
+        """
+        Initialize service with database session.
+        If db is None, will get a new session (for backward compatibility).
+        """
+        if db is None:
+            # Get a new session for backward compatibility
+            self.db = next(get_db())
+            self._close_db = True
+        else:
+            self.db = db
+            self._close_db = False
+        self._supabase_client = None  # Lazy-loaded for backward compatibility
+        self._table_cache = {}  # Cache table metadata to avoid repeated reflection
+    
+    @property
+    def client(self):
+        """
+        DEPRECATED: Supabase REST API client for backward compatibility.
+        This property is kept for methods that haven't been migrated to SQLAlchemy yet.
+        New code should use SQLAlchemy methods directly.
+        """
+        if self._supabase_client is None:
+            logger.warning(
+                "Using deprecated Supabase REST API client. "
+                "This method should be migrated to use SQLAlchemy. "
+                "The Supabase client is only kept for backward compatibility during migration."
+            )
+            try:
+                self._supabase_client = get_supabase_client()
+            except Exception as e:
+                logger.error(f"Failed to create Supabase client for backward compatibility: {e}")
+                raise
+        return self._supabase_client
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._close_db:
+            self.db.close()
+    
+    def _execute_text(self, query: str, params: Optional[Dict] = None) -> Any:
+        """Execute raw SQL query"""
+        return self.db.execute(text(query), params or {})
+    
+    def _get_table(self, table_name: str) -> Table:
+        """Get table object using reflection (with caching for performance)"""
+        # Use cache to avoid repeated reflection
+        if table_name not in self._table_cache:
+            metadata = MetaData()
+            metadata.reflect(bind=self.db.bind, only=[table_name])
+            self._table_cache[table_name] = metadata.tables[table_name]
+        return self._table_cache[table_name]
+    
+    def _table_select(self, table_name: str, filters: Optional[Dict] = None, limit: Optional[int] = None, offset: Optional[int] = None, order_by: Optional[str] = None, desc: bool = False) -> List[Dict]:
+        """Helper method to select from any table using SQLAlchemy Core"""
         try:
-            self.client = get_supabase_client()
-        except ValueError as e:
-            # Re-raise with better error message
-            logger.error(f"Failed to initialize Supabase client: {e}")
-            raise ValueError(
-                f"Failed to initialize Supabase client. "
-                f"Please check that SUPABASE_URL and SUPABASE_KEY are set in config.py or .env file. "
-                f"Error: {e}"
-            ) from e
+            table = self._get_table(table_name)
+            query = select(table)
+            
+            # Apply filters
+            if filters:
+                conditions = []
+                for key, value in filters.items():
+                    if value is not None:
+                        conditions.append(table.c[key] == value)
+                if conditions:
+                    query = query.where(and_(*conditions))
+            
+            # Apply ordering
+            if order_by:
+                col = table.c[order_by]
+                query = query.order_by(col.desc() if desc else col.asc())
+            
+            # Apply pagination
+            if offset:
+                query = query.offset(offset)
+            if limit:
+                query = query.limit(limit)
+            
+            result = self.db.execute(query)
+            return [dict(row._mapping) for row in result]
+        except Exception as e:
+            logger.error(f"Error selecting from {table_name}: {str(e)}")
+            raise
+    
+    def _table_insert(self, table_name: str, records: List[Dict], on_conflict: Optional[str] = None) -> int:
+        """Helper method to insert into any table using SQLAlchemy Core"""
+        try:
+            if not records:
+                return 0
+            
+            table = self._get_table(table_name)
+            
+            # Use PostgreSQL INSERT ... ON CONFLICT if specified
+            if on_conflict:
+                # This is a simplified version - for complex cases, use raw SQL
+                stmt = pg_insert(table).values(records)
+                stmt = stmt.on_conflict_do_update(set_=records[0])
+                result = self.db.execute(stmt)
+            else:
+                stmt = insert(table).values(records)
+                result = self.db.execute(stmt)
+            
+            self.db.commit()
+            return len(records)
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error inserting into {table_name}: {str(e)}")
+            raise
+    
+    def _table_update(self, table_name: str, data: Dict, filters: Dict) -> int:
+        """Helper method to update any table using SQLAlchemy Core"""
+        try:
+            table = self._get_table(table_name)
+            conditions = [table.c[key] == value for key, value in filters.items()]
+            stmt = update(table).where(and_(*conditions)).values(**data)
+            result = self.db.execute(stmt)
+            self.db.commit()
+            return result.rowcount
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error updating {table_name}: {str(e)}")
+            raise
+    
+    def _table_delete(self, table_name: str, filters: Dict) -> int:
+        """Helper method to delete from any table using SQLAlchemy Core"""
+        try:
+            table = self._get_table(table_name)
+            conditions = [table.c[key] == value for key, value in filters.items()]
+            stmt = delete(table).where(and_(*conditions))
+            result = self.db.execute(stmt)
+            self.db.commit()
+            return result.rowcount
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error deleting from {table_name}: {str(e)}")
+            raise
     
     def upsert_brands(self, brands: List[Dict]) -> int:
-        """Upsert brands data"""
+        """Upsert brands data - Optimized with bulk operations"""
         if not brands:
             return 0
         
-        # Transform data to match database schema
-        # API returns: {id, name, website}
-        records = []
-        for brand in brands:
-            records.append({
-                "id": brand.get("id"),
-                "name": brand.get("name"),
-                "website": brand.get("website"),
-                # created_at is set by default in DB
-            })
-        
         try:
-            result = self.client.table("brands").upsert(records).execute()
-            logger.info(f"Upserted {len(records)} brands")
-            return len(records)
+            # Extract all brand IDs for bulk lookup
+            brand_ids = [b.get("id") for b in brands if b.get("id")]
+            if not brand_ids:
+                return 0
+            
+            # Bulk fetch existing brands in one query
+            existing_brands = {
+                b.id: b for b in self.db.query(Brand).filter(Brand.id.in_(brand_ids)).all()
+            }
+            
+            # Separate into updates and inserts
+            to_update = []
+            to_insert = []
+            
+            for brand_data in brands:
+                brand_id = brand_data.get("id")
+                if not brand_id:
+                    continue
+                
+                if brand_id in existing_brands:
+                    # Update existing
+                    existing = existing_brands[brand_id]
+                    existing.name = brand_data.get("name")
+                    existing.website = brand_data.get("website")
+                    if "ga4_property_id" in brand_data:
+                        existing.ga4_property_id = brand_data.get("ga4_property_id")
+                    to_update.append(existing)
+                else:
+                    # Insert new
+                    to_insert.append(Brand(
+                        id=brand_id,
+                        name=brand_data.get("name"),
+                        website=brand_data.get("website"),
+                        ga4_property_id=brand_data.get("ga4_property_id")
+                    ))
+            
+            # Bulk add new brands
+            if to_insert:
+                self.db.bulk_save_objects(to_insert)
+            
+            # Commit once for all changes
+            self.db.commit()
+            
+            count = len(to_update) + len(to_insert)
+            logger.info(f"Upserted {count} brands ({len(to_update)} updated, {len(to_insert)} inserted)")
+            return count
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Error upserting brands: {str(e)}")
             raise
     
     def upsert_prompts(self, prompts: List[Dict], brand_id: int = None) -> int:
-        """Upsert prompts data"""
+        """Upsert prompts data - Optimized with bulk operations"""
         if not prompts:
             return 0
         
-        # Transform data to match database schema
-        # API returns: {id, text, stage, persona_id, platforms, tags, topics, created_at}
-        records = []
-        for prompt in prompts:
-            records.append({
-                "id": prompt.get("id"),
-                "brand_id": brand_id or prompt.get("brand_id"),  # Add brand_id
-                "text": prompt.get("text"),  # API returns "text"
-                "stage": prompt.get("stage"),
-                "persona_id": prompt.get("persona_id"),
-                "persona_name": prompt.get("persona_name"),  # May not be in response
-                "platforms": prompt.get("platforms", []),  # API returns "platforms" array
-                "tags": prompt.get("tags", []),
-                "topics": prompt.get("topics", []),  # API returns "topics" not "key_topics"
-                "created_at": prompt.get("created_at")
-            })
-        
         try:
-            result = self.client.table("prompts").upsert(records).execute()
-            logger.info(f"Upserted {len(records)} prompts")
-            return len(records)
+            # Extract all prompt IDs for bulk lookup
+            prompt_ids = [p.get("id") for p in prompts if p.get("id")]
+            if not prompt_ids:
+                return 0
+            
+            # Bulk fetch existing prompts in one query
+            existing_prompts = {
+                p.id: p for p in self.db.query(Prompt).filter(Prompt.id.in_(prompt_ids)).all()
+            }
+            
+            # Separate into updates and inserts
+            to_update = []
+            to_insert = []
+            
+            for prompt_data in prompts:
+                prompt_id = prompt_data.get("id")
+                if not prompt_id:
+                    continue
+                
+                final_brand_id = brand_id or prompt_data.get("brand_id")
+                
+                if prompt_id in existing_prompts:
+                    # Update existing
+                    existing = existing_prompts[prompt_id]
+                    existing.brand_id = final_brand_id
+                    existing.text = prompt_data.get("text")
+                    existing.stage = prompt_data.get("stage")
+                    existing.persona_id = prompt_data.get("persona_id")
+                    existing.persona_name = prompt_data.get("persona_name")
+                    existing.platforms = prompt_data.get("platforms", [])
+                    existing.tags = prompt_data.get("tags", [])
+                    existing.topics = prompt_data.get("topics", [])
+                    if prompt_data.get("created_at"):
+                        existing.created_at = prompt_data.get("created_at")
+                    to_update.append(existing)
+                else:
+                    # Insert new
+                    to_insert.append(Prompt(
+                        id=prompt_id,
+                        brand_id=final_brand_id,
+                        text=prompt_data.get("text"),
+                        stage=prompt_data.get("stage"),
+                        persona_id=prompt_data.get("persona_id"),
+                        persona_name=prompt_data.get("persona_name"),
+                        platforms=prompt_data.get("platforms", []),
+                        tags=prompt_data.get("tags", []),
+                        topics=prompt_data.get("topics", []),
+                        created_at=prompt_data.get("created_at")
+                    ))
+            
+            # Bulk add new prompts
+            if to_insert:
+                self.db.bulk_save_objects(to_insert)
+            
+            # Commit once for all changes
+            self.db.commit()
+            
+            count = len(to_update) + len(to_insert)
+            logger.info(f"Upserted {count} prompts ({len(to_update)} updated, {len(to_insert)} inserted)")
+            return count
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Error upserting prompts: {str(e)}")
             raise
     
     def upsert_responses(self, responses: List[Dict], brand_id: int = None) -> int:
-        """Upsert responses data"""
+        """Upsert responses data - Optimized with bulk operations"""
         if not responses:
             return 0
         
-        # Transform data to match database schema
-        # API returns: {id, created_at, prompt_id, prompt, persona_id, persona_name, country, 
-        #              stage, branded, tags, key_topics, platform, brand_present, 
-        #              brand_sentiment, brand_position, competitors_present, response_text, 
-        #              citations (array of objects), competitors (array of objects)}
-        records = []
-        for response in responses:
-            # Extract citations (array of objects with url, domain, source_type, title, snippet)
-            citations = response.get("citations", [])
-            
-            # Extract competitors_present (array of strings)
-            competitors_present = response.get("competitors_present", [])
-            
-            # Extract competitors (array of objects with id, name, present, position, sentiment)
-            competitors = response.get("competitors", [])
-            
-            record = {
-                "id": response.get("id"),
-                "brand_id": brand_id or response.get("brand_id"),  # Add brand_id
-                "prompt_id": response.get("prompt_id"),
-                "prompt": response.get("prompt"),
-                "response_text": response.get("response_text"),
-                "platform": response.get("platform"),
-                "country": response.get("country"),
-                "persona_id": response.get("persona_id"),
-                "persona_name": response.get("persona_name"),
-                "stage": response.get("stage"),
-                "branded": response.get("branded"),
-                "tags": response.get("tags", []),
-                "key_topics": response.get("key_topics", []),
-                "brand_present": response.get("brand_present"),
-                "brand_sentiment": response.get("brand_sentiment"),
-                "brand_position": response.get("brand_position"),
-                "competitors_present": competitors_present if isinstance(competitors_present, list) else [],
-                "competitors": competitors,  # Store as JSON array of objects
-                "created_at": response.get("created_at"),
-                "citations": citations  # Store as JSON array of objects
-            }
-            records.append(record)
-        
         try:
-            # Upsert in batches to avoid payload size issues
-            batch_size = 100
+            batch_size = 500  # Increased batch size for better performance
             total_upserted = 0
-            for i in range(0, len(records), batch_size):
-                batch = records[i:i + batch_size]
-                result = self.client.table("responses").upsert(batch).execute()
+            
+            for i in range(0, len(responses), batch_size):
+                batch = responses[i:i + batch_size]
+                
+                # Extract all response IDs for bulk lookup
+                response_ids = [r.get("id") for r in batch if r.get("id")]
+                if not response_ids:
+                    continue
+                
+                # Bulk fetch existing responses in one query
+                existing_responses = {
+                    r.id: r for r in self.db.query(Response).filter(Response.id.in_(response_ids)).all()
+                }
+                
+                # Separate into updates and inserts
+                to_update = []
+                to_insert = []
+                
+                for response_data in batch:
+                    response_id = response_data.get("id")
+                    if not response_id:
+                        continue
+                    
+                    final_brand_id = brand_id or response_data.get("brand_id")
+                    
+                    # Extract data
+                    citations = response_data.get("citations", [])
+                    competitors_present = response_data.get("competitors_present", [])
+                    if not isinstance(competitors_present, list):
+                        competitors_present = []
+                    competitors = response_data.get("competitors", [])
+        
+                    if response_id in existing_responses:
+                        # Update existing
+                        existing = existing_responses[response_id]
+                        existing.brand_id = final_brand_id
+                        existing.prompt_id = response_data.get("prompt_id")
+                        existing.prompt = response_data.get("prompt")
+                        existing.response_text = response_data.get("response_text")
+                        existing.platform = response_data.get("platform")
+                        existing.country = response_data.get("country")
+                        existing.persona_id = response_data.get("persona_id")
+                        existing.persona_name = response_data.get("persona_name")
+                        existing.stage = response_data.get("stage")
+                        existing.branded = response_data.get("branded")
+                        existing.tags = response_data.get("tags", [])
+                        existing.key_topics = response_data.get("key_topics", [])
+                        existing.brand_present = response_data.get("brand_present")
+                        existing.brand_sentiment = response_data.get("brand_sentiment")
+                        existing.brand_position = response_data.get("brand_position")
+                        existing.competitors_present = competitors_present
+                        existing.competitors = competitors
+                        existing.citations = citations
+                        if response_data.get("created_at"):
+                            existing.created_at = response_data.get("created_at")
+                        to_update.append(existing)
+                    else:
+                        # Insert new
+                        to_insert.append(Response(
+                            id=response_id,
+                            brand_id=final_brand_id,
+                            prompt_id=response_data.get("prompt_id"),
+                            prompt=response_data.get("prompt"),
+                            response_text=response_data.get("response_text"),
+                            platform=response_data.get("platform"),
+                            country=response_data.get("country"),
+                            persona_id=response_data.get("persona_id"),
+                            persona_name=response_data.get("persona_name"),
+                            stage=response_data.get("stage"),
+                            branded=response_data.get("branded"),
+                            tags=response_data.get("tags", []),
+                            key_topics=response_data.get("key_topics", []),
+                            brand_present=response_data.get("brand_present"),
+                            brand_sentiment=response_data.get("brand_sentiment"),
+                            brand_position=response_data.get("brand_position"),
+                            competitors_present=competitors_present,
+                            competitors=competitors,
+                            citations=citations,
+                            created_at=response_data.get("created_at")
+                        ))
+                
+                # Bulk add new responses
+                if to_insert:
+                    self.db.bulk_save_objects(to_insert)
+                
+                # Commit batch once
+                self.db.commit()
                 total_upserted += len(batch)
-                logger.info(f"Upserted batch {i//batch_size + 1}: {len(batch)} responses")
+                logger.info(f"Upserted batch {i//batch_size + 1}: {len(batch)} responses ({len(to_update)} updated, {len(to_insert)} inserted)")
             
             logger.info(f"Total upserted {total_upserted} responses")
             return total_upserted
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Error upserting responses: {str(e)}")
             raise
     
     def upsert_citations(self, responses: List[Dict]) -> int:
-        """Upsert citations separately (if you want a separate citations table)"""
+        """Upsert citations separately - Optimized with bulk operations"""
         if not responses:
             return 0
         
-        citations_records = []
-        for response in responses:
-            response_id = response.get("id")
-            citations = response.get("citations", [])
-            
-            for citation in citations:
-                citations_records.append({
-                    "response_id": response_id,
-                    "url": citation.get("url"),
-                    "domain": citation.get("domain"),
-                    "source_type": citation.get("source_type"),
-                    "title": citation.get("title"),
-                    "snippet": citation.get("snippet")
-                })
-        
-        if not citations_records:
-            return 0
-        
         try:
-            result = self.client.table("citations").upsert(citations_records).execute()
-            logger.info(f"Upserted {len(citations_records)} citations")
-            return len(citations_records)
+            # Collect all citations with their response_ids
+            all_citations = []
+            for response_data in responses:
+                response_id = response_data.get("id")
+                if not response_id:
+                    continue
+                citations = response_data.get("citations", [])
+                for citation_data in citations:
+                    all_citations.append({
+                        "response_id": response_id,
+                        "url": citation_data.get("url"),
+                        "domain": citation_data.get("domain"),
+                        "source_type": citation_data.get("source_type"),
+                        "title": citation_data.get("title"),
+                        "snippet": citation_data.get("snippet")
+                    })
+            
+            if not all_citations:
+                return 0
+            
+            # Build lookup keys for bulk fetch
+            citation_keys = [(c["response_id"], c["url"]) for c in all_citations if c.get("url")]
+            
+            # Bulk fetch existing citations
+            existing_citations = {}
+            if citation_keys:
+                # Fetch in batches to avoid IN clause limits
+                batch_size = 1000
+                for i in range(0, len(citation_keys), batch_size):
+                    batch_keys = citation_keys[i:i + batch_size]
+                    # Build OR conditions for batch
+                    conditions = []
+                    for response_id, url in batch_keys:
+                        conditions.append(
+                            and_(Citation.response_id == response_id, Citation.url == url)
+                        )
+                    if conditions:
+                        batch_existing = self.db.query(Citation).filter(or_(*conditions)).all()
+                        for cit in batch_existing:
+                            existing_citations[(cit.response_id, cit.url)] = cit
+            
+            # Separate into updates and inserts
+            to_update = []
+            to_insert = []
+            
+            for citation_data in all_citations:
+                key = (citation_data["response_id"], citation_data["url"])
+                if key in existing_citations:
+                    # Update existing
+                    existing = existing_citations[key]
+                    existing.domain = citation_data.get("domain")
+                    existing.source_type = citation_data.get("source_type")
+                    existing.title = citation_data.get("title")
+                    existing.snippet = citation_data.get("snippet")
+                    to_update.append(existing)
+                else:
+                    # Insert new
+                    to_insert.append(Citation(
+                        response_id=citation_data["response_id"],
+                        url=citation_data["url"],
+                        domain=citation_data.get("domain"),
+                        source_type=citation_data.get("source_type"),
+                        title=citation_data.get("title"),
+                        snippet=citation_data.get("snippet")
+                    ))
+            
+            # Bulk add new citations
+            if to_insert:
+                self.db.bulk_save_objects(to_insert)
+            
+            # Commit once for all changes
+            self.db.commit()
+            
+            count = len(to_update) + len(to_insert)
+            logger.info(f"Upserted {count} citations ({len(to_update)} updated, {len(to_insert)} inserted)")
+            return count
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Error upserting citations: {str(e)}")
+            raise
+    
+    # =====================================================
+    # Query Methods (for API endpoints)
+    # =====================================================
+    
+    def get_brands(self, limit: Optional[int] = None, offset: Optional[int] = None, search: Optional[str] = None) -> Dict:
+        """Get brands with optional search and pagination"""
+        try:
+            query = self.db.query(Brand)
+            
+            # Apply search filter
+            if search and search.strip():
+                search_term = f"%{search.strip()}%"
+                query = query.filter(Brand.name.ilike(search_term))
+            
+            # Get total count
+            total_count = query.count()
+            
+            # Apply ordering
+            query = query.order_by(Brand.name.asc())
+            
+            # Apply pagination
+            if offset:
+                query = query.offset(offset)
+            if limit:
+                query = query.limit(limit)
+            
+            items = query.all()
+            items_dict = [
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "website": item.website,
+                    "ga4_property_id": item.ga4_property_id,
+                    "created_at": item.created_at.isoformat() if item.created_at else None,
+                    "version": item.version,
+                    "last_modified_by": item.last_modified_by,
+                    "slug": getattr(item, 'slug', None),
+                    "logo_url": getattr(item, 'logo_url', None),
+                    "theme": getattr(item, 'theme', None)
+                }
+                for item in items
+            ]
+            
+            return {
+                "items": items_dict,
+                "count": len(items_dict),
+                "total_count": total_count
+            }
+        except Exception as e:
+            logger.error(f"Error getting brands: {str(e)}")
+            raise
+    
+    def get_brand_by_id(self, brand_id: int) -> Optional[Dict]:
+        """Get a single brand by ID"""
+        try:
+            brand = self.db.query(Brand).filter(Brand.id == brand_id).first()
+            if not brand:
+                return None
+            
+            return {
+                "id": brand.id,
+                "name": brand.name,
+                "website": brand.website,
+                "ga4_property_id": brand.ga4_property_id,
+                "created_at": brand.created_at.isoformat() if brand.created_at else None,
+                "version": brand.version,
+                "last_modified_by": brand.last_modified_by,
+                "slug": getattr(brand, 'slug', None),
+                "logo_url": getattr(brand, 'logo_url', None),
+                "theme": getattr(brand, 'theme', None)
+            }
+        except Exception as e:
+            logger.error(f"Error getting brand by ID: {str(e)}")
+            raise
+    
+    def get_brand_by_slug(self, slug: str) -> Optional[Dict]:
+        """Get a single brand by slug"""
+        try:
+            brand = self.db.query(Brand).filter(Brand.slug == slug).first()
+            if not brand:
+                return None
+            
+            return {
+                "id": brand.id,
+                "name": brand.name,
+                "website": brand.website,
+                "ga4_property_id": brand.ga4_property_id,
+                "created_at": brand.created_at.isoformat() if brand.created_at else None,
+                "version": brand.version,
+                "last_modified_by": brand.last_modified_by,
+                "slug": getattr(brand, 'slug', None),
+                "logo_url": getattr(brand, 'logo_url', None),
+                "theme": getattr(brand, 'theme', None)
+            }
+        except Exception as e:
+            logger.error(f"Error getting brand by slug: {str(e)}")
+            raise
+    
+    def get_brands_with_ga4(self) -> List[Dict]:
+        """Get all brands that have GA4 property IDs configured"""
+        try:
+            brands = self.db.query(Brand).filter(Brand.ga4_property_id.isnot(None)).all()
+            return [
+                {
+                    "id": brand.id,
+                    "name": brand.name,
+                    "website": brand.website,
+                    "ga4_property_id": brand.ga4_property_id,
+                    "created_at": brand.created_at.isoformat() if brand.created_at else None,
+                    "version": brand.version,
+                    "last_modified_by": brand.last_modified_by,
+                    "slug": getattr(brand, 'slug', None),
+                    "logo_url": getattr(brand, 'logo_url', None),
+                    "theme": getattr(brand, 'theme', None)
+                }
+                for brand in brands
+            ]
+        except Exception as e:
+            logger.error(f"Error getting brands with GA4: {str(e)}")
+            raise
+    
+    def get_sync_status_counts(self) -> Dict:
+        """Get counts of synced data for status endpoint - Optimized with single query"""
+        try:
+            # Use a single query with UNION ALL for better performance
+            # This reduces database round trips from 4 to 1
+            query = text("""
+                SELECT 
+                    (SELECT COUNT(*) FROM brands) as brands_count,
+                    (SELECT COUNT(*) FROM prompts) as prompts_count,
+                    (SELECT COUNT(*) FROM responses) as responses_count,
+                    (SELECT COUNT(*) FROM clients) as clients_count
+            """)
+            result = self.db.execute(query).first()
+            
+            return {
+                "brands_count": result.brands_count or 0,
+                "prompts_count": result.prompts_count or 0,
+                "responses_count": result.responses_count or 0,
+                "clients_count": result.clients_count or 0
+            }
+        except Exception as e:
+            logger.error(f"Error getting sync status counts: {str(e)}")
+            raise
+    
+    def get_prompts(
+        self,
+        brand_id: Optional[int] = None,
+        stage: Optional[str] = None,
+        persona_id: Optional[int] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None
+    ) -> Dict:
+        """Get prompts with optional filters and pagination"""
+        try:
+            query = self.db.query(Prompt)
+            
+            # Apply filters
+            if brand_id:
+                query = query.filter(Prompt.brand_id == brand_id)
+            if stage:
+                query = query.filter(Prompt.stage == stage)
+            if persona_id:
+                query = query.filter(Prompt.persona_id == persona_id)
+            
+            # Get total count
+            total_count = query.count()
+            
+            # Apply pagination
+            if offset:
+                query = query.offset(offset)
+            if limit:
+                query = query.limit(limit)
+            
+            items = query.all()
+            items_dict = [
+                {
+                    "id": item.id,
+                    "brand_id": item.brand_id,
+                    "text": item.text,
+                    "stage": item.stage,
+                    "persona_id": item.persona_id,
+                    "persona_name": item.persona_name,
+                    "platforms": item.platforms,
+                    "tags": item.tags,
+                    "topics": item.topics,
+                    "created_at": item.created_at.isoformat() if item.created_at else None
+                }
+                for item in items
+            ]
+            
+            return {
+                "items": items_dict,
+                "count": len(items_dict),
+                "total_count": total_count
+            }
+        except Exception as e:
+            logger.error(f"Error getting prompts: {str(e)}")
+            raise
+    
+    def get_responses(
+        self,
+        brand_id: Optional[int] = None,
+        platform: Optional[str] = None,
+        prompt_id: Optional[int] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None
+    ) -> Dict:
+        """Get responses with optional filters and pagination - Optimized with eager loading"""
+        try:
+            from datetime import datetime as dt
+            # Use selectinload to eagerly load citations to avoid N+1 queries
+            query = self.db.query(Response).options(selectinload(Response.citations))
+            
+            # Apply filters
+            if brand_id:
+                query = query.filter(Response.brand_id == brand_id)
+            if platform:
+                query = query.filter(Response.platform == platform)
+            if prompt_id:
+                query = query.filter(Response.prompt_id == prompt_id)
+            if start_date:
+                start_dt = dt.fromisoformat(start_date.replace('Z', '+00:00'))
+                query = query.filter(Response.created_at >= start_dt)
+            if end_date:
+                end_dt = dt.fromisoformat(end_date.replace('Z', '+00:00'))
+                query = query.filter(Response.created_at <= end_dt)
+            
+            # Get total count (before pagination for accuracy)
+            total_count = query.count()
+            
+            # Apply pagination
+            if offset:
+                query = query.offset(offset)
+            if limit:
+                query = query.limit(limit)
+            
+            # Execute query with eager loading
+            items = query.all()
+            
+            # Convert to dict format (citations already loaded)
+            items_dict = [
+                {
+                    "id": item.id,
+                    "brand_id": item.brand_id,
+                    "prompt_id": item.prompt_id,
+                    "prompt": item.prompt,
+                    "response_text": item.response_text,
+                    "platform": item.platform,
+                    "country": item.country,
+                    "persona_id": item.persona_id,
+                    "persona_name": item.persona_name,
+                    "stage": item.stage,
+                    "branded": item.branded,
+                    "tags": item.tags,
+                    "key_topics": item.key_topics,
+                    "brand_present": item.brand_present,
+                    "brand_sentiment": item.brand_sentiment,
+                    "brand_position": item.brand_position,
+                    "competitors_present": item.competitors_present,
+                    "competitors": item.competitors,
+                    "created_at": item.created_at.isoformat() if item.created_at else None,
+                    "citations": [
+                        {
+                            "id": cit.id,
+                            "url": cit.url,
+                            "domain": cit.domain,
+                            "source_type": cit.source_type,
+                            "title": cit.title,
+                            "snippet": cit.snippet
+                        }
+                        for cit in item.citations
+                    ] if item.citations else []
+                }
+                for item in items
+            ]
+            
+            return {
+                "items": items_dict,
+                "count": len(items_dict),
+                "total_count": total_count
+            }
+        except Exception as e:
+            logger.error(f"Error getting responses: {str(e)}")
+            raise
+    
+    def get_clients(
+        self,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        search: Optional[str] = None
+    ) -> Dict:
+        """Get clients with optional search and pagination"""
+        try:
+            # Build query using SQLAlchemy Core
+            table = self._get_table("clients")
+            query = select(table)
+            
+            # Apply search filter
+            if search and search.strip():
+                search_term = f"%{search.strip()}%"
+                query = query.where(
+                    or_(
+                        table.c.company_name.ilike(search_term),
+                        table.c.company_domain.ilike(search_term),
+                        table.c.url.ilike(search_term)
+                    )
+                )
+            
+            # Get total count
+            count_query = select(func.count()).select_from(query.alias())
+            total_count = self.db.execute(count_query).scalar()
+            
+            # Apply ordering
+            query = query.order_by(table.c.company_name.asc())
+            
+            # Apply pagination
+            if offset:
+                query = query.offset(offset)
+            if limit:
+                query = query.limit(limit)
+            
+            result = self.db.execute(query)
+            items = [dict(row._mapping) for row in result]
+            
+            return {
+                "items": items,
+                "count": len(items),
+                "total_count": total_count
+            }
+        except Exception as e:
+            logger.error(f"Error getting clients: {str(e)}")
             raise
     
     # =====================================================
     # GA4 Data Sync Methods
     # =====================================================
     
-    def get_ga4_traffic_overview_by_date_range(self, brand_id: int, property_id: str, start_date: str, end_date: str) -> Optional[Dict]:
-        """Get aggregated GA4 traffic overview data from stored daily records for a date range"""
+    def get_ga4_traffic_overview_by_date_range(self, brand_id: int, property_id: str, start_date: str, end_date: str, client_id: Optional[int] = None) -> Optional[Dict]:
+        """Get aggregated GA4 traffic overview data from stored daily records for a date range
+        
+        Supports querying by brand_id or client_id. If client_id is provided, it will be used as the primary filter.
+        """
         try:
             # Get all daily records for the date range
-            result = self.client.table("ga4_traffic_overview").select("*").eq("brand_id", brand_id).eq("property_id", property_id).gte("date", start_date).lte("date", end_date).order("date", desc=False).execute()
-            
-            records = result.data if hasattr(result, 'data') else []
+            # If client_id is provided, query by client_id; otherwise use brand_id
+            if client_id is not None:
+                query = text("""
+                    SELECT * FROM ga4_traffic_overview
+                    WHERE client_id = :client_id
+                      AND property_id = :property_id
+                      AND date >= :start_date
+                      AND date <= :end_date
+                    ORDER BY date ASC
+                """)
+                result = self.db.execute(query, {
+                    "client_id": client_id,
+                    "property_id": property_id,
+                    "start_date": start_date,
+                    "end_date": end_date
+                })
+            else:
+                query = text("""
+                    SELECT * FROM ga4_traffic_overview
+                    WHERE brand_id = :brand_id
+                      AND property_id = :property_id
+                      AND date >= :start_date
+                      AND date <= :end_date
+                    ORDER BY date ASC
+                """)
+                result = self.db.execute(query, {
+                    "brand_id": brand_id,
+                    "property_id": property_id,
+                    "start_date": start_date,
+                    "end_date": end_date
+                })
+            records = [dict(row._mapping) for row in result]
             
             if not records:
                 return None
@@ -226,7 +901,55 @@ class SupabaseService:
             raise ValueError("Either client_id or brand_id must be provided")
         
         try:
-            record = {
+            # If client_id is provided but brand_id is not, get brand_id from client
+            if client_id is not None and brand_id is None:
+                client_query = text("SELECT scrunch_brand_id FROM clients WHERE id = :client_id")
+                result = self.db.execute(client_query, {"client_id": client_id})
+                row = result.first()
+                if row:
+                    brand_id = row[0]
+            
+            entity_id = client_id if client_id is not None else brand_id
+            entity_type = "client" if client_id is not None else "brand"
+            
+            # Use PostgreSQL INSERT ... ON CONFLICT for upsert
+            # Unique constraint is on (brand_id, property_id, date)
+            query = text("""
+                INSERT INTO ga4_traffic_overview (
+                    brand_id, client_id, property_id, date,
+                    users, sessions, new_users, bounce_rate,
+                    average_session_duration, engaged_sessions, engagement_rate,
+                    sessions_change, engaged_sessions_change, avg_session_duration_change,
+                    engagement_rate_change, conversions, revenue, updated_at
+                ) VALUES (
+                    :brand_id, :client_id, :property_id, :date,
+                    :users, :sessions, :new_users, :bounce_rate,
+                    :average_session_duration, :engaged_sessions, :engagement_rate,
+                    :sessions_change, :engaged_sessions_change, :avg_session_duration_change,
+                    :engagement_rate_change, :conversions, :revenue, NOW()
+                )
+                ON CONFLICT (brand_id, property_id, date)
+                DO UPDATE SET
+                    client_id = EXCLUDED.client_id,
+                    users = EXCLUDED.users,
+                    sessions = EXCLUDED.sessions,
+                    new_users = EXCLUDED.new_users,
+                    bounce_rate = EXCLUDED.bounce_rate,
+                    average_session_duration = EXCLUDED.average_session_duration,
+                    engaged_sessions = EXCLUDED.engaged_sessions,
+                    engagement_rate = EXCLUDED.engagement_rate,
+                    sessions_change = EXCLUDED.sessions_change,
+                    engaged_sessions_change = EXCLUDED.engaged_sessions_change,
+                    avg_session_duration_change = EXCLUDED.avg_session_duration_change,
+                    engagement_rate_change = EXCLUDED.engagement_rate_change,
+                    conversions = EXCLUDED.conversions,
+                    revenue = EXCLUDED.revenue,
+                    updated_at = NOW()
+            """)
+            
+            self.db.execute(query, {
+                "brand_id": brand_id,
+                "client_id": client_id,
                 "property_id": property_id,
                 "date": date,
                 "users": data.get("users", 0),
@@ -241,64 +964,18 @@ class SupabaseService:
                 "avg_session_duration_change": data.get("avgSessionDurationChange", 0),
                 "engagement_rate_change": data.get("engagementRateChange", 0),
                 "conversions": data.get("conversions", 0),
-                "revenue": data.get("revenue", 0),
-                "updated_at": datetime.now().isoformat()
-            }
-            
-            # Add client_id if provided, otherwise use brand_id for backward compatibility
-            if client_id is not None:
-                record["client_id"] = client_id
-                entity_id = client_id
-                entity_type = "client"
-            if brand_id is not None:
-                record["brand_id"] = brand_id
-                if client_id is None:
-                    entity_id = brand_id
-                    entity_type = "brand"
-            
-            # Check if record exists - use client_id if available, otherwise brand_id
-            query = self.client.table("ga4_traffic_overview").select("id").eq("property_id", property_id).eq("date", date)
-            if client_id is not None:
-                query = query.eq("client_id", client_id)
-            else:
-                query = query.eq("brand_id", brand_id)
-            existing = query.limit(1).execute()
-            
-            # Build update query
-            update_query = self.client.table("ga4_traffic_overview").update(record).eq("property_id", property_id).eq("date", date)
-            if client_id is not None:
-                update_query = update_query.eq("client_id", client_id)
-            else:
-                update_query = update_query.eq("brand_id", brand_id)
-            
-            if existing.data and len(existing.data) > 0:
-                result = update_query.execute()
-                logger.info(f"Updated GA4 traffic overview for {entity_type} {entity_id}, property {property_id}, date {date}")
-            else:
-                result = self.client.table("ga4_traffic_overview").insert(record).execute()
-                logger.info(f"Inserted GA4 traffic overview for {entity_type} {entity_id}, property {property_id}, date {date}")
+                "revenue": data.get("revenue", 0)
+            })
+            self.db.commit()
+            logger.info(f"Upserted GA4 traffic overview for {entity_type} {entity_id}, property {property_id}, date {date}")
             return 1
         except Exception as e:
-            error_str = str(e)
-            if "23505" in error_str or "duplicate key" in error_str.lower() or "unique constraint" in error_str.lower():
-                try:
-                    # Build update query for conflict resolution
-                    update_query = self.client.table("ga4_traffic_overview").update(record).eq("property_id", property_id).eq("date", date)
-                    if client_id is not None:
-                        update_query = update_query.eq("client_id", client_id)
-                    else:
-                        update_query = update_query.eq("brand_id", brand_id)
-                    result = update_query.execute()
-                    logger.info(f"Updated existing GA4 traffic overview for {entity_type} {entity_id}, property {property_id}, date {date}")
-                    return 1
-                except Exception as update_error:
-                    logger.error(f"Error updating GA4 traffic overview after conflict: {str(update_error)}")
-                    raise
-            logger.error(f"Error upserting GA4 traffic overview: {error_str}")
+            self.db.rollback()
+            logger.error(f"Error upserting GA4 traffic overview: {str(e)}")
             raise
     
     def upsert_ga4_top_pages(self, property_id: str, date: str, pages: List[Dict], client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
-        """Upsert GA4 top pages data - now uses client_id (with brand_id for backward compatibility)"""
+        """Upsert GA4 top pages data using SQLAlchemy Core (local PostgreSQL)"""
         if client_id is None and brand_id is None:
             raise ValueError("Either client_id or brand_id must be provided")
         if not pages:
@@ -307,18 +984,28 @@ class SupabaseService:
         entity_id = client_id if client_id is not None else brand_id
         entity_type = "client" if client_id is not None else "brand"
         
-        # Delete existing records for this date first, then insert new ones
-        # This ensures we don't have stale data from previous syncs
         try:
-            delete_query = self.client.table("ga4_top_pages").delete().eq("property_id", property_id).eq("date", date)
+            table = self._get_table("ga4_top_pages")
+            
+            # Delete existing records for this date first, then insert new ones
+            # This ensures we don't have stale data from previous syncs
+            delete_conditions = [
+                table.c.property_id == property_id,
+                table.c.date == date
+            ]
             if client_id is not None:
-                delete_query = delete_query.eq("client_id", client_id)
-            else:
-                delete_query = delete_query.eq("brand_id", brand_id)
-            delete_query.execute()
+                delete_conditions.append(table.c.client_id == client_id)
+            if brand_id is not None:
+                delete_conditions.append(table.c.brand_id == brand_id)
+            
+            delete_stmt = delete(table).where(and_(*delete_conditions))
+            self.db.execute(delete_stmt)
+            self.db.commit()
         except Exception as delete_error:
+            self.db.rollback()
             logger.warning(f"Error deleting existing top pages (may not exist): {str(delete_error)}")
         
+        # Prepare records
         records = []
         for idx, page in enumerate(pages):
             record = {
@@ -329,7 +1016,7 @@ class SupabaseService:
                 "users": page.get("users", 0),
                 "avg_session_duration": page.get("avgSessionDuration", 0),
                 "rank": idx + 1,
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now()
             }
             if client_id is not None:
                 record["client_id"] = client_id
@@ -338,50 +1025,36 @@ class SupabaseService:
             records.append(record)
         
         try:
-            # Insert in batches
-            batch_size = 50
+            # Bulk insert using ON CONFLICT - process in larger batches
+            batch_size = 500  # Increased from 50 for better performance
             total_inserted = 0
             for i in range(0, len(records), batch_size):
                 batch = records[i:i + batch_size]
-                result = self.client.table("ga4_top_pages").insert(batch).execute()
+                # Bulk insert all records at once
+                insert_stmt = pg_insert(table).values(batch)
+                insert_stmt = insert_stmt.on_conflict_do_update(
+                    index_elements=['brand_id', 'property_id', 'date', 'page_path'],
+                    set_={
+                        'views': insert_stmt.excluded.views,
+                        'users': insert_stmt.excluded.users,
+                        'avg_session_duration': insert_stmt.excluded.avg_session_duration,
+                        'rank': insert_stmt.excluded.rank,
+                        'updated_at': insert_stmt.excluded.updated_at
+                    }
+                )
+                self.db.execute(insert_stmt)
+                self.db.commit()
                 total_inserted += len(batch)
             
             logger.info(f"Upserted {total_inserted} GA4 top pages for {entity_type} {entity_id}, property {property_id}, date {date}")
             return total_inserted
         except Exception as e:
-            error_str = str(e)
-            if "23505" in error_str or "duplicate key" in error_str.lower():
-                # If duplicates exist, try individual upserts
-                total_upserted = 0
-                for record in records:
-                    try:
-                        query = self.client.table("ga4_top_pages").select("id").eq("property_id", property_id).eq("date", date).eq("page_path", record["page_path"])
-                        if client_id is not None:
-                            query = query.eq("client_id", client_id)
-                        else:
-                            query = query.eq("brand_id", brand_id)
-                        existing = query.limit(1).execute()
-                        
-                        update_query = self.client.table("ga4_top_pages").update(record).eq("property_id", property_id).eq("date", date).eq("page_path", record["page_path"])
-                        if client_id is not None:
-                            update_query = update_query.eq("client_id", client_id)
-                        else:
-                            update_query = update_query.eq("brand_id", brand_id)
-                        
-                        if existing.data:
-                            update_query.execute()
-                        else:
-                            self.client.table("ga4_top_pages").insert(record).execute()
-                        total_upserted += 1
-                    except Exception:
-                        pass
-                logger.info(f"Upserted {total_upserted} GA4 top pages (individual) for {entity_type} {entity_id}, property {property_id}, date {date}")
-                return total_upserted
-            logger.error(f"Error upserting GA4 top pages: {error_str}")
+            self.db.rollback()
+            logger.error(f"Error upserting GA4 top pages: {str(e)}")
             raise
     
     def upsert_ga4_traffic_sources(self, property_id: str, date: str, sources: List[Dict], client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
-        """Upsert GA4 traffic sources data - now uses client_id (with brand_id for backward compatibility)"""
+        """Upsert GA4 traffic sources data using SQLAlchemy Core (local PostgreSQL)"""
         if client_id is None and brand_id is None:
             raise ValueError("Either client_id or brand_id must be provided")
         if not sources:
@@ -390,15 +1063,24 @@ class SupabaseService:
         entity_id = client_id if client_id is not None else brand_id
         entity_type = "client" if client_id is not None else "brand"
         
-        # Delete existing records for this date first
         try:
-            delete_query = self.client.table("ga4_traffic_sources").delete().eq("property_id", property_id).eq("date", date)
+            table = self._get_table("ga4_traffic_sources")
+            
+            # Delete existing records for this date first
+            delete_conditions = [
+                table.c.property_id == property_id,
+                table.c.date == date
+            ]
             if client_id is not None:
-                delete_query = delete_query.eq("client_id", client_id)
-            else:
-                delete_query = delete_query.eq("brand_id", brand_id)
-            delete_query.execute()
+                delete_conditions.append(table.c.client_id == client_id)
+            if brand_id is not None:
+                delete_conditions.append(table.c.brand_id == brand_id)
+            
+            delete_stmt = delete(table).where(and_(*delete_conditions))
+            self.db.execute(delete_stmt)
+            self.db.commit()
         except Exception as delete_error:
+            self.db.rollback()
             logger.warning(f"Error deleting existing traffic sources (may not exist): {str(delete_error)}")
         
         records = []
@@ -410,7 +1092,7 @@ class SupabaseService:
                 "sessions": source.get("sessions", 0),
                 "users": source.get("users", 0),
                 "bounce_rate": source.get("bounceRate", 0),
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now()
             }
             if client_id is not None:
                 record["client_id"] = client_id
@@ -419,43 +1101,32 @@ class SupabaseService:
             records.append(record)
         
         try:
-            result = self.client.table("ga4_traffic_sources").insert(records).execute()
+            # Bulk insert using ON CONFLICT - process in batches
+            batch_size = 500
+            for i in range(0, len(records), batch_size):
+                batch = records[i:i + batch_size]
+                insert_stmt = pg_insert(table).values(batch)
+                insert_stmt = insert_stmt.on_conflict_do_update(
+                    index_elements=['brand_id', 'property_id', 'date', 'source'],
+                    set_={
+                        'sessions': insert_stmt.excluded.sessions,
+                        'users': insert_stmt.excluded.users,
+                        'bounce_rate': insert_stmt.excluded.bounce_rate,
+                        'updated_at': insert_stmt.excluded.updated_at
+                    }
+                )
+                self.db.execute(insert_stmt)
+            self.db.commit()
+            
             logger.info(f"Upserted {len(records)} GA4 traffic sources for {entity_type} {entity_id}, property {property_id}, date {date}")
             return len(records)
         except Exception as e:
-            error_str = str(e)
-            if "23505" in error_str or "duplicate key" in error_str.lower():
-                # If duplicates exist, try individual upserts
-                total_upserted = 0
-                for record in records:
-                    try:
-                        query = self.client.table("ga4_traffic_sources").select("id").eq("property_id", property_id).eq("date", date).eq("source", record["source"])
-                        if client_id is not None:
-                            query = query.eq("client_id", client_id)
-                        else:
-                            query = query.eq("brand_id", brand_id)
-                        existing = query.limit(1).execute()
-                        
-                        update_query = self.client.table("ga4_traffic_sources").update(record).eq("property_id", property_id).eq("date", date).eq("source", record["source"])
-                        if client_id is not None:
-                            update_query = update_query.eq("client_id", client_id)
-                        else:
-                            update_query = update_query.eq("brand_id", brand_id)
-                        
-                        if existing.data:
-                            update_query.execute()
-                        else:
-                            self.client.table("ga4_traffic_sources").insert(record).execute()
-                        total_upserted += 1
-                    except Exception:
-                        pass
-                logger.info(f"Upserted {total_upserted} GA4 traffic sources (individual) for {entity_type} {entity_id}, property {property_id}, date {date}")
-                return total_upserted
-            logger.error(f"Error upserting GA4 traffic sources: {error_str}")
+            self.db.rollback()
+            logger.error(f"Error upserting GA4 traffic sources: {str(e)}")
             raise
     
     def upsert_ga4_geographic(self, property_id: str, date: str, geographic: List[Dict], client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
-        """Upsert GA4 geographic data - now uses client_id (with brand_id for backward compatibility)"""
+        """Upsert GA4 geographic data using SQLAlchemy Core (local PostgreSQL)"""
         if client_id is None and brand_id is None:
             raise ValueError("Either client_id or brand_id must be provided")
         if not geographic:
@@ -464,15 +1135,24 @@ class SupabaseService:
         entity_id = client_id if client_id is not None else brand_id
         entity_type = "client" if client_id is not None else "brand"
         
-        # Delete existing records for this date first
         try:
-            delete_query = self.client.table("ga4_geographic").delete().eq("property_id", property_id).eq("date", date)
+            table = self._get_table("ga4_geographic")
+            
+            # Delete existing records for this date first
+            delete_conditions = [
+                table.c.property_id == property_id,
+                table.c.date == date
+            ]
             if client_id is not None:
-                delete_query = delete_query.eq("client_id", client_id)
-            else:
-                delete_query = delete_query.eq("brand_id", brand_id)
-            delete_query.execute()
+                delete_conditions.append(table.c.client_id == client_id)
+            if brand_id is not None:
+                delete_conditions.append(table.c.brand_id == brand_id)
+            
+            delete_stmt = delete(table).where(and_(*delete_conditions))
+            self.db.execute(delete_stmt)
+            self.db.commit()
         except Exception as delete_error:
+            self.db.rollback()
             logger.warning(f"Error deleting existing geographic data (may not exist): {str(delete_error)}")
         
         records = []
@@ -483,7 +1163,7 @@ class SupabaseService:
                 "country": geo.get("country", ""),
                 "users": geo.get("users", 0),
                 "sessions": geo.get("sessions", 0),
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now()
             }
             if client_id is not None:
                 record["client_id"] = client_id
@@ -492,43 +1172,31 @@ class SupabaseService:
             records.append(record)
         
         try:
-            result = self.client.table("ga4_geographic").insert(records).execute()
+            # Bulk insert using ON CONFLICT - process in batches
+            batch_size = 500
+            for i in range(0, len(records), batch_size):
+                batch = records[i:i + batch_size]
+                insert_stmt = pg_insert(table).values(batch)
+                insert_stmt = insert_stmt.on_conflict_do_update(
+                    index_elements=['brand_id', 'property_id', 'date', 'country'],
+                    set_={
+                        'users': insert_stmt.excluded.users,
+                        'sessions': insert_stmt.excluded.sessions,
+                        'updated_at': insert_stmt.excluded.updated_at
+                    }
+                )
+                self.db.execute(insert_stmt)
+            self.db.commit()
+            
             logger.info(f"Upserted {len(records)} GA4 geographic records for {entity_type} {entity_id}, property {property_id}, date {date}")
             return len(records)
         except Exception as e:
-            error_str = str(e)
-            if "23505" in error_str or "duplicate key" in error_str.lower():
-                # If duplicates exist, try individual upserts
-                total_upserted = 0
-                for record in records:
-                    try:
-                        query = self.client.table("ga4_geographic").select("id").eq("property_id", property_id).eq("date", date).eq("country", record["country"])
-                        if client_id is not None:
-                            query = query.eq("client_id", client_id)
-                        else:
-                            query = query.eq("brand_id", brand_id)
-                        existing = query.limit(1).execute()
-                        
-                        update_query = self.client.table("ga4_geographic").update(record).eq("property_id", property_id).eq("date", date).eq("country", record["country"])
-                        if client_id is not None:
-                            update_query = update_query.eq("client_id", client_id)
-                        else:
-                            update_query = update_query.eq("brand_id", brand_id)
-                        
-                        if existing.data:
-                            update_query.execute()
-                        else:
-                            self.client.table("ga4_geographic").insert(record).execute()
-                        total_upserted += 1
-                    except Exception:
-                        pass
-                logger.info(f"Upserted {total_upserted} GA4 geographic records (individual) for {entity_type} {entity_id}, property {property_id}, date {date}")
-                return total_upserted
-            logger.error(f"Error upserting GA4 geographic: {error_str}")
+            self.db.rollback()
+            logger.error(f"Error upserting GA4 geographic: {str(e)}")
             raise
     
     def upsert_ga4_devices(self, property_id: str, date: str, devices: List[Dict], client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
-        """Upsert GA4 devices data - now uses client_id (with brand_id for backward compatibility)"""
+        """Upsert GA4 devices data using SQLAlchemy Core (local PostgreSQL)"""
         if client_id is None and brand_id is None:
             raise ValueError("Either client_id or brand_id must be provided")
         if not devices:
@@ -537,15 +1205,24 @@ class SupabaseService:
         entity_id = client_id if client_id is not None else brand_id
         entity_type = "client" if client_id is not None else "brand"
         
-        # Delete existing records for this date first
         try:
-            delete_query = self.client.table("ga4_devices").delete().eq("property_id", property_id).eq("date", date)
+            table = self._get_table("ga4_devices")
+            
+            # Delete existing records for this date first
+            delete_conditions = [
+                table.c.property_id == property_id,
+                table.c.date == date
+            ]
             if client_id is not None:
-                delete_query = delete_query.eq("client_id", client_id)
-            else:
-                delete_query = delete_query.eq("brand_id", brand_id)
-            delete_query.execute()
+                delete_conditions.append(table.c.client_id == client_id)
+            if brand_id is not None:
+                delete_conditions.append(table.c.brand_id == brand_id)
+            
+            delete_stmt = delete(table).where(and_(*delete_conditions))
+            self.db.execute(delete_stmt)
+            self.db.commit()
         except Exception as delete_error:
+            self.db.rollback()
             logger.warning(f"Error deleting existing devices data (may not exist): {str(delete_error)}")
         
         records = []
@@ -558,7 +1235,7 @@ class SupabaseService:
                 "users": device.get("users", 0),
                 "sessions": device.get("sessions", 0),
                 "bounce_rate": device.get("bounceRate", 0),
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now()
             }
             if client_id is not None:
                 record["client_id"] = client_id
@@ -567,43 +1244,32 @@ class SupabaseService:
             records.append(record)
         
         try:
-            result = self.client.table("ga4_devices").insert(records).execute()
+            # Bulk insert using ON CONFLICT - process in batches
+            batch_size = 500
+            for i in range(0, len(records), batch_size):
+                batch = records[i:i + batch_size]
+                insert_stmt = pg_insert(table).values(batch)
+                insert_stmt = insert_stmt.on_conflict_do_update(
+                    index_elements=['brand_id', 'property_id', 'date', 'device_category', 'operating_system'],
+                    set_={
+                        'users': insert_stmt.excluded.users,
+                        'sessions': insert_stmt.excluded.sessions,
+                        'bounce_rate': insert_stmt.excluded.bounce_rate,
+                        'updated_at': insert_stmt.excluded.updated_at
+                    }
+                )
+                self.db.execute(insert_stmt)
+            self.db.commit()
+            
             logger.info(f"Upserted {len(records)} GA4 devices for {entity_type} {entity_id}, property {property_id}, date {date}")
             return len(records)
         except Exception as e:
-            error_str = str(e)
-            if "23505" in error_str or "duplicate key" in error_str.lower():
-                # If duplicates exist, try individual upserts
-                total_upserted = 0
-                for record in records:
-                    try:
-                        query = self.client.table("ga4_devices").select("id").eq("property_id", property_id).eq("date", date).eq("device_category", record["device_category"]).eq("operating_system", record["operating_system"])
-                        if client_id is not None:
-                            query = query.eq("client_id", client_id)
-                        else:
-                            query = query.eq("brand_id", brand_id)
-                        existing = query.limit(1).execute()
-                        
-                        update_query = self.client.table("ga4_devices").update(record).eq("property_id", property_id).eq("date", date).eq("device_category", record["device_category"]).eq("operating_system", record["operating_system"])
-                        if client_id is not None:
-                            update_query = update_query.eq("client_id", client_id)
-                        else:
-                            update_query = update_query.eq("brand_id", brand_id)
-                        
-                        if existing.data:
-                            update_query.execute()
-                        else:
-                            self.client.table("ga4_devices").insert(record).execute()
-                        total_upserted += 1
-                    except Exception:
-                        pass
-                logger.info(f"Upserted {total_upserted} GA4 devices (individual) for {entity_type} {entity_id}, property {property_id}, date {date}")
-                return total_upserted
-            logger.error(f"Error upserting GA4 devices: {error_str}")
+            self.db.rollback()
+            logger.error(f"Error upserting GA4 devices: {str(e)}")
             raise
     
     def upsert_ga4_conversions(self, property_id: str, date: str, conversions: List[Dict], client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
-        """Upsert GA4 conversions data - now uses client_id (with brand_id for backward compatibility)"""
+        """Upsert GA4 conversions data using SQLAlchemy Core (local PostgreSQL)"""
         if client_id is None and brand_id is None:
             raise ValueError("Either client_id or brand_id must be provided")
         if not conversions:
@@ -612,15 +1278,24 @@ class SupabaseService:
         entity_id = client_id if client_id is not None else brand_id
         entity_type = "client" if client_id is not None else "brand"
         
-        # Delete existing records for this date first
         try:
-            delete_query = self.client.table("ga4_conversions").delete().eq("property_id", property_id).eq("date", date)
+            table = self._get_table("ga4_conversions")
+            
+            # Delete existing records for this date first
+            delete_conditions = [
+                table.c.property_id == property_id,
+                table.c.date == date
+            ]
             if client_id is not None:
-                delete_query = delete_query.eq("client_id", client_id)
-            else:
-                delete_query = delete_query.eq("brand_id", brand_id)
-            delete_query.execute()
+                delete_conditions.append(table.c.client_id == client_id)
+            if brand_id is not None:
+                delete_conditions.append(table.c.brand_id == brand_id)
+            
+            delete_stmt = delete(table).where(and_(*delete_conditions))
+            self.db.execute(delete_stmt)
+            self.db.commit()
         except Exception as delete_error:
+            self.db.rollback()
             logger.warning(f"Error deleting existing conversions data (may not exist): {str(delete_error)}")
         
         records = []
@@ -631,7 +1306,7 @@ class SupabaseService:
                 "event_name": conversion.get("eventName", ""),
                 "event_count": conversion.get("count", 0),
                 "users": conversion.get("users", 0),
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now()
             }
             if client_id is not None:
                 record["client_id"] = client_id
@@ -640,48 +1315,41 @@ class SupabaseService:
             records.append(record)
         
         try:
-            result = self.client.table("ga4_conversions").insert(records).execute()
+            # Bulk insert using ON CONFLICT - process in batches
+            batch_size = 500
+            for i in range(0, len(records), batch_size):
+                batch = records[i:i + batch_size]
+                insert_stmt = pg_insert(table).values(batch)
+                insert_stmt = insert_stmt.on_conflict_do_update(
+                    index_elements=['brand_id', 'property_id', 'date', 'event_name'],
+                    set_={
+                        'event_count': insert_stmt.excluded.event_count,
+                        'users': insert_stmt.excluded.users,
+                        'updated_at': insert_stmt.excluded.updated_at
+                    }
+                )
+                self.db.execute(insert_stmt)
+            self.db.commit()
+            
             logger.info(f"Upserted {len(records)} GA4 conversions for {entity_type} {entity_id}, property {property_id}, date {date}")
             return len(records)
         except Exception as e:
-            error_str = str(e)
-            if "23505" in error_str or "duplicate key" in error_str.lower():
-                # If duplicates exist, try individual upserts
-                total_upserted = 0
-                for record in records:
-                    try:
-                        query = self.client.table("ga4_conversions").select("id").eq("property_id", property_id).eq("date", date).eq("event_name", record["event_name"])
-                        if client_id is not None:
-                            query = query.eq("client_id", client_id)
-                        else:
-                            query = query.eq("brand_id", brand_id)
-                        existing = query.limit(1).execute()
-                        
-                        update_query = self.client.table("ga4_conversions").update(record).eq("property_id", property_id).eq("date", date).eq("event_name", record["event_name"])
-                        if client_id is not None:
-                            update_query = update_query.eq("client_id", client_id)
-                        else:
-                            update_query = update_query.eq("brand_id", brand_id)
-                        
-                        if existing.data:
-                            update_query.execute()
-                        else:
-                            self.client.table("ga4_conversions").insert(record).execute()
-                        total_upserted += 1
-                    except Exception:
-                        pass
-                logger.info(f"Upserted {total_upserted} GA4 conversions (individual) for {entity_type} {entity_id}, property {property_id}, date {date}")
-                return total_upserted
-            logger.error(f"Error upserting GA4 conversions: {error_str}")
+            self.db.rollback()
+            logger.error(f"Error upserting GA4 conversions: {str(e)}")
             raise
     
     def upsert_ga4_realtime(self, property_id: str, realtime_data: Dict, client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
-        """Upsert GA4 realtime data - now uses client_id (with brand_id for backward compatibility)"""
+        """Upsert GA4 realtime data using SQLAlchemy Core (local PostgreSQL)"""
         if client_id is None and brand_id is None:
             raise ValueError("Either client_id or brand_id must be provided")
         
         try:
-            snapshot_time = datetime.now().isoformat()
+            table = self._get_table("ga4_realtime")
+            snapshot_time = datetime.now()
+            
+            entity_id = client_id if client_id is not None else brand_id
+            entity_type = "client" if client_id is not None else "brand"
+            
             record = {
                 "property_id": property_id,
                 "snapshot_time": snapshot_time,
@@ -691,219 +1359,189 @@ class SupabaseService:
             
             if client_id is not None:
                 record["client_id"] = client_id
-                entity_id = client_id
-                entity_type = "client"
             if brand_id is not None:
                 record["brand_id"] = brand_id
-                if client_id is None:
-                    entity_id = brand_id
-                    entity_type = "brand"
             
-            # Check if record exists (realtime uses snapshot_time as part of unique constraint)
-            query = self.client.table("ga4_realtime").select("id").eq("property_id", property_id).eq("snapshot_time", snapshot_time)
-            if client_id is not None:
-                query = query.eq("client_id", client_id)
-            else:
-                query = query.eq("brand_id", brand_id)
-            existing = query.limit(1).execute()
+            # Use PostgreSQL INSERT ... ON CONFLICT for upsert
+            insert_stmt = pg_insert(table).values(**record)
+            insert_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=['brand_id', 'property_id', 'snapshot_time'],
+                set_={
+                    'client_id': insert_stmt.excluded.client_id,
+                    'total_active_users': insert_stmt.excluded.total_active_users,
+                    'active_pages': insert_stmt.excluded.active_pages
+                }
+            )
             
-            update_query = self.client.table("ga4_realtime").update(record).eq("property_id", property_id).eq("snapshot_time", snapshot_time)
-            if client_id is not None:
-                update_query = update_query.eq("client_id", client_id)
-            else:
-                update_query = update_query.eq("brand_id", brand_id)
-            
-            if existing.data and len(existing.data) > 0:
-                result = update_query.execute()
-                logger.info(f"Updated GA4 realtime data for {entity_type} {entity_id}, property {property_id}")
-            else:
-                result = self.client.table("ga4_realtime").insert(record).execute()
-                logger.info(f"Inserted GA4 realtime data for {entity_type} {entity_id}, property {property_id}")
+            self.db.execute(insert_stmt)
+            self.db.commit()
+            logger.info(f"Upserted GA4 realtime data for {entity_type} {entity_id}, property {property_id}")
             return 1
         except Exception as e:
-            error_str = str(e)
-            if "23505" in error_str or "duplicate key" in error_str.lower() or "unique constraint" in error_str.lower():
-                try:
-                    result = update_query.execute()
-                    logger.info(f"Updated existing GA4 realtime data for {entity_type} {entity_id}, property {property_id}")
-                    return 1
-                except Exception as update_error:
-                    logger.error(f"Error updating GA4 realtime after conflict: {str(update_error)}")
-                    raise
-            logger.error(f"Error upserting GA4 realtime: {error_str}")
+            self.db.rollback()
+            logger.error(f"Error upserting GA4 realtime: {str(e)}")
             raise
     
     def upsert_ga4_property_details(self, property_id: str, property_details: Dict, client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
-        """Upsert GA4 property details (static configuration) - now uses client_id (with brand_id for backward compatibility)"""
+        """Upsert GA4 property details using SQLAlchemy Core (local PostgreSQL)"""
         if client_id is None and brand_id is None:
             raise ValueError("Either client_id or brand_id must be provided")
         
         try:
+            table = self._get_table("ga4_property_details")
+            
+            entity_id = client_id if client_id is not None else brand_id
+            entity_type = "client" if client_id is not None else "brand"
+            
             record = {
                 "property_id": property_id,
                 "display_name": property_details.get("displayName"),
                 "time_zone": property_details.get("timeZone"),
                 "currency_code": property_details.get("currencyCode"),
-                "create_time": property_details.get("createTime"),
-                "updated_at": datetime.now().isoformat()
+                "create_time": self._parse_datetime(property_details.get("createTime")),
+                "updated_at": datetime.now()
             }
             
             if client_id is not None:
                 record["client_id"] = client_id
-                entity_id = client_id
-                entity_type = "client"
             if brand_id is not None:
                 record["brand_id"] = brand_id
-                if client_id is None:
-                    entity_id = brand_id
-                    entity_type = "brand"
             
-            # Check if record exists
-            query = self.client.table("ga4_property_details").select("id").eq("property_id", property_id)
-            if client_id is not None:
-                query = query.eq("client_id", client_id)
-            else:
-                query = query.eq("brand_id", brand_id)
-            existing = query.limit(1).execute()
+            # Remove None values
+            clean_record = {k: v for k, v in record.items() if v is not None}
             
-            update_query = self.client.table("ga4_property_details").update(record).eq("property_id", property_id)
-            if client_id is not None:
-                update_query = update_query.eq("client_id", client_id)
+            # Use PostgreSQL INSERT ... ON CONFLICT for upsert
+            # The unique constraint is on (brand_id, property_id)
+            # If brand_id is provided, use the unique constraint
+            # If only client_id is provided, check for existing record by property_id and update/insert accordingly
+            if brand_id is not None:
+                # Use the unique constraint on (brand_id, property_id)
+                insert_stmt = pg_insert(table).values(**clean_record)
+                insert_stmt = insert_stmt.on_conflict_do_update(
+                    index_elements=['brand_id', 'property_id'],
+                    set_={
+                        'client_id': insert_stmt.excluded.client_id,
+                        'display_name': insert_stmt.excluded.display_name,
+                        'time_zone': insert_stmt.excluded.time_zone,
+                        'currency_code': insert_stmt.excluded.currency_code,
+                        'create_time': insert_stmt.excluded.create_time,
+                        'updated_at': insert_stmt.excluded.updated_at
+                    }
+                )
+                self.db.execute(insert_stmt)
+                self.db.commit()
+                logger.info(f"Upserted GA4 property details for {entity_type} {entity_id}, property {property_id}")
+                return 1
             else:
-                update_query = update_query.eq("brand_id", brand_id)
-            
-            if existing.data and len(existing.data) > 0:
-                result = update_query.execute()
-                logger.info(f"Updated GA4 property details for {entity_type} {entity_id}, property {property_id}")
-            else:
-                result = self.client.table("ga4_property_details").insert(record).execute()
-                logger.info(f"Inserted GA4 property details for {entity_type} {entity_id}, property {property_id}")
-            return 1
-        except Exception as e:
-            error_str = str(e)
-            if "23505" in error_str or "duplicate key" in error_str.lower() or "unique constraint" in error_str.lower():
-                try:
-                    result = update_query.execute()
-                    logger.info(f"Updated existing GA4 property details for {entity_type} {entity_id}, property {property_id}")
+                # Only client_id provided, check for existing record by property_id
+                existing = self.db.execute(
+                    select(table).where(table.c.property_id == property_id)
+                ).first()
+                if existing:
+                    # Update existing record
+                    update_stmt = update(table).where(
+                        table.c.property_id == property_id
+                    ).values(**clean_record)
+                    self.db.execute(update_stmt)
+                    self.db.commit()
+                    logger.info(f"Updated GA4 property details for {entity_type} {entity_id}, property {property_id}")
                     return 1
-                except Exception as update_error:
-                    logger.error(f"Error updating GA4 property details after conflict: {str(update_error)}")
-                    raise
-            logger.error(f"Error upserting GA4 property details: {error_str}")
+                else:
+                    # Insert new record
+                    insert_stmt = insert(table).values(**clean_record)
+                    self.db.execute(insert_stmt)
+                    self.db.commit()
+                    logger.info(f"Inserted GA4 property details for {entity_type} {entity_id}, property {property_id}")
+                    return 1
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error upserting GA4 property details: {str(e)}")
             raise
     
     def upsert_ga4_revenue(self, property_id: str, date: str, revenue: float, client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
-        """Upsert GA4 revenue data for a specific date - now uses client_id (with brand_id for backward compatibility)"""
+        """Upsert GA4 revenue data using SQLAlchemy Core (local PostgreSQL)"""
         if client_id is None and brand_id is None:
             raise ValueError("Either client_id or brand_id must be provided")
         
         try:
+            table = self._get_table("ga4_revenue")
+            
+            entity_id = client_id if client_id is not None else brand_id
+            entity_type = "client" if client_id is not None else "brand"
+            
             record = {
                 "property_id": property_id,
                 "date": date,
                 "total_revenue": revenue,
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now()
             }
             
             if client_id is not None:
                 record["client_id"] = client_id
-                entity_id = client_id
-                entity_type = "client"
             if brand_id is not None:
                 record["brand_id"] = brand_id
-                if client_id is None:
-                    entity_id = brand_id
-                    entity_type = "brand"
             
-            # Check if record exists
-            query = self.client.table("ga4_revenue").select("id").eq("property_id", property_id).eq("date", date)
-            if client_id is not None:
-                query = query.eq("client_id", client_id)
-            else:
-                query = query.eq("brand_id", brand_id)
-            existing = query.limit(1).execute()
+            # Use PostgreSQL INSERT ... ON CONFLICT for upsert
+            insert_stmt = pg_insert(table).values(**record)
+            insert_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=['brand_id', 'property_id', 'date'],
+                set_={
+                    'client_id': insert_stmt.excluded.client_id,
+                    'total_revenue': insert_stmt.excluded.total_revenue,
+                    'updated_at': insert_stmt.excluded.updated_at
+                }
+            )
             
-            update_query = self.client.table("ga4_revenue").update(record).eq("property_id", property_id).eq("date", date)
-            if client_id is not None:
-                update_query = update_query.eq("client_id", client_id)
-            else:
-                update_query = update_query.eq("brand_id", brand_id)
-            
-            if existing.data and len(existing.data) > 0:
-                result = update_query.execute()
-                logger.info(f"Updated GA4 revenue for {entity_type} {entity_id}, property {property_id}, date {date}: {revenue}")
-            else:
-                result = self.client.table("ga4_revenue").insert(record).execute()
-                logger.info(f"Inserted GA4 revenue for {entity_type} {entity_id}, property {property_id}, date {date}: {revenue}")
+            self.db.execute(insert_stmt)
+            self.db.commit()
+            logger.info(f"Upserted GA4 revenue for {entity_type} {entity_id}, property {property_id}, date {date}: {revenue}")
             return 1
         except Exception as e:
-            error_str = str(e)
-            if "23505" in error_str or "duplicate key" in error_str.lower() or "unique constraint" in error_str.lower():
-                try:
-                    result = update_query.execute()
-                    logger.info(f"Updated existing GA4 revenue for {entity_type} {entity_id}, property {property_id}, date {date}: {revenue}")
-                    return 1
-                except Exception as update_error:
-                    logger.error(f"Error updating GA4 revenue after conflict: {str(update_error)}")
-                    raise
-            logger.error(f"Error upserting GA4 revenue: {error_str}")
+            self.db.rollback()
+            logger.error(f"Error upserting GA4 revenue: {str(e)}")
             raise
     
     def upsert_ga4_daily_conversions(self, property_id: str, date: str, total_conversions: float, client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
-        """Upsert GA4 daily conversions summary - now uses client_id (with brand_id for backward compatibility)"""
+        """Upsert GA4 daily conversions summary using SQLAlchemy Core (local PostgreSQL)"""
         if client_id is None and brand_id is None:
             raise ValueError("Either client_id or brand_id must be provided")
         
         try:
+            table = self._get_table("ga4_daily_conversions")
+            
+            entity_id = client_id if client_id is not None else brand_id
+            entity_type = "client" if client_id is not None else "brand"
+            
             record = {
                 "property_id": property_id,
                 "date": date,
                 "total_conversions": total_conversions,
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now()
             }
             
             if client_id is not None:
                 record["client_id"] = client_id
-                entity_id = client_id
-                entity_type = "client"
             if brand_id is not None:
                 record["brand_id"] = brand_id
-                if client_id is None:
-                    entity_id = brand_id
-                    entity_type = "brand"
             
-            # Check if record exists
-            query = self.client.table("ga4_daily_conversions").select("id").eq("property_id", property_id).eq("date", date)
-            if client_id is not None:
-                query = query.eq("client_id", client_id)
-            else:
-                query = query.eq("brand_id", brand_id)
-            existing = query.limit(1).execute()
+            # Use PostgreSQL INSERT ... ON CONFLICT for upsert
+            insert_stmt = pg_insert(table).values(**record)
+            insert_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=['brand_id', 'property_id', 'date'],
+                set_={
+                    'client_id': insert_stmt.excluded.client_id,
+                    'total_conversions': insert_stmt.excluded.total_conversions,
+                    'updated_at': insert_stmt.excluded.updated_at
+                }
+            )
             
-            update_query = self.client.table("ga4_daily_conversions").update(record).eq("property_id", property_id).eq("date", date)
-            if client_id is not None:
-                update_query = update_query.eq("client_id", client_id)
-            else:
-                update_query = update_query.eq("brand_id", brand_id)
-            
-            if existing.data and len(existing.data) > 0:
-                result = update_query.execute()
-                logger.info(f"Updated GA4 daily conversions for {entity_type} {entity_id}, property {property_id}, date {date}: {total_conversions}")
-            else:
-                result = self.client.table("ga4_daily_conversions").insert(record).execute()
-                logger.info(f"Inserted GA4 daily conversions for {entity_type} {entity_id}, property {property_id}, date {date}: {total_conversions}")
+            self.db.execute(insert_stmt)
+            self.db.commit()
+            logger.info(f"Upserted GA4 daily conversions for {entity_type} {entity_id}, property {property_id}, date {date}: {total_conversions}")
             return 1
         except Exception as e:
-            error_str = str(e)
-            if "23505" in error_str or "duplicate key" in error_str.lower() or "unique constraint" in error_str.lower():
-                try:
-                    result = update_query.execute()
-                    logger.info(f"Updated existing GA4 daily conversions for {entity_type} {entity_id}, property {property_id}, date {date}: {total_conversions}")
-                    return 1
-                except Exception as update_error:
-                    logger.error(f"Error updating GA4 daily conversions after conflict: {str(update_error)}")
-                    raise
-            logger.error(f"Error upserting GA4 daily conversions: {error_str}")
+            self.db.rollback()
+            logger.error(f"Error upserting GA4 daily conversions: {str(e)}")
             raise
     
     def upsert_ga4_kpi_snapshot(
@@ -924,7 +1562,82 @@ class SupabaseService:
             raise ValueError("Either client_id or brand_id must be provided")
         
         try:
-            record = {
+            # If client_id is provided but brand_id is not, get brand_id from client
+            if client_id is not None and brand_id is None:
+                client_query = text("SELECT scrunch_brand_id FROM clients WHERE id = :client_id")
+                result = self.db.execute(client_query, {"client_id": client_id})
+                row = result.first()
+                if row:
+                    brand_id = row[0]
+            
+            entity_id = client_id if client_id is not None else brand_id
+            entity_type = "client" if client_id is not None else "brand"
+            
+            # Use PostgreSQL INSERT ... ON CONFLICT for upsert
+            # Unique constraint is on (brand_id, property_id, period_end_date)
+            query = text("""
+                INSERT INTO ga4_kpi_snapshots (
+                    brand_id, client_id, property_id, period_end_date, period_start_date,
+                    prev_period_start_date, prev_period_end_date,
+                    users, sessions, new_users, bounce_rate, avg_session_duration,
+                    engagement_rate, engaged_sessions, conversions, revenue,
+                    prev_users, prev_sessions, prev_new_users, prev_bounce_rate,
+                    prev_avg_session_duration, prev_engagement_rate, prev_engaged_sessions,
+                    prev_conversions, prev_revenue,
+                    users_change, sessions_change, new_users_change, bounce_rate_change,
+                    avg_session_duration_change, engagement_rate_change, engaged_sessions_change,
+                    conversions_change, revenue_change, updated_at
+                ) VALUES (
+                    :brand_id, :client_id, :property_id, :period_end_date, :period_start_date,
+                    :prev_period_start_date, :prev_period_end_date,
+                    :users, :sessions, :new_users, :bounce_rate, :avg_session_duration,
+                    :engagement_rate, :engaged_sessions, :conversions, :revenue,
+                    :prev_users, :prev_sessions, :prev_new_users, :prev_bounce_rate,
+                    :prev_avg_session_duration, :prev_engagement_rate, :prev_engaged_sessions,
+                    :prev_conversions, :prev_revenue,
+                    :users_change, :sessions_change, :new_users_change, :bounce_rate_change,
+                    :avg_session_duration_change, :engagement_rate_change, :engaged_sessions_change,
+                    :conversions_change, :revenue_change, NOW()
+                )
+                ON CONFLICT (brand_id, property_id, period_end_date)
+                DO UPDATE SET
+                    client_id = EXCLUDED.client_id,
+                    period_start_date = EXCLUDED.period_start_date,
+                    prev_period_start_date = EXCLUDED.prev_period_start_date,
+                    prev_period_end_date = EXCLUDED.prev_period_end_date,
+                    users = EXCLUDED.users,
+                    sessions = EXCLUDED.sessions,
+                    new_users = EXCLUDED.new_users,
+                    bounce_rate = EXCLUDED.bounce_rate,
+                    avg_session_duration = EXCLUDED.avg_session_duration,
+                    engagement_rate = EXCLUDED.engagement_rate,
+                    engaged_sessions = EXCLUDED.engaged_sessions,
+                    conversions = EXCLUDED.conversions,
+                    revenue = EXCLUDED.revenue,
+                    prev_users = EXCLUDED.prev_users,
+                    prev_sessions = EXCLUDED.prev_sessions,
+                    prev_new_users = EXCLUDED.prev_new_users,
+                    prev_bounce_rate = EXCLUDED.prev_bounce_rate,
+                    prev_avg_session_duration = EXCLUDED.prev_avg_session_duration,
+                    prev_engagement_rate = EXCLUDED.prev_engagement_rate,
+                    prev_engaged_sessions = EXCLUDED.prev_engaged_sessions,
+                    prev_conversions = EXCLUDED.prev_conversions,
+                    prev_revenue = EXCLUDED.prev_revenue,
+                    users_change = EXCLUDED.users_change,
+                    sessions_change = EXCLUDED.sessions_change,
+                    new_users_change = EXCLUDED.new_users_change,
+                    bounce_rate_change = EXCLUDED.bounce_rate_change,
+                    avg_session_duration_change = EXCLUDED.avg_session_duration_change,
+                    engagement_rate_change = EXCLUDED.engagement_rate_change,
+                    engaged_sessions_change = EXCLUDED.engaged_sessions_change,
+                    conversions_change = EXCLUDED.conversions_change,
+                    revenue_change = EXCLUDED.revenue_change,
+                    updated_at = NOW()
+            """)
+            
+            params = {
+                "brand_id": brand_id,
+                "client_id": client_id,
                 "property_id": property_id,
                 "period_end_date": period_end_date,
                 "period_start_date": period_start_date,
@@ -960,97 +1673,89 @@ class SupabaseService:
                 "engaged_sessions_change": changes.get("engaged_sessions_change", 0),
                 "conversions_change": changes.get("conversions_change", 0),
                 "revenue_change": changes.get("revenue_change", 0),
-                "updated_at": datetime.now().isoformat()
             }
             
-            if client_id is not None:
-                record["client_id"] = client_id
-                entity_id = client_id
-                entity_type = "client"
-            if brand_id is not None:
-                record["brand_id"] = brand_id
-                if client_id is None:
-                    entity_id = brand_id
-                    entity_type = "brand"
+            self.db.execute(query, params)
+            self.db.commit()
             
-            # Check if record exists first
-            query = self.client.table("ga4_kpi_snapshots").select("id").eq("property_id", property_id).eq("period_end_date", period_end_date)
-            if client_id is not None:
-                query = query.eq("client_id", client_id)
-            else:
-                query = query.eq("brand_id", brand_id)
-            existing = query.limit(1).execute()
-            
-            update_query = self.client.table("ga4_kpi_snapshots").update(record).eq("property_id", property_id).eq("period_end_date", period_end_date)
-            if client_id is not None:
-                update_query = update_query.eq("client_id", client_id)
-            else:
-                update_query = update_query.eq("brand_id", brand_id)
-            
-            if existing.data and len(existing.data) > 0:
-                # Update existing record
-                result = update_query.execute()
-                logger.info(f"Updated GA4 KPI snapshot for {entity_type} {entity_id}, property {property_id}, period_end_date {period_end_date}")
-            else:
-                # Insert new record
-                result = self.client.table("ga4_kpi_snapshots").insert(record).execute()
-                logger.info(f"Inserted GA4 KPI snapshot for {entity_type} {entity_id}, property {property_id}, period_end_date {period_end_date}")
-            
+            logger.info(f"Upserted GA4 KPI snapshot for {entity_type} {entity_id}, property {property_id}, period_end_date {period_end_date}")
             return 1
         except Exception as e:
+            self.db.rollback()
             error_str = str(e)
-            # Handle unique constraint violation by updating instead
-            if "23505" in error_str or "duplicate key" in error_str.lower() or "unique constraint" in error_str.lower():
-                try:
-                    # Try to update the existing record
-                    result = update_query.execute()
-                    logger.info(f"Updated existing GA4 KPI snapshot for {entity_type} {entity_id}, property {property_id}, period_end_date {period_end_date}")
-                    return 1
-                except Exception as update_error:
-                    logger.error(f"Error updating GA4 KPI snapshot after conflict: {str(update_error)}")
-                    raise
             logger.error(f"Error upserting GA4 KPI snapshot: {error_str}")
             raise
     
-    def get_latest_ga4_kpi_snapshot(self, brand_id: int) -> Optional[Dict]:
-        """Get the latest GA4 KPI snapshot for a brand"""
+    def get_latest_ga4_kpi_snapshot(self, brand_id: int, client_id: Optional[int] = None) -> Optional[Dict]:
+        """Get the latest GA4 KPI snapshot for a brand or client"""
         try:
-            result = self.client.table("ga4_kpi_snapshots").select("*").eq("brand_id", brand_id).order("period_end_date", desc=True).limit(1).execute()
-            if result.data and len(result.data) > 0:
-                return result.data[0]
+            query = text("""
+                SELECT * FROM ga4_kpi_snapshots
+                WHERE (:client_id IS NULL AND brand_id = :brand_id) OR (client_id = :client_id)
+                ORDER BY period_end_date DESC
+                LIMIT 1
+            """)
+            result = self.db.execute(query, {"brand_id": brand_id, "client_id": client_id})
+            row = result.first()
+            if row:
+                return dict(row._mapping)
             return None
         except Exception as e:
-            logger.error(f"Error getting latest GA4 KPI snapshot for brand {brand_id}: {str(e)}")
+            logger.error(f"Error getting latest GA4 KPI snapshot for brand {brand_id}, client {client_id}: {str(e)}")
             return None
     
-    def get_ga4_kpi_snapshot_by_period(self, brand_id: int, period_end_date: str) -> Optional[Dict]:
+    def get_ga4_kpi_snapshot_by_period(self, brand_id: int, period_end_date: str, client_id: Optional[int] = None) -> Optional[Dict]:
         """Get GA4 KPI snapshot for a specific period end date"""
         try:
-            result = self.client.table("ga4_kpi_snapshots").select("*").eq("brand_id", brand_id).eq("period_end_date", period_end_date).limit(1).execute()
-            if result.data and len(result.data) > 0:
-                return result.data[0]
+            query = text("""
+                SELECT * FROM ga4_kpi_snapshots
+                WHERE period_end_date = :period_end_date
+                AND ((:client_id IS NULL AND brand_id = :brand_id) OR (client_id = :client_id))
+                LIMIT 1
+            """)
+            result = self.db.execute(query, {
+                "brand_id": brand_id,
+                "client_id": client_id,
+                "period_end_date": period_end_date
+            })
+            row = result.first()
+            if row:
+                return dict(row._mapping)
             return None
         except Exception as e:
-            logger.error(f"Error getting GA4 KPI snapshot for brand {brand_id}, period_end_date {period_end_date}: {str(e)}")
+            logger.error(f"Error getting GA4 KPI snapshot for brand {brand_id}, client {client_id}, period_end_date {period_end_date}: {str(e)}")
             return None
     
-    def get_ga4_kpi_snapshot_by_date_range(self, brand_id: int, start_date: str, end_date: str) -> Optional[Dict]:
+    def get_ga4_kpi_snapshot_by_date_range(self, brand_id: int, start_date: str, end_date: str, client_id: Optional[int] = None) -> Optional[Dict]:
         """Get GA4 KPI snapshot that matches the requested date range (within 1 day tolerance)"""
         try:
             # Convert dates to datetime for comparison
             end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
             
             # Look for snapshots where period_end_date is within 1 day of the requested end_date
-            # This handles cases where the snapshot was created on a different day
-            result = self.client.table("ga4_kpi_snapshots").select("*").eq("brand_id", brand_id).gte("period_end_date", (end_dt - timedelta(days=1)).strftime("%Y-%m-%d")).lte("period_end_date", (end_dt + timedelta(days=1)).strftime("%Y-%m-%d")).order("period_end_date", desc=True).limit(1).execute()
+            query = text("""
+                SELECT * FROM ga4_kpi_snapshots
+                WHERE period_end_date >= :min_date AND period_end_date <= :max_date
+                AND ((:client_id IS NULL AND brand_id = :brand_id) OR (client_id = :client_id))
+                ORDER BY period_end_date DESC
+                LIMIT 1
+            """)
+            result = self.db.execute(query, {
+                "brand_id": brand_id,
+                "client_id": client_id,
+                "min_date": (end_dt - timedelta(days=1)).strftime("%Y-%m-%d"),
+                "max_date": (end_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+            })
+            row = result.first()
             
-            if result.data and len(result.data) > 0:
-                snapshot = result.data[0]
+            if row:
+                snapshot = dict(row._mapping)
                 # Verify the snapshot's date range matches what we need (approximately 30 days)
-                snapshot_start = datetime.strptime(snapshot["period_start_date"], "%Y-%m-%d")
-                snapshot_end = datetime.strptime(snapshot["period_end_date"], "%Y-%m-%d")
-                requested_start = datetime.strptime(start_date, "%Y-%m-%d")
-                requested_end = datetime.strptime(end_date, "%Y-%m-%d")
+                snapshot_start = datetime.strptime(str(snapshot["period_start_date"]), "%Y-%m-%d")
+                snapshot_end = datetime.strptime(str(snapshot["period_end_date"]), "%Y-%m-%d")
+                requested_start = start_dt
+                requested_end = end_dt
                 
                 # Check if the snapshot's period matches the requested period (within 2 days tolerance)
                 start_diff = abs((snapshot_start - requested_start).days)
@@ -1061,15 +1766,36 @@ class SupabaseService:
             
             return None
         except Exception as e:
-            logger.error(f"Error getting GA4 KPI snapshot for brand {brand_id}, date range {start_date} to {end_date}: {str(e)}")
+            logger.error(f"Error getting GA4 KPI snapshot for brand {brand_id}, client {client_id}, date range {start_date} to {end_date}: {str(e)}")
             return None
     
-    def get_ga4_top_pages_by_date_range(self, brand_id: int, property_id: str, start_date: str, end_date: str, limit: int = 10) -> List[Dict]:
-        """Get aggregated GA4 top pages data from stored daily records for a date range"""
+    def get_ga4_top_pages_by_date_range(self, brand_id: int, property_id: str, start_date: str, end_date: str, limit: int = 10, client_id: Optional[int] = None) -> List[Dict]:
+        """Get aggregated GA4 top pages data from stored daily records for a date range using SQLAlchemy Core
+        
+        Supports querying by brand_id or client_id. If client_id is provided, it will be used as the primary filter.
+        """
         try:
-            # Get all daily records for the date range
-            result = self.client.table("ga4_top_pages").select("*").eq("brand_id", brand_id).eq("property_id", property_id).gte("date", start_date).lte("date", end_date).execute()
-            records = result.data if hasattr(result, 'data') else []
+            table = self._get_table("ga4_top_pages")
+            if client_id is not None:
+                query = select(table).where(
+                    and_(
+                        table.c.client_id == client_id,
+                        table.c.property_id == property_id,
+                        table.c.date >= start_date,
+                        table.c.date <= end_date
+                    )
+                )
+            else:
+                query = select(table).where(
+                    and_(
+                        table.c.brand_id == brand_id,
+                        table.c.property_id == property_id,
+                        table.c.date >= start_date,
+                        table.c.date <= end_date
+                    )
+                )
+            result = self.db.execute(query)
+            records = [dict(row._mapping) for row in result]
             
             if not records:
                 return []
@@ -1090,9 +1816,10 @@ class SupabaseService:
                         "count": 0
                     }
                 
-                page_aggregates[page_path]["views"] += record.get("views", 0)
-                page_aggregates[page_path]["users"] += record.get("users", 0)
-                page_aggregates[page_path]["avgSessionDuration"] += record.get("avg_session_duration", 0)
+                # Convert Decimal to float for aggregation
+                page_aggregates[page_path]["views"] += float(record.get("views", 0) or 0)
+                page_aggregates[page_path]["users"] += float(record.get("users", 0) or 0)
+                page_aggregates[page_path]["avgSessionDuration"] += float(record.get("avg_session_duration", 0) or 0)
                 page_aggregates[page_path]["count"] += 1
             
             # Calculate averages and sort
@@ -1109,12 +1836,33 @@ class SupabaseService:
             logger.error(f"Error getting GA4 top pages for date range: {str(e)}")
             return []
     
-    def get_ga4_traffic_sources_by_date_range(self, brand_id: int, property_id: str, start_date: str, end_date: str) -> List[Dict]:
-        """Get aggregated GA4 traffic sources data from stored daily records for a date range"""
+    def get_ga4_traffic_sources_by_date_range(self, brand_id: int, property_id: str, start_date: str, end_date: str, client_id: Optional[int] = None) -> List[Dict]:
+        """Get aggregated GA4 traffic sources data from stored daily records for a date range using SQLAlchemy Core
+        
+        Supports querying by brand_id or client_id. If client_id is provided, it will be used as the primary filter.
+        """
         try:
-            # Get all daily records for the date range
-            result = self.client.table("ga4_traffic_sources").select("*").eq("brand_id", brand_id).eq("property_id", property_id).gte("date", start_date).lte("date", end_date).execute()
-            records = result.data if hasattr(result, 'data') else []
+            table = self._get_table("ga4_traffic_sources")
+            if client_id is not None:
+                query = select(table).where(
+                    and_(
+                        table.c.client_id == client_id,
+                        table.c.property_id == property_id,
+                        table.c.date >= start_date,
+                        table.c.date <= end_date
+                    )
+                )
+            else:
+                query = select(table).where(
+                    and_(
+                        table.c.brand_id == brand_id,
+                        table.c.property_id == property_id,
+                        table.c.date >= start_date,
+                        table.c.date <= end_date
+                    )
+                )
+            result = self.db.execute(query)
+            records = [dict(row._mapping) for row in result]
             
             if not records:
                 return []
@@ -1138,10 +1886,14 @@ class SupabaseService:
                         "totalSessions": 0
                     }
                 
-                source_aggregates[source]["sessions"] += record.get("sessions", 0)
-                source_aggregates[source]["users"] += record.get("users", 0)
-                source_aggregates[source]["totalBounce"] += record.get("bounce_rate", 0) * record.get("sessions", 0)
-                source_aggregates[source]["totalSessions"] += record.get("sessions", 0)
+                # Convert Decimal to float for aggregation
+                sessions_val = float(record.get("sessions", 0) or 0)
+                users_val = float(record.get("users", 0) or 0)
+                bounce_rate_val = float(record.get("bounce_rate", 0) or 0)
+                source_aggregates[source]["sessions"] += sessions_val
+                source_aggregates[source]["users"] += users_val
+                source_aggregates[source]["totalBounce"] += bounce_rate_val * sessions_val
+                source_aggregates[source]["totalSessions"] += sessions_val
             
             # Calculate weighted average bounce rate
             sources = []
@@ -1157,12 +1909,33 @@ class SupabaseService:
             logger.error(f"Error getting GA4 traffic sources for date range: {str(e)}")
             return []
     
-    def get_ga4_geographic_by_date_range(self, brand_id: int, property_id: str, start_date: str, end_date: str, limit: int = 10) -> List[Dict]:
-        """Get aggregated GA4 geographic data from stored daily records for a date range"""
+    def get_ga4_geographic_by_date_range(self, brand_id: int, property_id: str, start_date: str, end_date: str, limit: int = 10, client_id: Optional[int] = None) -> List[Dict]:
+        """Get aggregated GA4 geographic data from stored daily records for a date range using SQLAlchemy Core
+        
+        Supports querying by brand_id or client_id. If client_id is provided, it will be used as the primary filter.
+        """
         try:
-            # Get all daily records for the date range
-            result = self.client.table("ga4_geographic").select("*").eq("brand_id", brand_id).eq("property_id", property_id).gte("date", start_date).lte("date", end_date).execute()
-            records = result.data if hasattr(result, 'data') else []
+            table = self._get_table("ga4_geographic")
+            if client_id is not None:
+                query = select(table).where(
+                    and_(
+                        table.c.client_id == client_id,
+                        table.c.property_id == property_id,
+                        table.c.date >= start_date,
+                        table.c.date <= end_date
+                    )
+                )
+            else:
+                query = select(table).where(
+                    and_(
+                        table.c.brand_id == brand_id,
+                        table.c.property_id == property_id,
+                        table.c.date >= start_date,
+                        table.c.date <= end_date
+                    )
+                )
+            result = self.db.execute(query)
+            records = [dict(row._mapping) for row in result]
             
             if not records:
                 return []
@@ -1197,12 +1970,33 @@ class SupabaseService:
             logger.error(f"Error getting GA4 geographic data for date range: {str(e)}")
             return []
     
-    def get_ga4_devices_by_date_range(self, brand_id: int, property_id: str, start_date: str, end_date: str) -> List[Dict]:
-        """Get aggregated GA4 devices data from stored daily records for a date range"""
+    def get_ga4_devices_by_date_range(self, brand_id: int, property_id: str, start_date: str, end_date: str, client_id: Optional[int] = None) -> List[Dict]:
+        """Get aggregated GA4 devices data from stored daily records for a date range using SQLAlchemy Core
+        
+        Supports querying by brand_id or client_id. If client_id is provided, it will be used as the primary filter.
+        """
         try:
-            # Get all daily records for the date range
-            result = self.client.table("ga4_devices").select("*").eq("brand_id", brand_id).eq("property_id", property_id).gte("date", start_date).lte("date", end_date).execute()
-            records = result.data if hasattr(result, 'data') else []
+            table = self._get_table("ga4_devices")
+            if client_id is not None:
+                query = select(table).where(
+                    and_(
+                        table.c.client_id == client_id,
+                        table.c.property_id == property_id,
+                        table.c.date >= start_date,
+                        table.c.date <= end_date
+                    )
+                )
+            else:
+                query = select(table).where(
+                    and_(
+                        table.c.brand_id == brand_id,
+                        table.c.property_id == property_id,
+                        table.c.date >= start_date,
+                        table.c.date <= end_date
+                    )
+                )
+            result = self.db.execute(query)
+            records = [dict(row._mapping) for row in result]
             
             if not records:
                 return []
@@ -1223,10 +2017,14 @@ class SupabaseService:
                         "totalSessions": 0
                     }
                 
-                device_aggregates[device_key]["users"] += record.get("users", 0)
-                device_aggregates[device_key]["sessions"] += record.get("sessions", 0)
-                device_aggregates[device_key]["totalBounce"] += record.get("bounce_rate", 0) * record.get("sessions", 0)
-                device_aggregates[device_key]["totalSessions"] += record.get("sessions", 0)
+                # Convert Decimal to float for aggregation
+                sessions_val = float(record.get("sessions", 0) or 0)
+                users_val = float(record.get("users", 0) or 0)
+                bounce_rate_val = float(record.get("bounce_rate", 0) or 0)
+                device_aggregates[device_key]["users"] += users_val
+                device_aggregates[device_key]["sessions"] += sessions_val
+                device_aggregates[device_key]["totalBounce"] += bounce_rate_val * sessions_val
+                device_aggregates[device_key]["totalSessions"] += sessions_val
             
             # Calculate weighted average bounce rate
             devices = []
@@ -1243,11 +2041,59 @@ class SupabaseService:
             return []
     
     # =====================================================
+    # Brand Methods
+    # =====================================================
+    
+    def update_brand_logo_url(self, brand_id: int, logo_url: str, user_email: Optional[str] = None) -> bool:
+        """Update brand logo URL using SQLAlchemy ORM (local PostgreSQL)"""
+        try:
+            brand = self.db.query(Brand).filter(Brand.id == brand_id).first()
+            if not brand:
+                logger.warning(f"No brand found with ID {brand_id} to update logo URL")
+                return False
+            
+            brand.logo_url = logo_url
+            brand.last_modified_by = user_email
+            brand.version = brand.version + 1  # Increment version for optimistic locking
+            
+            self.db.commit()
+            logger.info(f"Updated brand {brand_id} logo URL")
+            return True
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error updating brand logo URL for brand {brand_id}: {str(e)}")
+            return False
+    
+    def update_brand_theme(self, brand_id: int, theme_data: Dict, user_email: Optional[str] = None) -> bool:
+        """Update brand theme using SQLAlchemy ORM (local PostgreSQL)"""
+        try:
+            brand = self.db.query(Brand).filter(Brand.id == brand_id).first()
+            if not brand:
+                logger.warning(f"No brand found with ID {brand_id} to update theme")
+                return False
+            
+            if "theme" in theme_data:
+                brand.theme = theme_data["theme"]
+            if "logo_url" in theme_data:
+                brand.logo_url = theme_data["logo_url"]
+            
+            brand.last_modified_by = user_email
+            brand.version = brand.version + 1  # Increment version for optimistic locking
+            
+            self.db.commit()
+            logger.info(f"Updated brand {brand_id} theme")
+            return True
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error updating brand theme for brand {brand_id}: {str(e)}")
+            return False
+    
+    # =====================================================
     # Client Methods
     # =====================================================
     
     def generate_client_slug(self, company_name: str = None) -> str:
-        """Generate a URL-friendly slug using UUID for better security"""
+        """Generate a URL-friendly slug using UUID for better security using SQLAlchemy Core"""
         # Generate UUID-based slug (32 hex characters, no hyphens)
         # This matches the database trigger logic for consistency
         slug = uuid.uuid4().hex.lower()
@@ -1255,8 +2101,10 @@ class SupabaseService:
         # Check if slug exists (extremely unlikely with UUID, but safety check)
         while True:
             try:
-                result = self.client.table("clients").select("id").eq("url_slug", slug).limit(1).execute()
-                if not result.data:
+                table = self._get_table("clients")
+                query = select(table.c.id).where(table.c.url_slug == slug).limit(1)
+                result = self.db.execute(query)
+                if not result.first():
                     break
                 # If collision occurs (should never happen), generate new UUID
                 slug = uuid.uuid4().hex.lower()
@@ -1287,19 +2135,57 @@ class SupabaseService:
         
         # Step 1: Get all existing clients to check for updates
         try:
+            from sqlalchemy import text, select
+            from sqlalchemy.sql import or_
+            
             # Get all company_ids and company_names from active campaigns
-            company_ids = [c.get("company_id") for c in active_campaigns if c.get("company_id")]
-            company_names = [c.get("company", "").strip() for c in active_campaigns if c.get("company", "").strip()]
+            # Ensure we extract simple values, not dicts
+            company_ids = []
+            for c in active_campaigns:
+                company_id = c.get("company_id")
+                if company_id is not None:
+                    # Ensure it's a simple value, not a dict
+                    if isinstance(company_id, (int, str)):
+                        try:
+                            company_ids.append(int(company_id))
+                        except (ValueError, TypeError):
+                            pass
             
-            # Fetch existing clients by company_id or company_name
-            existing_clients_query = self.client.table("clients").select("*")
-            if company_ids:
-                existing_clients_query = existing_clients_query.in_("company_id", company_ids)
-            if company_names:
-                existing_clients_query = existing_clients_query.in_("company_name", company_names)
+            company_names = []
+            for c in active_campaigns:
+                company = c.get("company")
+                if company:
+                    # Ensure it's a string, not a dict
+                    if isinstance(company, str):
+                        company_names.append(company.strip())
+                    elif isinstance(company, dict):
+                        # If it's a dict, try to get a name field
+                        company_name = company.get("name") or company.get("company")
+                        if isinstance(company_name, str):
+                            company_names.append(company_name.strip())
             
-            existing_clients_result = existing_clients_query.execute()
-            existing_clients = existing_clients_result.data if existing_clients_result.data else []
+            # Remove duplicates
+            company_ids = list(set(company_ids))
+            company_names = list(set([n for n in company_names if n]))
+            
+            # Fetch existing clients by company_id or company_name using self.db session
+            existing_clients = []
+            if company_ids or company_names:
+                # Build query using SQLAlchemy Core
+                from sqlalchemy import Table, MetaData
+                metadata = MetaData()
+                clients_table = Table('clients', metadata, autoload_with=self.db.bind)
+                
+                conditions = []
+                if company_ids:
+                    conditions.append(clients_table.c.company_id.in_(company_ids))
+                if company_names:
+                    conditions.append(clients_table.c.company_name.in_(company_names))
+                
+                if conditions:
+                    query = select(clients_table).where(or_(*conditions))
+                    result = self.db.execute(query)
+                    existing_clients = [dict(row._mapping) for row in result]
             
             # Create lookup maps
             existing_by_company_id = {c["company_id"]: c for c in existing_clients if c.get("company_id")}
@@ -1375,14 +2261,25 @@ class SupabaseService:
         
         # Step 3: Batch insert new clients
         created_count = 0
+        inserted_client_map = {}
         if clients_to_insert:
             try:
-                result = self.client.table("clients").insert(clients_to_insert).execute()
-                inserted_clients = result.data if result.data else []
-                created_count = len(inserted_clients)
+                table = self._get_table("clients")
+                # Insert clients one by one to get the generated IDs
+                for client_data in clients_to_insert:
+                    try:
+                        # Remove None values to avoid issues
+                        clean_data = {k: v for k, v in client_data.items() if v is not None}
+                        insert_stmt = insert(table).values(**clean_data).returning(table.c.id, table.c.company_name)
+                        result = self.db.execute(insert_stmt)
+                        row = result.first()
+                        if row:
+                            created_count += 1
+                            inserted_client_map[row.company_name] = row.id
+                    except Exception as insert_error:
+                        logger.warning(f"Error inserting client {client_data.get('company_name')}: {str(insert_error)}")
                 
-                # Create a map of company_name to client_id for inserted clients
-                inserted_client_map = {client["company_name"]: client["id"] for client in inserted_clients}
+                self.db.commit()
                 
                 # Update campaign_client_links with new client IDs
                 updated_links = []
@@ -1395,43 +2292,35 @@ class SupabaseService:
                 
                 logger.info(f"Batch inserted {created_count} new clients")
             except Exception as e:
+                self.db.rollback()
                 logger.error(f"Error batch inserting clients: {str(e)}")
-                # Fallback to individual inserts
-                inserted_client_map = {}
-                for client_data in clients_to_insert:
-                    try:
-                        result = self.client.table("clients").insert(client_data).execute()
-                        if result.data:
-                            created_count += 1
-                            inserted_client_map[client_data["company_name"]] = result.data[0]["id"]
-                    except Exception as insert_error:
-                        logger.warning(f"Error inserting client {client_data.get('company_name')}: {str(insert_error)}")
-                
-                # Update links with individually inserted clients
-                updated_links = []
-                for campaign_id, old_client_id, company_name, is_primary in campaign_client_links:
-                    if old_client_id is None and company_name in inserted_client_map:
-                        updated_links.append((campaign_id, inserted_client_map[company_name], company_name, is_primary))
-                    else:
-                        updated_links.append((campaign_id, old_client_id, company_name, is_primary))
-                campaign_client_links = updated_links
+                raise
         
         # Step 4: Batch update existing clients
         updated_count = 0
         if clients_to_update:
             try:
-                # Update clients individually (Supabase doesn't support batch update easily)
+                table = self._get_table("clients")
+                # Update clients individually
                 for client_data in clients_to_update:
                     try:
                         client_id = client_data.pop("id")
-                        result = self.client.table("clients").update(client_data).eq("id", client_id).execute()
-                        if result.data:
-                            updated_count += 1
+                        # Remove None values and id
+                        clean_data = {k: v for k, v in client_data.items() if v is not None and k != "id"}
+                        if clean_data:
+                            # Add updated_at
+                            clean_data["updated_at"] = datetime.now()
+                            update_stmt = update(table).where(table.c.id == client_id).values(**clean_data)
+                            result = self.db.execute(update_stmt)
+                            if result.rowcount > 0:
+                                updated_count += 1
                     except Exception as update_error:
                         logger.warning(f"Error updating client {client_data.get('company_name')}: {str(update_error)}")
                 
+                self.db.commit()
                 logger.info(f"Batch updated {updated_count} existing clients")
             except Exception as e:
+                self.db.rollback()
                 logger.error(f"Error batch updating clients: {str(e)}")
         
         # Step 5: Link campaigns to clients
@@ -1455,7 +2344,7 @@ class SupabaseService:
         }
     
     def upsert_client_from_campaign(self, campaign: Dict, user_email: Optional[str] = None) -> Dict:
-        """Create or update a client from an Agency Analytics campaign"""
+        """Create or update a client from an Agency Analytics campaign using SQLAlchemy"""
         try:
             company_name = campaign.get("company", "").strip()
             if not company_name:
@@ -1463,17 +2352,23 @@ class SupabaseService:
             
             company_id = campaign.get("company_id")
             
-            # Check if client already exists by company_id or company_name
+            # Check if client already exists by company_id or company_name using SQLAlchemy
+            table = self._get_table("clients")
             existing_client = None
+            
             if company_id:
-                result = self.client.table("clients").select("*").eq("company_id", company_id).limit(1).execute()
-                if result.data:
-                    existing_client = result.data[0]
+                query = select(table).where(table.c.company_id == company_id).limit(1)
+                result = self.db.execute(query)
+                row = result.first()
+                if row:
+                    existing_client = dict(row._mapping)
             
             if not existing_client:
-                result = self.client.table("clients").select("*").eq("company_name", company_name).limit(1).execute()
-                if result.data:
-                    existing_client = result.data[0]
+                query = select(table).where(table.c.company_name == company_name).limit(1)
+                result = self.db.execute(query)
+                row = result.first()
+                if row:
+                    existing_client = dict(row._mapping)
             
             # Prepare client data
             client_data = {
@@ -1490,19 +2385,34 @@ class SupabaseService:
                 "timezone": campaign.get("timezone"),
                 "company_domain": self._extract_domain(campaign.get("url", "")),
                 "updated_by": user_email,
+                "updated_at": datetime.now()
             }
             
             # Generate slug if client doesn't exist (UUID-based for security)
             if not existing_client:
                 client_data["url_slug"] = self.generate_client_slug()
                 client_data["created_by"] = user_email
+                # Insert new client
+                clean_data = {k: v for k, v in client_data.items() if v is not None}
+                insert_stmt = insert(table).values(**clean_data).returning(table)
+                result = self.db.execute(insert_stmt)
+                row = result.first()
+                client = dict(row._mapping)
+                self.db.commit()
             else:
                 # Update existing client with campaign data (don't overwrite theme/branding)
-                client_data["id"] = existing_client["id"]
-            
-            # Upsert client
-            result = self.client.table("clients").upsert(client_data).execute()
-            client = result.data[0] if result.data else client_data
+                client_id = existing_client["id"]
+                # Remove None values and preserve existing slug, theme, etc.
+                clean_data = {k: v for k, v in client_data.items() if v is not None and k not in ["url_slug", "theme_color", "logo_url", "secondary_color", "font_family", "favicon_url", "report_title", "custom_css", "footer_text", "header_text"]}
+                if clean_data:
+                    update_stmt = update(table).where(table.c.id == client_id).values(**clean_data)
+                    self.db.execute(update_stmt)
+                    self.db.commit()
+                # Fetch updated client
+                query = select(table).where(table.c.id == client_id)
+                result = self.db.execute(query)
+                row = result.first()
+                client = dict(row._mapping)
             
             # Link campaign to client
             campaign_id = campaign.get("id")
@@ -1513,6 +2423,7 @@ class SupabaseService:
             return client
             
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Error upserting client from campaign: {str(e)}")
             raise
     
@@ -1530,59 +2441,122 @@ class SupabaseService:
         except Exception:
             return None
     
+    def _parse_datetime(self, value: Any) -> Optional[datetime]:
+        """Parse datetime from various formats (string, datetime, None)"""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                # Try ISO format first
+                if 'T' in value or ' ' in value:
+                    # Remove timezone info if present (e.g., '+00:00')
+                    value_clean = value.split('+')[0].rstrip()
+                    # Try common formats
+                    for fmt in ['%Y-%m-%dT%H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
+                        try:
+                            return datetime.strptime(value_clean, fmt)
+                        except ValueError:
+                            continue
+                    # Fallback to dateutil parser if available
+                    try:
+                        from dateutil import parser
+                        return parser.parse(value)
+                    except (ImportError, ValueError):
+                        pass
+                return None
+            except Exception:
+                return None
+        return None
+    
     def _link_campaign_to_client(self, campaign_id: int, client_id: int, is_primary: bool = False):
-        """Link a campaign to a client"""
+        """Link a campaign to a client using SQLAlchemy"""
         try:
-            # Check if link already exists
-            result = self.client.table("client_campaigns").select("*").eq("campaign_id", campaign_id).eq("client_id", client_id).limit(1).execute()
+            table = self._get_table("client_campaigns")
             
-            if result.data:
+            # Check if link already exists
+            query = select(table).where(
+                and_(
+                    table.c.campaign_id == campaign_id,
+                    table.c.client_id == client_id
+                )
+            ).limit(1)
+            result = self.db.execute(query)
+            existing_link = result.first()
+            
+            if existing_link:
                 # Update existing link
+                existing_link_dict = dict(existing_link._mapping)
                 link_data = {
                     "is_primary": is_primary,
-                    "updated_at": datetime.now().isoformat()
+                    "updated_at": datetime.now()
                 }
-                self.client.table("client_campaigns").update(link_data).eq("id", result.data[0]["id"]).execute()
+                update_stmt = update(table).where(table.c.id == existing_link_dict["id"]).values(**link_data)
+                self.db.execute(update_stmt)
             else:
-                # Create new link
+                # Create new link using ON CONFLICT
                 link_data = {
                     "client_id": client_id,
                     "campaign_id": campaign_id,
-                    "is_primary": is_primary
+                    "is_primary": is_primary,
+                    "created_at": datetime.now(),
+                    "updated_at": datetime.now()
                 }
-                self.client.table("client_campaigns").upsert(link_data).execute()
+                # Use PostgreSQL INSERT ... ON CONFLICT
+                insert_stmt = pg_insert(table).values(**link_data)
+                insert_stmt = insert_stmt.on_conflict_do_update(
+                    index_elements=['client_id', 'campaign_id'],
+                    set_={
+                        'is_primary': insert_stmt.excluded.is_primary,
+                        'updated_at': insert_stmt.excluded.updated_at
+                    }
+                )
+                self.db.execute(insert_stmt)
+            
+            self.db.commit()
         except Exception as e:
+            self.db.rollback()
             logger.warning(f"Error linking campaign {campaign_id} to client {client_id}: {str(e)}")
     
     def get_client_by_slug(self, url_slug: str) -> Optional[Dict]:
-        """Get client by URL slug"""
+        """Get client by URL slug using SQLAlchemy Core"""
         try:
-            result = self.client.table("clients").select("*").eq("url_slug", url_slug).limit(1).execute()
-            if result.data:
-                return result.data[0]
+            table = self._get_table("clients")
+            query = select(table).where(table.c.url_slug == url_slug).limit(1)
+            result = self.db.execute(query)
+            row = result.first()
+            if row:
+                return dict(row._mapping)
             return None
         except Exception as e:
             logger.error(f"Error getting client by slug {url_slug}: {str(e)}")
             return None
     
     def get_client_by_id(self, client_id: int) -> Optional[Dict]:
-        """Get client by ID"""
+        """Get client by ID using SQLAlchemy Core"""
         try:
-            result = self.client.table("clients").select("*").eq("id", client_id).limit(1).execute()
-            if result.data:
-                return result.data[0]
+            table = self._get_table("clients")
+            query = select(table).where(table.c.id == client_id).limit(1)
+            result = self.db.execute(query)
+            row = result.first()
+            if row:
+                return dict(row._mapping)
             return None
         except Exception as e:
             logger.error(f"Error getting client by ID {client_id}: {str(e)}")
             return None
     
     def update_client_mapping(self, client_id: int, ga4_property_id: Optional[str] = None, scrunch_brand_id: Optional[int] = None, user_email: Optional[str] = None) -> bool:
-        """Update client mappings (GA4 property ID or Scrunch brand ID)"""
+        """Update client mappings (GA4 property ID or Scrunch brand ID) using SQLAlchemy Core"""
         try:
+            table = self._get_table("clients")
+            
+            # Build update data
             update_data = {
                 "updated_by": user_email,
                 "last_modified_by": user_email,
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now()
             }
             
             if ga4_property_id is not None:
@@ -1591,20 +2565,38 @@ class SupabaseService:
             if scrunch_brand_id is not None:
                 update_data["scrunch_brand_id"] = scrunch_brand_id
             
-            result = self.client.table("clients").update(update_data).eq("id", client_id).execute()
-            logger.info(f"Updated client {client_id} mappings")
+            # Execute update with version increment using SQL expression
+            # Add version increment to update_data
+            update_data["version"] = table.c.version + 1  # Increment version for optimistic locking
+            
+            update_stmt = (
+                update(table)
+                .where(table.c.id == client_id)
+                .values(**update_data)
+            )
+            result = self.db.execute(update_stmt)
+            self.db.commit()
+            
+            if result.rowcount == 0:
+                logger.warning(f"No client found with ID {client_id} to update mappings")
+                return False
+            
+            logger.info(f"Updated client {client_id} mappings (GA4: {ga4_property_id}, Scrunch: {scrunch_brand_id})")
             return True
         except Exception as e:
-            logger.error(f"Error updating client mappings: {str(e)}")
+            self.db.rollback()
+            logger.error(f"Error updating client mappings for client {client_id}: {str(e)}")
             return False
     
     def update_client_theme(self, client_id: int, theme_data: Dict, user_email: Optional[str] = None) -> bool:
-        """Update client theme and branding"""
+        """Update client theme and branding using SQLAlchemy Core (local PostgreSQL)"""
         try:
+            table = self._get_table("clients")
+            
             update_data = {
                 "updated_by": user_email,
                 "last_modified_by": user_email,
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now()
             }
             
             if "theme_color" in theme_data:
@@ -1626,18 +2618,65 @@ class SupabaseService:
             if "header_text" in theme_data:
                 update_data["header_text"] = theme_data["header_text"]
             
-            result = self.client.table("clients").update(update_data).eq("id", client_id).execute()
+            # Increment version for optimistic locking
+            update_data["version"] = table.c.version + 1
+            
+            # Remove None values
+            clean_data = {k: v for k, v in update_data.items() if v is not None}
+            
+            update_stmt = update(table).where(table.c.id == client_id).values(**clean_data)
+            result = self.db.execute(update_stmt)
+            self.db.commit()
+            
+            if result.rowcount == 0:
+                logger.warning(f"No client found with ID {client_id} to update theme")
+                return False
+            
             logger.info(f"Updated client {client_id} theme")
             return True
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Error updating client theme: {str(e)}")
             return False
     
     def get_client_campaigns(self, client_id: int) -> List[Dict]:
-        """Get all campaigns linked to a client"""
+        """Get all campaigns linked to a client using SQLAlchemy Core (local PostgreSQL)"""
         try:
-            result = self.client.table("client_campaigns").select("*, agency_analytics_campaigns(*)").eq("client_id", client_id).execute()
-            return result.data if result.data else []
+            # Get client_campaigns links
+            client_campaigns_table = self._get_table("client_campaigns")
+            campaigns_table = self._get_table("agency_analytics_campaigns")
+            
+            # First get the campaign IDs linked to this client
+            links_query = select(client_campaigns_table).where(
+                client_campaigns_table.c.client_id == client_id
+            )
+            links_result = self.db.execute(links_query)
+            links = [dict(row._mapping) for row in links_result]
+            
+            if not links:
+                return []
+            
+            # Get campaign IDs
+            campaign_ids = [link["campaign_id"] for link in links]
+            link_map = {link["campaign_id"]: link for link in links}
+            
+            # Get campaigns
+            campaigns_query = select(campaigns_table).where(
+                campaigns_table.c.id.in_(campaign_ids)
+            )
+            campaigns_result = self.db.execute(campaigns_query)
+            campaigns = [dict(row._mapping) for row in campaigns_result]
+            
+            # Combine with link data
+            for campaign in campaigns:
+                campaign_id = campaign["id"]
+                if campaign_id in link_map:
+                    link = link_map[campaign_id]
+                    campaign["is_primary"] = link.get("is_primary", False)
+                    campaign["link_created_at"] = link.get("created_at")
+                    campaign["link_updated_at"] = link.get("updated_at")
+            
+            return campaigns
         except Exception as e:
             logger.error(f"Error getting client campaigns: {str(e)}")
             return []
@@ -1647,12 +2686,20 @@ class SupabaseService:
     # =====================================================
     
     def upsert_agency_analytics_campaign(self, campaign: Dict) -> int:
-        """Upsert Agency Analytics campaign metadata - Updates existing records by primary key (id)"""
+        """Upsert Agency Analytics campaign metadata using SQLAlchemy Core (local PostgreSQL)"""
         try:
+            table = self._get_table("agency_analytics_campaigns")
+            campaign_id = campaign.get("id")
+            
+            if not campaign_id:
+                logger.warning("Campaign missing ID, skipping upsert")
+                return 0
+            
+            # Prepare record data - handle date strings and None values
             record = {
-                "id": campaign.get("id"),
-                "date_created": campaign.get("date_created"),
-                "date_modified": campaign.get("date_modified"),
+                "id": campaign_id,
+                "date_created": self._parse_datetime(campaign.get("date_created")),
+                "date_modified": self._parse_datetime(campaign.get("date_modified")),
                 "url": campaign.get("url"),
                 "company": campaign.get("company"),
                 "scope": campaign.get("scope"),
@@ -1674,331 +2721,604 @@ class SupabaseService:
                 "campaign_group_id": campaign.get("campaign_group_id"),
                 "company_id": campaign.get("company_id"),
                 "account_id": campaign.get("account_id"),
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now()
             }
             
-            # Upsert by primary key (id) - Supabase automatically handles conflicts on primary keys
-            # This will update existing records or insert new ones
-            result = self.client.table("agency_analytics_campaigns").upsert(record).execute()
-            logger.debug(f"Upserted campaign {campaign.get('id')}")
+            # Remove None values to avoid issues with NOT NULL constraints
+            clean_record = {k: v for k, v in record.items() if v is not None}
+            
+            # Use PostgreSQL INSERT ... ON CONFLICT for upsert
+            insert_stmt = pg_insert(table).values(**clean_record)
+            insert_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=['id'],
+                set_={
+                    'date_created': insert_stmt.excluded.date_created,
+                    'date_modified': insert_stmt.excluded.date_modified,
+                    'url': insert_stmt.excluded.url,
+                    'company': insert_stmt.excluded.company,
+                    'scope': insert_stmt.excluded.scope,
+                    'status': insert_stmt.excluded.status,
+                    'group_title': insert_stmt.excluded.group_title,
+                    'email_addresses': insert_stmt.excluded.email_addresses,
+                    'phone_numbers': insert_stmt.excluded.phone_numbers,
+                    'address': insert_stmt.excluded.address,
+                    'city': insert_stmt.excluded.city,
+                    'state': insert_stmt.excluded.state,
+                    'zip': insert_stmt.excluded.zip,
+                    'country': insert_stmt.excluded.country,
+                    'revenue': insert_stmt.excluded.revenue,
+                    'headcount': insert_stmt.excluded.headcount,
+                    'google_ignore_places': insert_stmt.excluded.google_ignore_places,
+                    'enforce_google_cid': insert_stmt.excluded.enforce_google_cid,
+                    'timezone': insert_stmt.excluded.timezone,
+                    'type': insert_stmt.excluded.type,
+                    'campaign_group_id': insert_stmt.excluded.campaign_group_id,
+                    'company_id': insert_stmt.excluded.company_id,
+                    'account_id': insert_stmt.excluded.account_id,
+                    'updated_at': insert_stmt.excluded.updated_at
+                }
+            )
+            
+            self.db.execute(insert_stmt)
+            self.db.commit()
+            logger.debug(f"Upserted campaign {campaign_id}")
             return 1
+            
         except Exception as e:
+            self.db.rollback()
             error_str = str(e)
-            # If upsert fails, try update then insert as fallback
-            if "conflict" in error_str.lower() or "duplicate" in error_str.lower() or "23505" in error_str:
-                try:
-                    # Try to update first (record exists)
-                    campaign_id = campaign.get("id")
-                    update_result = self.client.table("agency_analytics_campaigns").update(record).eq("id", campaign_id).execute()
-                    if update_result.data:
-                        logger.debug(f"Updated existing campaign {campaign_id}")
-                        return 1
-                    # If update didn't find record, insert (new record)
-                    insert_result = self.client.table("agency_analytics_campaigns").insert(record).execute()
-                    logger.debug(f"Inserted new campaign {campaign_id}")
-                    return 1
-                except Exception as retry_error:
-                    logger.warning(f"Retry upsert failed for campaign {campaign.get('id')}: {str(retry_error)}")
-                    # Don't raise - return 0 to indicate failure but don't stop the sync
-                    return 0
             logger.error(f"Error upserting campaign {campaign.get('id')}: {error_str}")
             # Don't raise - return 0 to allow sync to continue
             return 0
     
     def upsert_agency_analytics_rankings(self, rankings: List[Dict]) -> int:
-        """Upsert Agency Analytics campaign rankings - Optimized batch upsert"""
+        """Upsert Agency Analytics campaign rankings - Optimized with bulk operations"""
         if not rankings:
             return 0
         
         try:
-            # Add updated_at timestamp to all records
-            for record in rankings:
-                record["updated_at"] = datetime.now().isoformat()
+            table = self._get_table("agency_analytics_campaign_rankings")
             
-            # Use batch upsert - Supabase handles conflicts automatically via unique constraint
-            batch_size = 500  # Larger batch size for better performance
+            # Filter out records without required field
+            valid_rankings = [r for r in rankings if r.get("campaign_id_date")]
+            
+            if not valid_rankings:
+                return 0
+            
+            # Process in larger batches for better performance
+            batch_size = 1000  # Increased from 500
             total_upserted = 0
+            now = datetime.now()
             
-            for i in range(0, len(rankings), batch_size):
-                batch = rankings[i:i + batch_size]
+            for i in range(0, len(valid_rankings), batch_size):
+                batch = valid_rankings[i:i + batch_size]
                 
-                # Filter out records without required field
-                valid_batch = [r for r in batch if r.get("campaign_id_date")]
+                # Prepare all records in batch
+                records = []
+                for record in batch:
+                    clean_record = {
+                        "campaign_id": record.get("campaign_id"),
+                        "client_name": record.get("client_name"),
+                        "date": record.get("date"),
+                        "campaign_id_date": record.get("campaign_id_date"),
+                        "google_ranking_count": record.get("google_ranking_count", 0),
+                        "google_ranking_change": record.get("google_ranking_change", 0),
+                        "google_local_count": record.get("google_local_count", 0),
+                        "google_mobile_count": record.get("google_mobile_count", 0),
+                        "bing_ranking_count": record.get("bing_ranking_count", 0),
+                        "ranking_average": record.get("ranking_average", 0),
+                        "search_volume": record.get("search_volume", 0),
+                        "competition": record.get("competition", 0),
+                        "updated_at": now
+                    }
+                    # Remove None values
+                    clean_record = {k: v for k, v in clean_record.items() if v is not None}
+                    records.append(clean_record)
                 
-                if not valid_batch:
-                    continue
+                # Bulk insert with ON CONFLICT - execute all at once
+                if records:
+                    insert_stmt = pg_insert(table).values(records)
+                    insert_stmt = insert_stmt.on_conflict_do_update(
+                        index_elements=['campaign_id_date'],
+                        set_={
+                            'campaign_id': insert_stmt.excluded.campaign_id,
+                            'client_name': insert_stmt.excluded.client_name,
+                            'date': insert_stmt.excluded.date,
+                            'google_ranking_count': insert_stmt.excluded.google_ranking_count,
+                            'google_ranking_change': insert_stmt.excluded.google_ranking_change,
+                            'google_local_count': insert_stmt.excluded.google_local_count,
+                            'google_mobile_count': insert_stmt.excluded.google_mobile_count,
+                            'bing_ranking_count': insert_stmt.excluded.bing_ranking_count,
+                            'ranking_average': insert_stmt.excluded.ranking_average,
+                            'search_volume': insert_stmt.excluded.search_volume,
+                            'competition': insert_stmt.excluded.competition,
+                            'updated_at': insert_stmt.excluded.updated_at
+                        }
+                    )
+                    self.db.execute(insert_stmt)
+                    self.db.commit()
                 
-                try:
-                    # Batch upsert - Supabase automatically handles conflicts on unique constraints (campaign_id_date)
-                    # This will update existing records or insert new ones
-                    result = self.client.table("agency_analytics_campaign_rankings").upsert(valid_batch).execute()
-                    
-                    total_upserted += len(valid_batch)
-                    logger.debug(f"Upserted batch {i//batch_size + 1}: {len(valid_batch)} records")
-                except Exception as batch_error:
-                    error_str = str(batch_error)
-                    # Check if table doesn't exist
-                    if "Could not find the table" in error_str or "does not exist" in error_str:
-                        logger.warning(f"Table 'agency_analytics_campaign_rankings' does not exist yet. Please run the SQL script to create it.")
-                        return 0
-                    # Fallback to smaller batches if large batch fails
-                    logger.warning(f"Batch upsert failed, trying smaller batches: {error_str}")
-                    small_batch_size = 50
-                    for j in range(0, len(valid_batch), small_batch_size):
-                        small_batch = valid_batch[j:j + small_batch_size]
-                        try:
-                            self.client.table("agency_analytics_campaign_rankings").upsert(small_batch).execute()
-                            total_upserted += len(small_batch)
-                        except Exception as small_batch_error:
-                            # Log but continue - don't fail the entire sync
-                            logger.warning(f"Failed to upsert small batch (continuing): {str(small_batch_error)}")
+                total_upserted += len(batch)
+                logger.debug(f"Upserted batch {i//batch_size + 1}: {len(batch)} records")
             
             logger.info(f"Total upserted {total_upserted} rankings")
             return total_upserted
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Error upserting rankings: {str(e)}")
             raise
     
     def link_campaign_to_brand(self, campaign_id: int, brand_id: int, match_method: str = "url_match", match_confidence: str = "exact") -> int:
-        """Link an Agency Analytics campaign to a brand"""
+        """Link an Agency Analytics campaign to a brand using SQLAlchemy Core (local PostgreSQL)"""
         try:
+            table = self._get_table("agency_analytics_campaign_brands")
+            
             record = {
                 "campaign_id": campaign_id,
                 "brand_id": brand_id,
                 "match_method": match_method,
                 "match_confidence": match_confidence,
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now()
             }
             
-            result = self.client.table("agency_analytics_campaign_brands").upsert(record).execute()
+            # Use PostgreSQL INSERT ... ON CONFLICT for upsert
+            insert_stmt = pg_insert(table).values(**record)
+            insert_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=['campaign_id', 'brand_id'],
+                set_={
+                    'match_method': insert_stmt.excluded.match_method,
+                    'match_confidence': insert_stmt.excluded.match_confidence,
+                    'updated_at': insert_stmt.excluded.updated_at
+                }
+            )
+            
+            self.db.execute(insert_stmt)
+            self.db.commit()
             logger.info(f"Linked campaign {campaign_id} to brand {brand_id} ({match_method}, {match_confidence})")
             return 1
         except Exception as e:
+            self.db.rollback()
             error_str = str(e)
             # Check if table doesn't exist
-            if "Could not find the table" in error_str or "does not exist" in error_str:
+            if "does not exist" in error_str.lower() or "Could not find" in error_str:
                 logger.warning(f"Table 'agency_analytics_campaign_brands' does not exist yet. Please run the SQL script to create it. Skipping link for campaign {campaign_id} to brand {brand_id}.")
                 return 0  # Return 0 instead of raising error
             logger.error(f"Error linking campaign to brand: {error_str}")
             raise
     
-    def get_campaign_brand_links(self, campaign_id: Optional[int] = None, brand_id: Optional[int] = None) -> List[Dict]:
-        """Get campaign-brand links"""
+    def upsert_brand_kpi_selection(
+        self,
+        brand_id: int,
+        selected_kpis: List[str],
+        visible_sections: Optional[List[str]] = None,
+        selected_charts: Optional[List[str]] = None,
+        version: Optional[int] = None,
+        last_modified_by: Optional[str] = None
+    ) -> Dict:
+        """Upsert KPI selection for a brand using SQLAlchemy Core with ON CONFLICT"""
         try:
-            query = self.client.table("agency_analytics_campaign_brands").select("*")
+            import json
+            table = self._get_table("brand_kpi_selections")
+            
+            # Prepare data
+            selection_data = {
+                "brand_id": brand_id,
+                "selected_kpis": selected_kpis,
+                "visible_sections": visible_sections or ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"],
+                "selected_charts": selected_charts or [],
+                "last_modified_by": last_modified_by,
+                "updated_at": datetime.utcnow()
+            }
+            
+            # If version is provided, increment it; otherwise set to 1
+            if version is not None:
+                selection_data["version"] = version + 1
+            else:
+                # Check existing version
+                existing_query = select(table.c.version).where(table.c.brand_id == brand_id).limit(1)
+                existing_result = self.db.execute(existing_query)
+                existing_row = existing_result.first()
+                if existing_row:
+                    selection_data["version"] = existing_row.version + 1
+                else:
+                    selection_data["version"] = 1
+            
+            # Use PostgreSQL INSERT ... ON CONFLICT for upsert
+            stmt = pg_insert(table).values(**selection_data)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=['brand_id'],
+                set_={
+                    "selected_kpis": stmt.excluded.selected_kpis,
+                    "visible_sections": stmt.excluded.visible_sections,
+                    "selected_charts": stmt.excluded.selected_charts,
+                    "version": stmt.excluded.version,
+                    "last_modified_by": stmt.excluded.last_modified_by,
+                    "updated_at": stmt.excluded.updated_at
+                }
+            )
+            
+            self.db.execute(stmt)
+            self.db.commit()
+            
+            # Get updated record
+            query = select(table).where(table.c.brand_id == brand_id).limit(1)
+            result = self.db.execute(query)
+            row = result.first()
+            
+            if row:
+                return {
+                    "brand_id": brand_id,
+                    "selected_kpis": row.selected_kpis or [],
+                    "visible_sections": row.visible_sections or [],
+                    "selected_charts": row.selected_charts or [],
+                    "version": row.version,
+                    "last_modified_by": row.last_modified_by,
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else None
+                }
+            return selection_data
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error upserting KPI selection: {str(e)}")
+            raise
+    
+    def get_brand_kpi_selection(self, brand_id: int) -> Optional[Dict]:
+        """Get KPI selection for a brand"""
+        try:
+            table = self._get_table("brand_kpi_selections")
+            query = select(table).where(table.c.brand_id == brand_id).limit(1)
+            result = self.db.execute(query)
+            row = result.first()
+            
+            if row:
+                return {
+                    "brand_id": brand_id,
+                    "selected_kpis": row.selected_kpis or [],
+                    "visible_sections": row.visible_sections or [],
+                    "selected_charts": row.selected_charts or [],
+                    "version": row.version or 1,
+                    "last_modified_by": row.last_modified_by,
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else None
+                }
+            return None
+        except Exception as e:
+            logger.error(f"Error getting KPI selection: {str(e)}")
+            return None
+    
+    def get_campaign_brand_links(self, campaign_id: Optional[int] = None, brand_id: Optional[int] = None) -> List[Dict]:
+        """Get campaign-brand links using SQLAlchemy Core"""
+        try:
+            table = self._get_table("agency_analytics_campaign_brands")
+            query = select(table)
             
             if campaign_id:
-                query = query.eq("campaign_id", campaign_id)
+                query = query.where(table.c.campaign_id == campaign_id)
             if brand_id:
-                query = query.eq("brand_id", brand_id)
+                query = query.where(table.c.brand_id == brand_id)
             
-            result = query.execute()
-            return result.data if hasattr(result, 'data') else []
+            result = self.db.execute(query)
+            return [dict(row._mapping) for row in result]
         except Exception as e:
-            error_str = str(e)
-            # Check if table doesn't exist
-            if "Could not find the table" in error_str or "does not exist" in error_str:
-                logger.warning(f"Table 'agency_analytics_campaign_brands' does not exist yet. Please run the SQL script to create it.")
-                return []  # Return empty list instead of raising error
-            logger.error(f"Error fetching campaign-brand links: {error_str}")
+            # Table might not exist, return empty list
+            if "does not exist" in str(e).lower() or "Could not find" in str(e):
+                logger.warning(f"Table 'agency_analytics_campaign_brands' does not exist: {str(e)}")
+                return []
+            logger.error(f"Error getting campaign-brand links: {str(e)}")
             raise
     
     def upsert_agency_analytics_keywords(self, keywords: List[Dict]) -> int:
-        """Upsert Agency Analytics keywords - Optimized batch upsert"""
+        """Upsert Agency Analytics keywords - Optimized with bulk operations"""
         if not keywords:
             return 0
         
         try:
-            # Add updated_at timestamp to all records
-            for record in keywords:
-                record["updated_at"] = datetime.now().isoformat()
+            table = self._get_table("agency_analytics_keywords")
             
-            # Use batch upsert - Supabase handles conflicts automatically via unique constraint
-            batch_size = 500  # Larger batch size for better performance
+            # Filter out records without required field
+            valid_keywords = [r for r in keywords if r.get("campaign_keyword_id")]
+            
+            if not valid_keywords:
+                return 0
+            
+            # Process in larger batches for better performance
+            batch_size = 1000  # Increased from 500
             total_upserted = 0
+            now = datetime.now()
             
-            for i in range(0, len(keywords), batch_size):
-                batch = keywords[i:i + batch_size]
+            for i in range(0, len(valid_keywords), batch_size):
+                batch = valid_keywords[i:i + batch_size]
                 
-                # Filter out records without required field
-                valid_batch = [r for r in batch if r.get("campaign_keyword_id")]
+                # Prepare all records in batch
+                records = []
+                for record in batch:
+                    clean_record = {
+                        "id": record.get("id"),
+                        "campaign_id": record.get("campaign_id"),
+                        "campaign_keyword_id": record.get("campaign_keyword_id"),
+                        "keyword_phrase": record.get("keyword_phrase"),
+                        "primary_keyword": record.get("primary_keyword", False),
+                        "search_location": record.get("search_location"),
+                        "search_location_formatted_name": record.get("search_location_formatted_name"),
+                        "search_location_region_name": record.get("search_location_region_name"),
+                        "search_location_country_code": record.get("search_location_country_code"),
+                        "search_location_latitude": record.get("search_location_latitude"),
+                        "search_location_longitude": record.get("search_location_longitude"),
+                        "search_language": record.get("search_language"),
+                        "tags": record.get("tags"),
+                        "date_created": self._parse_datetime(record.get("date_created")),
+                        "date_modified": self._parse_datetime(record.get("date_modified")),
+                        "updated_at": now
+                    }
+                    # Remove None values
+                    clean_record = {k: v for k, v in clean_record.items() if v is not None}
+                    records.append(clean_record)
                 
-                if not valid_batch:
-                    continue
+                # Bulk insert with ON CONFLICT - execute all at once
+                if records:
+                    insert_stmt = pg_insert(table).values(records)
+                    insert_stmt = insert_stmt.on_conflict_do_update(
+                        index_elements=['campaign_keyword_id'],
+                        set_={
+                            'campaign_id': insert_stmt.excluded.campaign_id,
+                            'keyword_phrase': insert_stmt.excluded.keyword_phrase,
+                            'primary_keyword': insert_stmt.excluded.primary_keyword,
+                            'search_location': insert_stmt.excluded.search_location,
+                            'search_location_formatted_name': insert_stmt.excluded.search_location_formatted_name,
+                            'search_location_region_name': insert_stmt.excluded.search_location_region_name,
+                            'search_location_country_code': insert_stmt.excluded.search_location_country_code,
+                            'search_location_latitude': insert_stmt.excluded.search_location_latitude,
+                            'search_location_longitude': insert_stmt.excluded.search_location_longitude,
+                            'search_language': insert_stmt.excluded.search_language,
+                            'tags': insert_stmt.excluded.tags,
+                            'date_created': insert_stmt.excluded.date_created,
+                            'date_modified': insert_stmt.excluded.date_modified,
+                            'updated_at': insert_stmt.excluded.updated_at
+                        }
+                    )
+                    self.db.execute(insert_stmt)
+                    self.db.commit()
                 
-                try:
-                    # Batch upsert - Supabase automatically handles conflicts on unique constraints (campaign_keyword_id)
-                    # This will update existing records or insert new ones
-                    result = self.client.table("agency_analytics_keywords").upsert(valid_batch).execute()
-                    
-                    total_upserted += len(valid_batch)
-                    logger.debug(f"Upserted batch {i//batch_size + 1}: {len(valid_batch)} keywords")
-                except Exception as batch_error:
-                    error_str = str(batch_error)
-                    # Check if table doesn't exist
-                    if "Could not find the table" in error_str or "does not exist" in error_str:
-                        logger.warning(f"Table 'agency_analytics_keywords' does not exist yet. Please run the SQL script to create it.")
-                        return 0
-                    # Fallback to smaller batches if large batch fails
-                    logger.warning(f"Batch upsert failed, trying smaller batches: {error_str}")
-                    small_batch_size = 50
-                    for j in range(0, len(valid_batch), small_batch_size):
-                        small_batch = valid_batch[j:j + small_batch_size]
-                        try:
-                            self.client.table("agency_analytics_keywords").upsert(small_batch).execute()
-                            total_upserted += len(small_batch)
-                        except Exception as small_batch_error:
-                            # Log but continue - don't fail the entire sync
-                            logger.warning(f"Failed to upsert small batch (continuing): {str(small_batch_error)}")
+                total_upserted += len(batch)
+                logger.debug(f"Upserted batch {i//batch_size + 1}: {len(batch)} keywords")
             
             logger.info(f"Total upserted {total_upserted} keywords")
             return total_upserted
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Error upserting keywords: {str(e)}")
             raise
     
     def upsert_agency_analytics_keyword_rankings(self, rankings: List[Dict]) -> int:
-        """Upsert Agency Analytics keyword rankings (daily records) - Optimized batch upsert"""
+        """Upsert Agency Analytics keyword rankings - Optimized with bulk operations"""
         if not rankings:
             return 0
         
         try:
-            # Add updated_at timestamp to all records
-            for record in rankings:
-                record["updated_at"] = datetime.now().isoformat()
+            table = self._get_table("agency_analytics_keyword_rankings")
             
-            # Use batch upsert - Supabase handles conflicts automatically via unique constraint
-            batch_size = 500  # Larger batch size for better performance
+            # Filter out records without required field
+            valid_rankings = [r for r in rankings if r.get("keyword_id_date")]
+            
+            if not valid_rankings:
+                return 0
+            
+            # Process in larger batches for better performance
+            batch_size = 1000  # Increased from 500
             total_upserted = 0
+            now = datetime.now()
             
-            for i in range(0, len(rankings), batch_size):
-                batch = rankings[i:i + batch_size]
+            for i in range(0, len(valid_rankings), batch_size):
+                batch = valid_rankings[i:i + batch_size]
                 
-                # Filter out records without required field
-                valid_batch = [r for r in batch if r.get("keyword_id_date")]
+                # Prepare all records in batch
+                records = []
+                for record in batch:
+                    clean_record = {
+                        "keyword_id": record.get("keyword_id"),
+                        "campaign_id": record.get("campaign_id"),
+                        "keyword_id_date": record.get("keyword_id_date"),
+                        "date": record.get("date"),
+                        "google_ranking": record.get("google_ranking"),
+                        "google_ranking_url": record.get("google_ranking_url"),
+                        "google_mobile_ranking": record.get("google_mobile_ranking"),
+                        "google_mobile_ranking_url": record.get("google_mobile_ranking_url"),
+                        "google_local_ranking": record.get("google_local_ranking"),
+                        "bing_ranking": record.get("bing_ranking"),
+                        "bing_ranking_url": record.get("bing_ranking_url"),
+                        "results": record.get("results"),
+                        "volume": record.get("volume"),
+                        "competition": record.get("competition"),
+                        "field_status": record.get("field_status"),  # JSONB
+                        "updated_at": now
+                    }
+                    # Remove None values
+                    clean_record = {k: v for k, v in clean_record.items() if v is not None}
+                    records.append(clean_record)
                 
-                if not valid_batch:
-                    continue
+                # Bulk insert all records at once (no unique constraint, so just insert)
+                if records:
+                    insert_stmt = insert(table).values(records)
+                    self.db.execute(insert_stmt)
+                    self.db.commit()
                 
-                try:
-                    # Batch upsert - Supabase automatically handles conflicts on unique constraints (keyword_id_date)
-                    # This will update existing records or insert new ones
-                    result = self.client.table("agency_analytics_keyword_rankings").upsert(valid_batch).execute()
-                    
-                    total_upserted += len(valid_batch)
-                    logger.debug(f"Upserted batch {i//batch_size + 1}: {len(valid_batch)} records")
-                except Exception as batch_error:
-                    error_str = str(batch_error)
-                    # Check if table doesn't exist
-                    if "Could not find the table" in error_str or "does not exist" in error_str:
-                        logger.warning(f"Table 'agency_analytics_keyword_rankings' does not exist yet. Please run the SQL script to create it.")
-                        return 0
-                    # Fallback to smaller batches if large batch fails
-                    logger.warning(f"Batch upsert failed, trying smaller batches: {error_str}")
-                    small_batch_size = 50
-                    for j in range(0, len(valid_batch), small_batch_size):
-                        small_batch = valid_batch[j:j + small_batch_size]
-                        try:
-                            self.client.table("agency_analytics_keyword_rankings").upsert(small_batch).execute()
-                            total_upserted += len(small_batch)
-                        except Exception as small_batch_error:
-                            # Log but continue - don't fail the entire sync
-                            logger.warning(f"Failed to upsert small batch (continuing): {str(small_batch_error)}")
+                total_upserted += len(batch)
+                logger.debug(f"Upserted batch {i//batch_size + 1}: {len(batch)} records")
             
             logger.info(f"Total upserted {total_upserted} keyword rankings")
             return total_upserted
         except Exception as e:
-            error_str = str(e)
-            # Check if table doesn't exist
-            if "Could not find the table" in error_str or "does not exist" in error_str:
-                logger.warning(f"Table 'agency_analytics_keyword_rankings' does not exist yet. Please run the SQL script to create it.")
-                return 0
-            logger.error(f"Error upserting keyword rankings: {error_str}")
+            self.db.rollback()
+            logger.error(f"Error upserting keyword rankings: {str(e)}")
             raise
     
     def upsert_agency_analytics_keyword_ranking_summary(self, summary: Dict) -> int:
-        """Upsert Agency Analytics keyword ranking summary (latest + change) - Updates existing records by primary key (keyword_id)"""
+        """Upsert Agency Analytics keyword ranking summary using SQLAlchemy Core (local PostgreSQL)"""
         if not summary:
             return 0
         
         try:
-            summary["updated_at"] = datetime.now().isoformat()
+            table = self._get_table("agency_analytics_keyword_ranking_summaries")
             
-            # Upsert by keyword_id (primary key) - Supabase automatically handles conflicts on primary keys
-            # This will update existing records or insert new ones
-            self.client.table("agency_analytics_keyword_ranking_summaries").upsert(summary).execute()
+            # Prepare record
+            clean_record = {
+                "keyword_id": summary.get("keyword_id"),
+                "campaign_id": summary.get("campaign_id"),
+                "keyword_phrase": summary.get("keyword_phrase"),
+                "keyword_id_date": summary.get("keyword_id_date"),
+                "date": summary.get("date"),
+                "google_ranking": summary.get("google_ranking"),
+                "google_ranking_url": summary.get("google_ranking_url"),
+                "google_mobile_ranking": summary.get("google_mobile_ranking"),
+                "google_mobile_ranking_url": summary.get("google_mobile_ranking_url"),
+                "google_local_ranking": summary.get("google_local_ranking"),
+                "bing_ranking": summary.get("bing_ranking"),
+                "bing_ranking_url": summary.get("bing_ranking_url"),
+                "search_volume": summary.get("search_volume"),
+                "competition": summary.get("competition"),
+                "results": summary.get("results"),
+                "field_status": summary.get("field_status"),  # JSONB
+                "start_date": summary.get("start_date"),
+                "end_date": summary.get("end_date"),
+                "start_ranking": summary.get("start_ranking"),
+                "end_ranking": summary.get("end_ranking"),
+                "ranking_change": summary.get("ranking_change"),
+                "updated_at": datetime.now()
+            }
+            
+            # Remove None values
+            clean_record = {k: v for k, v in clean_record.items() if v is not None}
+            
+            # Use PostgreSQL INSERT ... ON CONFLICT for upsert (primary key is keyword_id)
+            insert_stmt = pg_insert(table).values(**clean_record)
+            insert_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=['keyword_id'],
+                set_={
+                    'campaign_id': insert_stmt.excluded.campaign_id,
+                    'keyword_phrase': insert_stmt.excluded.keyword_phrase,
+                    'keyword_id_date': insert_stmt.excluded.keyword_id_date,
+                    'date': insert_stmt.excluded.date,
+                    'google_ranking': insert_stmt.excluded.google_ranking,
+                    'google_ranking_url': insert_stmt.excluded.google_ranking_url,
+                    'google_mobile_ranking': insert_stmt.excluded.google_mobile_ranking,
+                    'google_mobile_ranking_url': insert_stmt.excluded.google_mobile_ranking_url,
+                    'google_local_ranking': insert_stmt.excluded.google_local_ranking,
+                    'bing_ranking': insert_stmt.excluded.bing_ranking,
+                    'bing_ranking_url': insert_stmt.excluded.bing_ranking_url,
+                    'search_volume': insert_stmt.excluded.search_volume,
+                    'competition': insert_stmt.excluded.competition,
+                    'results': insert_stmt.excluded.results,
+                    'field_status': insert_stmt.excluded.field_status,
+                    'start_date': insert_stmt.excluded.start_date,
+                    'end_date': insert_stmt.excluded.end_date,
+                    'start_ranking': insert_stmt.excluded.start_ranking,
+                    'end_ranking': insert_stmt.excluded.end_ranking,
+                    'ranking_change': insert_stmt.excluded.ranking_change,
+                    'updated_at': insert_stmt.excluded.updated_at
+                }
+            )
+            
+            self.db.execute(insert_stmt)
+            self.db.commit()
             logger.debug(f"Upserted keyword ranking summary for keyword {summary.get('keyword_id')}")
             return 1
         except Exception as e:
+            self.db.rollback()
             error_str = str(e)
             # Check if table doesn't exist
-            if "Could not find the table" in error_str or "does not exist" in error_str:
+            if "does not exist" in error_str.lower() or "Could not find" in error_str:
                 logger.warning(f"Table 'agency_analytics_keyword_ranking_summaries' does not exist yet. Please run the SQL script to create it.")
                 return 0
-            # If upsert fails, try update then insert as fallback
-            if "conflict" in error_str.lower() or "duplicate" in error_str.lower() or "23505" in error_str:
-                try:
-                    keyword_id = summary.get("keyword_id")
-                    # Try to update first (record exists)
-                    update_result = self.client.table("agency_analytics_keyword_ranking_summaries").update(summary).eq("keyword_id", keyword_id).execute()
-                    if update_result.data:
-                        logger.debug(f"Updated existing keyword ranking summary for keyword {keyword_id}")
-                        return 1
-                    # If update didn't find record, insert (new record)
-                    insert_result = self.client.table("agency_analytics_keyword_ranking_summaries").insert(summary).execute()
-                    logger.debug(f"Inserted new keyword ranking summary for keyword {keyword_id}")
-                    return 1
-                except Exception as retry_error:
-                    logger.warning(f"Retry upsert failed for keyword {summary.get('keyword_id')}: {str(retry_error)}")
-                    # Don't raise - return 0 to indicate failure but don't stop the sync
-                    return 0
             logger.error(f"Error upserting keyword ranking summary: {error_str}")
             # Don't raise - return 0 to allow sync to continue
             return 0
     
     def upsert_agency_analytics_keyword_ranking_summaries_batch(self, summaries: List[Dict]) -> int:
-        """Batch upsert Agency Analytics keyword ranking summaries - Optimized"""
+        """Batch upsert Agency Analytics keyword ranking summaries - Optimized with bulk operations"""
         if not summaries:
             return 0
         
         try:
-            # Add updated_at timestamp to all summaries
-            for summary in summaries:
-                summary["updated_at"] = datetime.now().isoformat()
+            table = self._get_table("agency_analytics_keyword_ranking_summaries")
             
-            # Batch upsert - Supabase handles conflicts via keyword_id primary key
-            batch_size = 100
+            # Process in larger batches for better performance
+            batch_size = 500  # Increased from 100
             total_upserted = 0
+            now = datetime.now()
             
             for i in range(0, len(summaries), batch_size):
                 batch = summaries[i:i + batch_size]
                 
-                try:
-                    # Batch upsert - Supabase automatically handles conflicts on primary keys (keyword_id)
-                    # This will update existing records or insert new ones
-                    result = self.client.table("agency_analytics_keyword_ranking_summaries").upsert(batch).execute()
-                    total_upserted += len(batch)
-                    logger.debug(f"Upserted summary batch {i//batch_size + 1}: {len(batch)} summaries")
-                except Exception as batch_error:
-                    error_str = str(batch_error)
-                    if "Could not find the table" in error_str or "does not exist" in error_str:
-                        logger.warning(f"Table 'agency_analytics_keyword_ranking_summaries' does not exist yet. Please run the SQL script to create it.")
-                        return 0
-                    # Fallback to individual upserts if batch fails
-                    logger.warning(f"Batch upsert failed, falling back to individual upserts: {error_str}")
-                    for summary in batch:
-                        try:
-                            self.client.table("agency_analytics_keyword_ranking_summaries").upsert(summary).execute()
-                            total_upserted += 1
-                        except Exception as summary_error:
-                            # Log but continue - don't fail the entire sync
-                            logger.warning(f"Failed to upsert summary for keyword {summary.get('keyword_id')} (continuing): {str(summary_error)}")
+                # Prepare all records in batch
+                records = []
+                for summary in batch:
+                    clean_record = {
+                        "keyword_id": summary.get("keyword_id"),
+                        "campaign_id": summary.get("campaign_id"),
+                        "keyword_phrase": summary.get("keyword_phrase"),
+                        "keyword_id_date": summary.get("keyword_id_date"),
+                        "date": summary.get("date"),
+                        "google_ranking": summary.get("google_ranking"),
+                        "google_ranking_url": summary.get("google_ranking_url"),
+                        "google_mobile_ranking": summary.get("google_mobile_ranking"),
+                        "google_mobile_ranking_url": summary.get("google_mobile_ranking_url"),
+                        "google_local_ranking": summary.get("google_local_ranking"),
+                        "bing_ranking": summary.get("bing_ranking"),
+                        "bing_ranking_url": summary.get("bing_ranking_url"),
+                        "search_volume": summary.get("search_volume"),
+                        "competition": summary.get("competition"),
+                        "results": summary.get("results"),
+                        "field_status": summary.get("field_status"),  # JSONB
+                        "start_date": summary.get("start_date"),
+                        "end_date": summary.get("end_date"),
+                        "start_ranking": summary.get("start_ranking"),
+                        "end_ranking": summary.get("end_ranking"),
+                        "ranking_change": summary.get("ranking_change"),
+                        "updated_at": now
+                    }
+                    # Remove None values
+                    clean_record = {k: v for k, v in clean_record.items() if v is not None}
+                    records.append(clean_record)
+                
+                # Bulk insert with ON CONFLICT - execute all at once
+                if records:
+                    insert_stmt = pg_insert(table).values(records)
+                    insert_stmt = insert_stmt.on_conflict_do_update(
+                        index_elements=['keyword_id'],
+                        set_={
+                            'campaign_id': insert_stmt.excluded.campaign_id,
+                            'keyword_phrase': insert_stmt.excluded.keyword_phrase,
+                            'keyword_id_date': insert_stmt.excluded.keyword_id_date,
+                            'date': insert_stmt.excluded.date,
+                            'google_ranking': insert_stmt.excluded.google_ranking,
+                            'google_ranking_url': insert_stmt.excluded.google_ranking_url,
+                            'google_mobile_ranking': insert_stmt.excluded.google_mobile_ranking,
+                            'google_mobile_ranking_url': insert_stmt.excluded.google_mobile_ranking_url,
+                            'google_local_ranking': insert_stmt.excluded.google_local_ranking,
+                            'bing_ranking': insert_stmt.excluded.bing_ranking,
+                            'bing_ranking_url': insert_stmt.excluded.bing_ranking_url,
+                            'search_volume': insert_stmt.excluded.search_volume,
+                            'competition': insert_stmt.excluded.competition,
+                            'results': insert_stmt.excluded.results,
+                            'field_status': insert_stmt.excluded.field_status,
+                            'start_date': insert_stmt.excluded.start_date,
+                            'end_date': insert_stmt.excluded.end_date,
+                            'start_ranking': insert_stmt.excluded.start_ranking,
+                            'end_ranking': insert_stmt.excluded.end_ranking,
+                            'ranking_change': insert_stmt.excluded.ranking_change,
+                            'updated_at': insert_stmt.excluded.updated_at
+                        }
+                    )
+                    self.db.execute(insert_stmt)
+                    self.db.commit()
+                
+                total_upserted += len(batch)
+                logger.debug(f"Upserted summary batch {i//batch_size + 1}: {len(batch)} summaries")
             
             logger.info(f"Total upserted {total_upserted} keyword ranking summaries")
             return total_upserted
         except Exception as e:
+            self.db.rollback()
             error_str = str(e)
-            if "Could not find the table" in error_str or "does not exist" in error_str:
+            if "does not exist" in error_str.lower() or "Could not find" in error_str:
                 logger.warning(f"Table 'agency_analytics_keyword_ranking_summaries' does not exist yet. Please run the SQL script to create it.")
                 return 0
             logger.error(f"Error upserting keyword ranking summaries: {error_str}")

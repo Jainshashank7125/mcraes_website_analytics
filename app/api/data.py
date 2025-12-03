@@ -13,6 +13,9 @@ from app.core.exceptions import NotFoundException, handle_exception
 from app.core.error_utils import handle_api_errors
 from app.api.auth import get_current_user
 from app.core.config import settings
+from app.db.database import get_db
+from sqlalchemy.orm import Session
+from sqlalchemy import select, func, and_, or_
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -25,40 +28,12 @@ ga4_client = GA4APIClient()
 async def get_brands(
     limit: Optional[int] = Query(50, description="Number of records to return"),
     offset: Optional[int] = Query(0, description="Offset for pagination"),
-    search: Optional[str] = Query(None, description="Search by brand name")
+    search: Optional[str] = Query(None, description="Search by brand name"),
+    db: Session = Depends(get_db)
 ):
     """Get brands from database with optional search"""
-    supabase = SupabaseService()
-    
-    # Build query with optional search
-    query = supabase.client.table("brands").select("*", count="exact")
-    
-    # Apply search filter if provided
-    if search and search.strip():
-        search_term = search.strip()
-        query = query.ilike("name", f"%{search_term}%")
-    
-    # Get total count
-    count_result = query.execute()
-    total_count = count_result.count if hasattr(count_result, 'count') else 0
-    
-    # Apply pagination
-    if limit:
-        query = query.limit(limit)
-    if offset:
-        query = query.offset(offset)
-    
-    # Order by name for consistent results
-    query = query.order("name", desc=False)
-    
-    result = query.execute()
-    items = result.data if hasattr(result, 'data') else result
-    
-    return {
-        "items": items if isinstance(items, list) else [],
-        "count": len(items) if isinstance(items, list) else 0,
-        "total_count": total_count
-    }
+    supabase = SupabaseService(db=db)
+    return supabase.get_brands(limit=limit, offset=offset, search=search)
 
 @router.get("/data/prompts")
 @handle_api_errors(context="fetching prompts")
@@ -68,16 +43,17 @@ async def get_prompts(
     stage: Optional[str] = Query(None, description="Filter by funnel stage"),
     persona_id: Optional[int] = Query(None, description="Filter by persona ID"),
     limit: Optional[int] = Query(50, description="Number of records to return"),
-    offset: Optional[int] = Query(0, description="Offset for pagination")
+    offset: Optional[int] = Query(0, description="Offset for pagination"),
+    db: Session = Depends(get_db)
 ):
     """Get prompts from database. Supports both brand_id and client_id (client_id maps to brand_id via scrunch_brand_id)"""
-    supabase = SupabaseService()
+    supabase = SupabaseService(db=db)
     
     # If client_id is provided, get the scrunch_brand_id from the client
     if client_id and not brand_id:
-        client_result = supabase.client.table("clients").select("scrunch_brand_id").eq("id", client_id).limit(1).execute()
-        if client_result.data and client_result.data[0].get("scrunch_brand_id"):
-            brand_id = client_result.data[0]["scrunch_brand_id"]
+        client = supabase.get_client_by_id(client_id)
+        if client and client.get("scrunch_brand_id"):
+            brand_id = client["scrunch_brand_id"]
         elif client_id:
             # Client exists but has no scrunch_brand_id, return empty result
             return {
@@ -86,41 +62,14 @@ async def get_prompts(
                 "total_count": 0
             }
     
-    # Build count query with same filters
-    count_query = supabase.client.table("prompts").select("*", count="exact")
-    if brand_id:
-        count_query = count_query.eq("brand_id", brand_id)
-    if stage:
-        count_query = count_query.eq("stage", stage)
-    if persona_id:
-        count_query = count_query.eq("persona_id", persona_id)
-    
-    count_result = count_query.execute()
-    total_count = count_result.count if hasattr(count_result, 'count') else 0
-    
-    # Get paginated items
-    query = supabase.client.table("prompts").select("*")
-    
-    if brand_id:
-        query = query.eq("brand_id", brand_id)
-    if stage:
-        query = query.eq("stage", stage)
-    if persona_id:
-        query = query.eq("persona_id", persona_id)
-    
-    if limit:
-        query = query.limit(limit)
-    if offset:
-        query = query.offset(offset)
-    
-    result = query.execute()
-    items = result.data if hasattr(result, 'data') else result
-    
-    return {
-        "items": items if isinstance(items, list) else [],
-        "count": len(items) if isinstance(items, list) else 0,
-        "total_count": total_count
-    }
+    # Use SQLAlchemy method
+    return supabase.get_prompts(
+        brand_id=brand_id,
+        stage=stage,
+        persona_id=persona_id,
+        limit=limit,
+        offset=offset
+    )
 
 @router.get("/data/responses")
 @handle_api_errors(context="fetching responses")
@@ -132,16 +81,17 @@ async def get_responses(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     limit: Optional[int] = Query(50, description="Number of records to return"),
-    offset: Optional[int] = Query(0, description="Offset for pagination")
+    offset: Optional[int] = Query(0, description="Offset for pagination"),
+    db: Session = Depends(get_db)
 ):
     """Get responses from database. Supports both brand_id and client_id (client_id maps to brand_id via scrunch_brand_id)"""
-    supabase = SupabaseService()
+    supabase = SupabaseService(db=db)
     
     # If client_id is provided, get the scrunch_brand_id from the client
     if client_id and not brand_id:
-        client_result = supabase.client.table("clients").select("scrunch_brand_id").eq("id", client_id).limit(1).execute()
-        if client_result.data and client_result.data[0].get("scrunch_brand_id"):
-            brand_id = client_result.data[0]["scrunch_brand_id"]
+        client = supabase.get_client_by_id(client_id)
+        if client and client.get("scrunch_brand_id"):
+            brand_id = client["scrunch_brand_id"]
         elif client_id:
             # Client exists but has no scrunch_brand_id, return empty result
             return {
@@ -150,49 +100,16 @@ async def get_responses(
                 "total_count": 0
             }
     
-    # Build count query with same filters
-    count_query = supabase.client.table("responses").select("*", count="exact")
-    if brand_id:
-        count_query = count_query.eq("brand_id", brand_id)
-    if platform:
-        count_query = count_query.eq("platform", platform)
-    if prompt_id:
-        count_query = count_query.eq("prompt_id", prompt_id)
-    if start_date:
-        count_query = count_query.gte("created_at", start_date)
-    if end_date:
-        count_query = count_query.lte("created_at", end_date)
-    
-    count_result = count_query.execute()
-    total_count = count_result.count if hasattr(count_result, 'count') else 0
-    
-    # Get paginated items
-    query = supabase.client.table("responses").select("*")
-    
-    if brand_id:
-        query = query.eq("brand_id", brand_id)
-    if platform:
-        query = query.eq("platform", platform)
-    if prompt_id:
-        query = query.eq("prompt_id", prompt_id)
-    if start_date:
-        query = query.gte("created_at", start_date)
-    if end_date:
-        query = query.lte("created_at", end_date)
-    
-    if limit:
-        query = query.limit(limit)
-    if offset:
-        query = query.offset(offset)
-    
-    result = query.execute()
-    items = result.data if hasattr(result, 'data') else result
-    
-    return {
-        "items": items if isinstance(items, list) else [],
-        "count": len(items) if isinstance(items, list) else 0,
-        "total_count": total_count
-    }
+    # Use SQLAlchemy method
+    return supabase.get_responses(
+        brand_id=brand_id,
+        platform=platform,
+        prompt_id=prompt_id,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        offset=offset
+    )
 
 def calculate_analytics(responses):
     """Calculate analytics from responses"""
@@ -302,25 +219,28 @@ def calculate_analytics(responses):
 
 @router.get("/data/analytics/brands")
 async def get_brand_analytics(
-    brand_id: Optional[int] = Query(None, description="Filter by brand ID")
+    brand_id: Optional[int] = Query(None, description="Filter by brand ID"),
+    db: Session = Depends(get_db)
 ):
     """Get analytics for brands based on responses"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Get brands
-        brands_query = supabase.client.table("brands").select("*")
+        # Get brands using SQLAlchemy
+        brands_result = supabase.get_brands(limit=None, offset=None, search=None)
+        brands = brands_result.get("items", [])
+        
+        # Filter by brand_id if provided
         if brand_id:
-            brands_query = brands_query.eq("id", brand_id)
-        brands_result = brands_query.execute()
-        brands = brands_result.data if hasattr(brands_result, 'data') else []
+            brands = [b for b in brands if b.get("id") == brand_id]
         
         # Get responses filtered by brand_id if provided
-        responses_query = supabase.client.table("responses").select("*")
-        if brand_id:
-            responses_query = responses_query.eq("brand_id", brand_id)
-        responses_result = responses_query.execute()
-        responses = responses_result.data if hasattr(responses_result, 'data') else []
+        responses_result = supabase.get_responses(
+            brand_id=brand_id,
+            limit=None,
+            offset=None
+        )
+        responses = responses_result.get("items", [])
         
         # Calculate analytics for each brand
         if brand_id and len(brands) == 1:
@@ -341,10 +261,12 @@ async def get_brand_analytics(
             
             for brand in brands:
                 # Get responses for this brand
-                brand_responses_query = supabase.client.table("responses").select("*")
-                brand_responses_query = brand_responses_query.eq("brand_id", brand["id"])
-                brand_responses_result = brand_responses_query.execute()
-                brand_responses = brand_responses_result.data if hasattr(brand_responses_result, 'data') else []
+                brand_responses_result = supabase.get_responses(
+                    brand_id=brand.get("id"),
+                    limit=None,
+                    offset=None
+                )
+                brand_responses = brand_responses_result.get("items", [])
                 
                 # Calculate analytics for this brand
                 brand_analytics_data = calculate_analytics(brand_responses)
@@ -384,14 +306,15 @@ async def get_ga4_properties():
 async def get_brand_ga4_analytics(
     brand_id: int,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)")
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    db: Session = Depends(get_db)
 ):
     """Get GA4 analytics for a specific brand (if property ID is configured)"""
     try:
-        # Get brand from database
-        supabase = SupabaseService()
-        brand_result = supabase.client.table("brands").select("*").eq("id", brand_id).execute()
-        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        # Get brand from database using SQLAlchemy
+        supabase = SupabaseService(db=db)
+        brands_result = supabase.get_brands(limit=1, offset=0, search=None)
+        brands = [b for b in brands_result.get("items", []) if b.get("id") == brand_id]
         
         if not brands:
             raise HTTPException(status_code=404, detail="Brand not found")
@@ -419,8 +342,7 @@ async def get_brand_ga4_analytics(
         
         date_range = {"startDate": start_date, "endDate": end_date}
         
-        # Store data when fetched to ensure all data is persisted
-        supabase = SupabaseService()
+        # Store data when fetched to ensure all data is persisted (use existing supabase instance with db)
         
         try:
             analytics["trafficOverview"] = await ga4_client.get_traffic_overview(property_id, start_date, end_date)
@@ -541,19 +463,17 @@ async def get_brand_ga4_analytics(
 async def get_client_ga4_analytics(
     client_id: int,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)")
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    db: Session = Depends(get_db)
 ):
     """Get GA4 analytics for a specific client (if property ID is configured)"""
     try:
-        # Get client from database
-        supabase = SupabaseService()
-        client_result = supabase.client.table("clients").select("*").eq("id", client_id).execute()
-        clients = client_result.data if hasattr(client_result, 'data') else []
+        # Get client from database using SQLAlchemy
+        supabase = SupabaseService(db=db)
+        client = supabase.get_client_by_id(client_id)
         
-        if not clients:
+        if not client:
             raise HTTPException(status_code=404, detail="Client not found")
-        
-        client = clients[0]
         
         if not client.get("ga4_property_id"):
             return {
@@ -577,7 +497,6 @@ async def get_client_ga4_analytics(
         date_range = {"startDate": start_date, "endDate": end_date}
         
         # Store data when fetched to ensure all data is persisted
-        supabase = SupabaseService()
         scrunch_brand_id = client.get("scrunch_brand_id")  # For backward compatibility
         
         try:
@@ -778,12 +697,11 @@ async def get_ga4_realtime(property_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/data/ga4/brands-with-ga4")
-async def get_brands_with_ga4():
+async def get_brands_with_ga4(db: Session = Depends(get_db)):
     """Get all brands that have GA4 property IDs configured"""
     try:
-        supabase = SupabaseService()
-        result = supabase.client.table("brands").select("*").not_.is_("ga4_property_id", "null").execute()
-        brands = result.data if hasattr(result, 'data') else []
+        supabase = SupabaseService(db=db)
+        brands = supabase.get_brands_with_ga4()
         
         return {
             "items": brands,
@@ -802,52 +720,43 @@ async def get_agency_analytics_campaigns(
     page: Optional[int] = Query(1, description="Page number (1-indexed)"),
     page_size: Optional[int] = Query(50, description="Number of records per page"),
     search: Optional[str] = Query(None, description="Search by company name or URL"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Get Agency Analytics campaigns with pagination and search"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Build query - fetch more records if searching to allow filtering
-        # For search, we'll fetch a larger set and filter in Python
-        fetch_size = page_size * 10 if search and search.strip() else page_size
+        # Build query using SQLAlchemy Core
+        table = supabase._get_table("agency_analytics_campaigns")
+        query = select(table)
         
-        query = supabase.client.table("agency_analytics_campaigns").select("*", count="exact")
+        # Apply search filter if provided
+        if search and search.strip():
+            search_term = f"%{search.strip()}%"
+            query = query.where(
+                or_(
+                    table.c.company.ilike(search_term),
+                    table.c.url.ilike(search_term)
+                )
+            )
+        
+        # Get total count
+        count_query = select(func.count()).select_from(query.alias())
+        total_count = supabase.db.execute(count_query).scalar()
         
         # Order by id descending
-        query = query.order("id", desc=True)
+        query = query.order_by(table.c.id.desc())
         
-        # If searching, fetch a larger set to filter from
-        if search and search.strip():
-            search_term_lower = search.strip().lower()
-            # Fetch a larger set for filtering
-            query = query.limit(fetch_size)
-            result = query.execute()
-            all_campaigns = result.data if hasattr(result, 'data') else []
-            
-            # Filter in Python for company name or URL
-            filtered_campaigns = [
-                c for c in all_campaigns
-                if (c.get("company", "").lower().find(search_term_lower) >= 0 or
-                    (c.get("url", "") or "").lower().find(search_term_lower) >= 0)
-            ]
-            
-            # Calculate total count (approximate for search)
-            total_count = len(filtered_campaigns)
-            
-            # Apply pagination
-            offset = (page - 1) * page_size
-            campaigns = filtered_campaigns[offset:offset + page_size]
-            total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
-        else:
-            # No search - use normal pagination
-            offset = (page - 1) * page_size
-            query = query.range(offset, offset + page_size - 1)
-            
-            result = query.execute()
-            campaigns = result.data if hasattr(result, 'data') else []
-            total_count = result.count if hasattr(result, 'count') else len(campaigns)
-            total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
+        # Apply pagination
+        offset = (page - 1) * page_size if page > 0 else 0
+        query = query.offset(offset).limit(page_size)
+        
+        # Execute query
+        result = supabase.db.execute(query)
+        campaigns = [dict(row._mapping) for row in result]
+        
+        total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
         
         return {
             "items": campaigns,
@@ -866,33 +775,45 @@ async def get_campaign_rankings(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     page: Optional[int] = Query(1, description="Page number (1-indexed)"),
-    page_size: Optional[int] = Query(50, description="Number of records per page")
+    page_size: Optional[int] = Query(50, description="Number of records per page"),
+    db: Session = Depends(get_db)
 ):
     """Get campaign rankings for a specific campaign with pagination"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        query = supabase.client.table("agency_analytics_campaign_rankings").select("*", count="exact").eq("campaign_id", campaign_id)
+        # Build query using SQLAlchemy Core
+        rankings_table = supabase._get_table("agency_analytics_campaign_rankings")
+        query = select(rankings_table).where(rankings_table.c.campaign_id == campaign_id)
         
         if start_date:
-            query = query.gte("date", start_date)
+            query = query.where(rankings_table.c.date >= start_date)
         if end_date:
-            query = query.lte("date", end_date)
+            query = query.where(rankings_table.c.date <= end_date)
         
-        query = query.order("date", desc=False)
+        # Get total count
+        count_query = select(func.count()).select_from(query.alias())
+        total_count = supabase.db.execute(count_query).scalar()
+        
+        # Order by date ascending
+        query = query.order_by(rankings_table.c.date.asc())
         
         # Apply pagination
-        offset = (page - 1) * page_size
-        query = query.range(offset, offset + page_size - 1)
+        offset = (page - 1) * page_size if page > 0 else 0
+        query = query.offset(offset).limit(page_size)
         
-        result = query.execute()
-        rankings = result.data if hasattr(result, 'data') else []
-        total_count = result.count if hasattr(result, 'count') else len(rankings)
+        # Execute query
+        result = supabase.db.execute(query)
+        rankings = [dict(row._mapping) for row in result]
+        
         total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
         
-        # Get campaign info
-        campaign_result = supabase.client.table("agency_analytics_campaigns").select("*").eq("id", campaign_id).execute()
-        campaign = campaign_result.data[0] if campaign_result.data else None
+        # Get campaign info using SQLAlchemy Core
+        campaigns_table = supabase._get_table("agency_analytics_campaigns")
+        campaign_query = select(campaigns_table).where(campaigns_table.c.id == campaign_id).limit(1)
+        campaign_result = supabase.db.execute(campaign_query)
+        campaign_row = campaign_result.first()
+        campaign = dict(campaign_row._mapping) if campaign_row else None
         
         return {
             "campaign": campaign,
@@ -911,22 +832,25 @@ async def get_campaign_rankings(
 async def get_all_rankings(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
-    limit: int = Query(1000, description="Number of records to return")
+    limit: int = Query(1000, description="Number of records to return"),
+    db: Session = Depends(get_db)
 ):
     """Get all campaign rankings"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        query = supabase.client.table("agency_analytics_campaign_rankings").select("*")
+        # Build query using SQLAlchemy Core
+        table = supabase._get_table("agency_analytics_campaign_rankings")
+        query = select(table)
         
         if start_date:
-            query = query.gte("date", start_date)
+            query = query.where(table.c.date >= start_date)
         if end_date:
-            query = query.lte("date", end_date)
+            query = query.where(table.c.date <= end_date)
         
-        query = query.order("date", desc=True).limit(limit)
-        result = query.execute()
-        rankings = result.data if hasattr(result, 'data') else []
+        query = query.order_by(table.c.date.desc()).limit(limit)
+        result = supabase.db.execute(query)
+        rankings = [dict(row._mapping) for row in result]
         
         return {
             "rankings": rankings,
@@ -939,15 +863,20 @@ async def get_all_rankings(
 @router.get("/data/agency-analytics/campaign/{campaign_id}/keywords")
 async def get_campaign_keywords(
     campaign_id: int,
-    limit: int = Query(1000, description="Number of keywords to return")
+    limit: int = Query(1000, description="Number of keywords to return"),
+    db: Session = Depends(get_db)
 ):
     """Get keywords for a specific campaign"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        query = supabase.client.table("agency_analytics_keywords").select("*").eq("campaign_id", campaign_id).order("id", desc=True).limit(limit)
-        result = query.execute()
-        keywords = result.data if hasattr(result, 'data') else []
+        # Build query using SQLAlchemy Core
+        table = supabase._get_table("agency_analytics_keywords")
+        query = select(table).where(table.c.campaign_id == campaign_id)
+        query = query.order_by(table.c.id.desc()).limit(limit)
+        
+        result = supabase.db.execute(query)
+        keywords = [dict(row._mapping) for row in result]
         
         return {
             "campaign_id": campaign_id,
@@ -961,20 +890,23 @@ async def get_campaign_keywords(
 @router.get("/data/agency-analytics/keywords")
 async def get_all_keywords(
     campaign_id: Optional[int] = Query(None, description="Filter by campaign ID"),
-    limit: int = Query(1000, description="Number of keywords to return")
+    limit: int = Query(1000, description="Number of keywords to return"),
+    db: Session = Depends(get_db)
 ):
     """Get all keywords"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        query = supabase.client.table("agency_analytics_keywords").select("*")
+        # Build query using SQLAlchemy Core
+        table = supabase._get_table("agency_analytics_keywords")
+        query = select(table)
         
         if campaign_id:
-            query = query.eq("campaign_id", campaign_id)
+            query = query.where(table.c.campaign_id == campaign_id)
         
-        query = query.order("id", desc=True).limit(limit)
-        result = query.execute()
-        keywords = result.data if hasattr(result, 'data') else []
+        query = query.order_by(table.c.id.desc()).limit(limit)
+        result = supabase.db.execute(query)
+        keywords = [dict(row._mapping) for row in result]
         
         return {
             "keywords": keywords,
@@ -989,22 +921,25 @@ async def get_keyword_rankings(
     keyword_id: int,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
-    limit: int = Query(1000, description="Number of records to return")
+    limit: int = Query(1000, description="Number of records to return"),
+    db: Session = Depends(get_db)
 ):
     """Get keyword rankings for a specific keyword"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        query = supabase.client.table("agency_analytics_keyword_rankings").select("*").eq("keyword_id", keyword_id)
+        # Build query using SQLAlchemy Core
+        table = supabase._get_table("agency_analytics_keyword_rankings")
+        query = select(table).where(table.c.keyword_id == keyword_id)
         
         if start_date:
-            query = query.gte("date", start_date)
+            query = query.where(table.c.date >= start_date)
         if end_date:
-            query = query.lte("date", end_date)
+            query = query.where(table.c.date <= end_date)
         
-        query = query.order("date", desc=False).limit(limit)
-        result = query.execute()
-        rankings = result.data if hasattr(result, 'data') else []
+        query = query.order_by(table.c.date.asc()).limit(limit)
+        result = supabase.db.execute(query)
+        rankings = [dict(row._mapping) for row in result]
         
         return {
             "keyword_id": keyword_id,
@@ -1016,13 +951,17 @@ async def get_keyword_rankings(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/data/agency-analytics/keyword/{keyword_id}/ranking-summary")
-async def get_keyword_ranking_summary(keyword_id: int):
+async def get_keyword_ranking_summary(keyword_id: int, db: Session = Depends(get_db)):
     """Get keyword ranking summary (latest + change)"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        result = supabase.client.table("agency_analytics_keyword_ranking_summaries").select("*").eq("keyword_id", keyword_id).execute()
-        summary = result.data[0] if result.data else None
+        # Build query using SQLAlchemy Core
+        table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
+        query = select(table).where(table.c.keyword_id == keyword_id).limit(1)
+        result = supabase.db.execute(query)
+        row = result.first()
+        summary = dict(row._mapping) if row else None
         
         return {
             "keyword_id": keyword_id,
@@ -1035,15 +974,19 @@ async def get_keyword_ranking_summary(keyword_id: int):
 @router.get("/data/agency-analytics/campaign/{campaign_id}/keyword-rankings")
 async def get_campaign_keyword_rankings(
     campaign_id: int,
-    limit: int = Query(1000, description="Number of records to return")
+    limit: int = Query(1000, description="Number of records to return"),
+    db: Session = Depends(get_db)
 ):
     """Get all keyword rankings for a campaign"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        query = supabase.client.table("agency_analytics_keyword_rankings").select("*").eq("campaign_id", campaign_id).order("date", desc=True).limit(limit)
-        result = query.execute()
-        rankings = result.data if hasattr(result, 'data') else []
+        # Build query using SQLAlchemy Core
+        table = supabase._get_table("agency_analytics_keyword_rankings")
+        query = select(table).where(table.c.campaign_id == campaign_id)
+        query = query.order_by(table.c.date.desc()).limit(limit)
+        result = supabase.db.execute(query)
+        rankings = [dict(row._mapping) for row in result]
         
         return {
             "campaign_id": campaign_id,
@@ -1059,45 +1002,38 @@ async def get_campaign_keyword_ranking_summaries(
     campaign_id: int,
     page: Optional[int] = Query(1, description="Page number (1-indexed)"),
     page_size: Optional[int] = Query(50, description="Number of records per page"),
-    search: Optional[str] = Query(None, description="Search by keyword phrase")
+    search: Optional[str] = Query(None, description="Search by keyword phrase"),
+    db: Session = Depends(get_db)
 ):
     """Get keyword ranking summaries for a campaign with pagination and search"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        query = supabase.client.table("agency_analytics_keyword_ranking_summaries").select("*", count="exact").eq("campaign_id", campaign_id)
+        # Build query using SQLAlchemy Core
+        table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
+        query = select(table).where(table.c.campaign_id == campaign_id)
         
         # Apply search filter if provided
         if search and search.strip():
-            search_term = search.strip().lower()
-            # Fetch a larger set for filtering (since Supabase doesn't support case-insensitive search directly)
-            fetch_size = page_size * 10
-            temp_result = query.limit(fetch_size).execute()
-            all_summaries = temp_result.data if hasattr(temp_result, 'data') else []
-            
-            # Filter in Python for keyword phrase
-            filtered_summaries = [
-                s for s in all_summaries
-                if (s.get("keyword_phrase", "") or "").lower().find(search_term) >= 0
-            ]
-            
-            # Calculate total count
-            total_count = len(filtered_summaries)
-            
-            # Apply pagination
-            offset = (page - 1) * page_size
-            summaries = filtered_summaries[offset:offset + page_size]
-            total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
-        else:
-            # No search - use normal pagination
-            query = query.order("keyword_id", desc=True)
-            offset = (page - 1) * page_size
-            query = query.range(offset, offset + page_size - 1)
-            
-            result = query.execute()
-            summaries = result.data if hasattr(result, 'data') else []
-            total_count = result.count if hasattr(result, 'count') else len(summaries)
-            total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
+            search_term = f"%{search.strip()}%"
+            query = query.where(table.c.keyword_phrase.ilike(search_term))
+        
+        # Get total count
+        count_query = select(func.count()).select_from(query.alias())
+        total_count = supabase.db.execute(count_query).scalar()
+        
+        # Apply ordering
+        query = query.order_by(table.c.keyword_phrase.asc())
+        
+        # Apply pagination
+        offset = (page - 1) * page_size if page > 0 else 0
+        query = query.offset(offset).limit(page_size)
+        
+        # Execute query
+        result = supabase.db.execute(query)
+        summaries = [dict(row._mapping) for row in result]
+        
+        total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
         
         return {
             "campaign_id": campaign_id,
@@ -1109,17 +1045,18 @@ async def get_campaign_keyword_ranking_summaries(
             "total_pages": total_pages
         }
     except Exception as e:
-        logger.error(f"Error fetching campaign keyword ranking summaries: {str(e)}")
+        logger.error(f"Error fetching keyword ranking summaries: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/data/agency-analytics/campaign-brands")
 async def get_campaign_brand_links(
     campaign_id: Optional[int] = Query(None, description="Filter by campaign ID"),
-    brand_id: Optional[int] = Query(None, description="Filter by brand ID")
+    brand_id: Optional[int] = Query(None, description="Filter by brand ID"),
+    db: Session = Depends(get_db)
 ):
     """Get campaign-brand links"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         links = supabase.get_campaign_brand_links(campaign_id, brand_id)
         
         return {
@@ -1135,11 +1072,12 @@ async def create_campaign_brand_link(
     campaign_id: int,
     brand_id: int,
     match_method: str = "manual",
-    match_confidence: str = "manual"
+    match_confidence: str = "manual",
+    db: Session = Depends(get_db)
 ):
     """Manually link a campaign to a brand"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         supabase.link_campaign_to_brand(campaign_id, brand_id, match_method, match_confidence)
         
         return {
@@ -1151,29 +1089,35 @@ async def create_campaign_brand_link(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/data/agency-analytics/brand/{brand_id}/campaigns")
-async def get_brand_campaigns(brand_id: int):
+async def get_brand_campaigns(brand_id: int, db: Session = Depends(get_db)):
     """Get all campaigns linked to a brand"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
         # Get links for this brand (returns empty list if table doesn't exist)
         links = supabase.get_campaign_brand_links(brand_id=brand_id)
         
-        # Get campaign details
+        # Get campaign details using SQLAlchemy Core
         campaigns = []
-        for link in links:
-            try:
-                campaign_result = supabase.client.table("agency_analytics_campaigns").select("*").eq("id", link["campaign_id"]).execute()
-                if campaign_result.data:
-                    campaign = campaign_result.data[0]
+        if links:
+            campaign_ids = [link["campaign_id"] for link in links]
+            campaigns_table = supabase._get_table("agency_analytics_campaigns")
+            query = select(campaigns_table).where(campaigns_table.c.id.in_(campaign_ids))
+            result = supabase.db.execute(query)
+            
+            for row in result:
+                try:
+                    campaign = dict(row._mapping)
+                    # Find matching link info
+                    link = next((l for l in links if l["campaign_id"] == campaign["id"]), {})
                     campaign["link_info"] = {
                         "match_method": link.get("match_method"),
                         "match_confidence": link.get("match_confidence")
                     }
                     campaigns.append(campaign)
-            except Exception as e:
-                logger.warning(f"Error fetching campaign {link.get('campaign_id')}: {str(e)}")
-                continue
+                except Exception as e:
+                    logger.warning(f"Error processing campaign: {str(e)}")
+                    continue
         
         return {
             "brand_id": brand_id,
@@ -1189,19 +1133,16 @@ async def get_brand_campaigns(brand_id: int):
 # =====================================================
 
 @router.get("/data/reporting-dashboard/{brand_id}/diagnostics")
-async def get_reporting_dashboard_diagnostics(brand_id: int):
+async def get_reporting_dashboard_diagnostics(brand_id: int, db: Session = Depends(get_db)):
     """Get diagnostic information about brand configuration for reporting dashboard"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Get brand info
-        brand_result = supabase.client.table("brands").select("*").eq("id", brand_id).execute()
-        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        # Get brand info using SQLAlchemy
+        brand = supabase.get_brand_by_id(brand_id)
         
-        if not brands:
+        if not brand:
             raise HTTPException(status_code=404, detail="Brand not found")
-        
-        brand = brands[0]
         
         diagnostics = {
             "brand_id": brand_id,
@@ -1225,15 +1166,17 @@ async def get_reporting_dashboard_diagnostics(brand_id: int):
             }
         }
         
-        # Check Agency Analytics
+        # Check Agency Analytics using SQLAlchemy Core
         try:
-            campaign_links_result = supabase.client.table("agency_analytics_campaign_brands").select("*").eq("brand_id", brand_id).execute()
-            campaign_links = campaign_links_result.data if hasattr(campaign_links_result, 'data') else []
+            campaign_links = supabase.get_campaign_brand_links(brand_id=brand_id)
             
             if campaign_links:
                 campaign_ids = [link["campaign_id"] for link in campaign_links]
-                campaigns_result = supabase.client.table("agency_analytics_campaigns").select("*").in_("id", campaign_ids).execute()
-                campaigns = campaigns_result.data if hasattr(campaigns_result, 'data') else []
+                # Get campaigns using SQLAlchemy Core
+                campaigns_table = supabase._get_table("agency_analytics_campaigns")
+                query = select(campaigns_table).where(campaigns_table.c.id.in_(campaign_ids))
+                result = supabase.db.execute(query)
+                campaigns = [dict(row._mapping) for row in result]
                 
                 diagnostics["agency_analytics"]["configured"] = True
                 diagnostics["agency_analytics"]["campaigns_linked"] = len(campaign_links)
@@ -1244,13 +1187,13 @@ async def get_reporting_dashboard_diagnostics(brand_id: int):
         except Exception as e:
             diagnostics["agency_analytics"]["message"] = f"Error checking Agency Analytics: {str(e)}"
         
-        # Check Scrunch
+        # Check Scrunch using SQLAlchemy
         try:
-            prompts_result = supabase.client.table("prompts").select("*").eq("brand_id", brand_id).execute()
-            prompts = prompts_result.data if hasattr(prompts_result, 'data') else []
+            prompts_result = supabase.get_prompts(brand_id=brand_id, limit=None, offset=None)
+            prompts = prompts_result.get("items", [])
             
-            responses_result = supabase.client.table("responses").select("*").eq("brand_id", brand_id).execute()
-            responses = responses_result.data if hasattr(responses_result, 'data') else []
+            responses_result = supabase.get_responses(brand_id=brand_id, limit=None, offset=None)
+            responses = responses_result.get("items", [])
             
             if prompts or responses:
                 diagnostics["scrunch"]["configured"] = True
@@ -1271,7 +1214,9 @@ async def get_reporting_dashboard_diagnostics(brand_id: int):
 async def get_reporting_dashboard(
     brand_id: int,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)")
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    client_id: Optional[int] = None,
+    db: Session = Depends(get_db)
 ):
     """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard"""
     import time
@@ -1280,19 +1225,35 @@ async def get_reporting_dashboard(
     
     try:
         init_start = time.time()
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         section_times["init"] = time.time() - init_start
         
-        # Get brand info
+        # CLIENT-CENTRIC APPROACH: All data queries use client_id
+        # Brand is only used as a reference (scrunch_brand_id) for Scrunch queries
         brand_start = time.time()
-        brand_result = supabase.client.table("brands").select("*").eq("id", brand_id).execute()
-        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        client = None
+        brand = None
+        scrunch_brand_id = None
+        
+        if client_id:
+            # Get client directly - this is the primary entity
+            client = supabase.get_client_by_id(client_id)
+            if not client:
+                raise HTTPException(status_code=404, detail=f"Client {client_id} not found")
+            
+            # Get scrunch_brand_id from client for Scrunch queries only
+            scrunch_brand_id = client.get("scrunch_brand_id")
+            logger.info(f"Using client-centric approach: client_id={client_id}, scrunch_brand_id={scrunch_brand_id}, ga4_property_id={client.get('ga4_property_id')}")
+        else:
+            # Fallback: if no client_id, try to get brand (for backward compatibility)
+            brand = supabase.get_brand_by_id(brand_id)
+            if not brand:
+                raise HTTPException(status_code=404, detail="Brand not found")
+            # For backward compatibility, we still need brand_id for some queries
+            # But ideally, all endpoints should provide client_id
+            logger.warning(f"Using brand_id={brand_id} without client_id. Consider migrating to client-centric endpoints.")
+        
         section_times["get_brand"] = time.time() - brand_start
-        
-        if not brands:
-            raise HTTPException(status_code=404, detail="Brand not found")
-        
-        brand = brands[0]
         
         # Set default date range
         if not start_date:
@@ -1312,7 +1273,10 @@ async def get_reporting_dashboard(
                 )
             
             # Log date range being used
-            logger.info(f"Fetching reporting dashboard for brand {brand_id} with date range: {start_date} to {end_date}")
+            if client_id:
+                logger.info(f"Fetching reporting dashboard for client {client_id} with date range: {start_date} to {end_date}")
+            else:
+                logger.info(f"Fetching reporting dashboard for brand {brand_id} with date range: {start_date} to {end_date}")
         except ValueError as e:
             raise HTTPException(
                 status_code=400,
@@ -1326,9 +1290,18 @@ async def get_reporting_dashboard(
         ga4_kpis = {}
         ga4_errors = []
         prev_traffic_overview = None  # Initialize to avoid scope issues
-        if brand.get("ga4_property_id"):
+        
+        # Get GA4 property ID from client (primary) or brand (fallback)
+        if client_id and client:
+            ga4_property_id = client.get("ga4_property_id")
+            logger.info(f"GA4 check (client-centric): client_id={client_id}, ga4_property_id={ga4_property_id}")
+        else:
+            ga4_property_id = brand.get("ga4_property_id") if brand else None
+            logger.info(f"GA4 check (brand fallback): brand_id={brand_id}, ga4_property_id={ga4_property_id}")
+        
+        if ga4_property_id:
             try:
-                property_id = brand["ga4_property_id"]
+                property_id = ga4_property_id
                 
                 # First, try to get stored KPI snapshot (for 30-day periods)
                 # Check if the requested date range is approximately 30 days
@@ -1340,14 +1313,17 @@ async def get_reporting_dashboard(
                 use_stored_snapshot = False
                 if 28 <= period_duration <= 32:  # Allow some flexibility for 30-day periods
                     # Try to get snapshot that matches the requested date range
-                    kpi_snapshot = supabase.get_ga4_kpi_snapshot_by_date_range(brand_id, start_date, end_date)
+                    # Use client_id if available, otherwise use brand_id for backward compatibility
+                    query_brand_id = scrunch_brand_id if client_id else brand_id
+                    kpi_snapshot = supabase.get_ga4_kpi_snapshot_by_date_range(query_brand_id, start_date, end_date, client_id=client_id)
                     if kpi_snapshot:
                         use_stored_snapshot = True
                         logger.info(f"[GA4 KPI] Using stored KPI snapshot for brand {brand_id}, period_end_date: {kpi_snapshot['period_end_date']}, period_start_date: {kpi_snapshot['period_start_date']}")
                     else:
                         # Fallback: try to get latest snapshot if no exact match found
                         # This handles cases where data might be slightly out of sync
-                        kpi_snapshot = supabase.get_latest_ga4_kpi_snapshot(brand_id)
+                        query_brand_id = scrunch_brand_id if client_id else brand_id
+                        kpi_snapshot = supabase.get_latest_ga4_kpi_snapshot(query_brand_id, client_id=client_id)
                         if kpi_snapshot:
                             snapshot_start_dt = datetime.strptime(kpi_snapshot["period_start_date"], "%Y-%m-%d")
                             snapshot_end_dt = datetime.strptime(kpi_snapshot["period_end_date"], "%Y-%m-%d")
@@ -1440,7 +1416,9 @@ async def get_reporting_dashboard(
                 else:
                     # Try to get data from stored daily records first (for any date range)
                     logger.info(f"[GA4 STORED DATA] Attempting to fetch from stored daily records for date range: {start_date} to {end_date}")
-                    traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(brand_id, property_id, start_date, end_date)
+                    # Use client_id for queries - brand_id is only used as fallback for Scrunch
+                    query_brand_id = scrunch_brand_id if client_id else brand_id
+                    traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
                     # prev_traffic_overview already initialized at the start of GA4 section
                     
                     if traffic_overview:
@@ -1451,7 +1429,8 @@ async def get_reporting_dashboard(
                         period_duration = (end_dt - start_dt).days + 1
                         prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
                         prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
-                        prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(brand_id, property_id, prev_start, prev_end)
+                        query_brand_id = scrunch_brand_id if client_id else brand_id
+                        prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, prev_start, prev_end, client_id=client_id)
                         if prev_traffic_overview:
                             logger.info(f"[GA4 STORED DATA] Successfully loaded previous period from stored daily records")
                         else:
@@ -1639,11 +1618,17 @@ async def get_reporting_dashboard(
         agency_errors = []
         campaign_links = []  # Initialize to avoid scope issues
         try:
-            # Get campaigns linked to this brand
-            campaign_links_result = supabase.client.table("agency_analytics_campaign_brands").select("*").eq("brand_id", brand_id).execute()
-            campaign_links = campaign_links_result.data if hasattr(campaign_links_result, 'data') else []
-            
-            logger.info(f"Found {len(campaign_links)} campaign links for brand {brand_id}")
+            # CLIENT-CENTRIC: Get campaigns linked to client, not brand
+            if client_id:
+                # Get campaigns directly linked to client
+                client_campaigns = supabase.get_client_campaigns(client_id)
+                # Convert to same format as brand links for compatibility
+                campaign_links = [{"campaign_id": c["id"]} for c in client_campaigns]
+                logger.info(f"Found {len(campaign_links)} campaigns linked to client {client_id}")
+            else:
+                # Fallback: get campaigns linked to brand (for backward compatibility)
+                campaign_links = supabase.get_campaign_brand_links(brand_id=brand_id)
+                logger.info(f"Found {len(campaign_links)} campaign links for brand {brand_id} (fallback)")
             
             if campaign_links:
                 campaign_ids = [link["campaign_id"] for link in campaign_links]
@@ -1658,15 +1643,11 @@ async def get_reporting_dashboard(
                 ranking_change_count = 0
                 
                 for campaign_id in campaign_ids:
-                    # Query keyword ranking summaries - get all summaries for the campaign
-                    # Summaries represent the latest state of each keyword, so we get all summaries
-                    # The summaries table has one row per keyword with the most recent data
-                    summaries_query = supabase.client.table("agency_analytics_keyword_ranking_summaries").select("*").eq("campaign_id", campaign_id)
-                    
-                    # Get all summaries - they represent the current state of keywords
-                    # We don't filter by date since summaries are the latest snapshot
-                    summaries_result = summaries_query.execute()
-                    summaries = summaries_result.data if hasattr(summaries_result, 'data') else []
+                    # Query keyword ranking summaries using SQLAlchemy Core
+                    summaries_table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
+                    query = select(summaries_table).where(summaries_table.c.campaign_id == campaign_id)
+                    result = supabase.db.execute(query)
+                    summaries = [dict(row._mapping) for row in result]
                     
                     logger.info(f"Found {len(summaries)} keyword summaries for campaign {campaign_id}")
                     
@@ -1711,9 +1692,12 @@ async def get_reporting_dashboard(
                     # Get previous period summaries - use the same approach, get all summaries
                     # For comparison, we'll use the same summaries (they represent latest state)
                     # In a real scenario, you might want to query historical daily rankings for previous period
-                    prev_summaries_query = supabase.client.table("agency_analytics_keyword_ranking_summaries").select("*").eq("campaign_id", campaign_id)
-                    prev_summaries_result = prev_summaries_query.execute()
-                    prev_summaries = prev_summaries_result.data if hasattr(prev_summaries_result, 'data') else []
+                    summaries_table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
+                    prev_summaries_query = select(summaries_table).where(
+                        summaries_table.c.campaign_id == campaign_id
+                    )
+                    prev_summaries_result = db.execute(prev_summaries_query)
+                    prev_summaries = [dict(row._mapping) for row in prev_summaries_result]
                     
                     for summary in prev_summaries:
                         ranking = summary.get("google_ranking") or summary.get("google_mobile_ranking") or 999
@@ -1751,9 +1735,12 @@ async def get_reporting_dashboard(
                 all_keywords_rankings = []
                 for campaign_id in campaign_ids:
                     # Get all summaries for the campaign - they represent the latest state
-                    summaries_query = supabase.client.table("agency_analytics_keyword_ranking_summaries").select("*").eq("campaign_id", campaign_id)
-                    summaries_result = summaries_query.execute()
-                    summaries = summaries_result.data if hasattr(summaries_result, 'data') else []
+                    summaries_table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
+                    summaries_query = select(summaries_table).where(
+                        summaries_table.c.campaign_id == campaign_id
+                    )
+                    summaries_result = db.execute(summaries_query)
+                    summaries = [dict(row._mapping) for row in summaries_result]
                     
                     for summary in summaries:
                         keyword_phrase = summary.get("keyword_phrase") or f"Keyword {summary.get('keyword_id', 'N/A')}"
@@ -1900,106 +1887,372 @@ async def get_reporting_dashboard(
         # Chart data is already initialized above (before Scrunch AI section)
         # Continue populating chart_data with GA4 and Agency Analytics data
         
+        # NOTE: Scrunch data is now loaded via separate endpoint /data/reporting-dashboard/{brand_id}/scrunch
+        # This section is kept for backward compatibility but is skipped in the main endpoint
+        # The Scrunch section below is only executed if we're not using the separate endpoint
+        
+        # Chart data is already initialized above (before Scrunch AI section)
+        # Continue populating chart_data with GA4 and Agency Analytics data
+        
         # Get users over time (GA4)
-        if brand.get("ga4_property_id"):
+        # Use client's ga4_property_id if available, otherwise brand's
+        chart_ga4_property_id = client.get("ga4_property_id") if client_id and client else (brand.get("ga4_property_id") if brand else None)
+        if chart_ga4_property_id:
             try:
+                property_id = chart_ga4_property_id
+                
+                # Get all chart data from stored database records (NO live API calls)
+                logger.info(f"[GA4 STORED DATA] Fetching chart data from stored records for date range: {start_date} to {end_date}")
+                # Use client_id for all queries - brand_id is only used as fallback for Scrunch
+                query_brand_id = scrunch_brand_id if client_id else brand_id
+                top_pages = supabase.get_ga4_top_pages_by_date_range(query_brand_id, property_id, start_date, end_date, limit=10, client_id=client_id)
+                traffic_sources = supabase.get_ga4_traffic_sources_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
+                geographic = supabase.get_ga4_geographic_by_date_range(query_brand_id, property_id, start_date, end_date, limit=10, client_id=client_id)
+                devices = supabase.get_ga4_devices_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
+                
+                chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
+                chart_data["top_pages"] = top_pages if top_pages else []
+                chart_data["geographic_breakdown"] = geographic if geographic else []
+                chart_data["device_breakdown"] = devices if devices else []
+                
+                logger.info(f"[GA4 STORED DATA] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic)}, devices: {len(devices)}")
+                
+                # Get GA4 traffic overview for detailed metrics from stored data
+                query_brand_id = scrunch_brand_id if client_id else brand_id
+                traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
+                if traffic_overview:
+                    # Calculate previous period for change comparison based on selected date range duration
+                    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                    period_duration = (end_dt - start_dt).days + 1
+                    prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                    prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                    prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, prev_start, prev_end, client_id=client_id)
+                    
+                    if traffic_overview:
+                        # Calculate changes
+                        sessions_change = traffic_overview.get("sessionsChange", 0)
+                        engaged_sessions_change = 0
+                        avg_session_duration_change = 0
+                        engagement_rate_change = 0
+                        
+                        if prev_traffic_overview:
+                            prev_engaged_sessions = prev_traffic_overview.get("engagedSessions", 0)
+                            current_engaged_sessions = traffic_overview.get("engagedSessions", 0)
+                            if prev_engaged_sessions > 0:
+                                engaged_sessions_change = ((current_engaged_sessions - prev_engaged_sessions) / prev_engaged_sessions) * 100
+                            
+                            prev_avg_duration = prev_traffic_overview.get("averageSessionDuration", 0)
+                            current_avg_duration = traffic_overview.get("averageSessionDuration", 0)
+                            if prev_avg_duration > 0:
+                                avg_session_duration_change = ((current_avg_duration - prev_avg_duration) / prev_avg_duration) * 100
+                            
+                            prev_engagement_rate = prev_traffic_overview.get("engagementRate", 0)
+                            current_engagement_rate = traffic_overview.get("engagementRate", 0)
+                            if prev_engagement_rate > 0:
+                                engagement_rate_change = ((current_engagement_rate - prev_engagement_rate) / prev_engagement_rate) * 100
+                        
+                        chart_data["ga4_traffic_overview"] = {
+                            "sessions": traffic_overview.get("sessions", 0),
+                            "sessionsChange": sessions_change,
+                            "engagedSessions": traffic_overview.get("engagedSessions", 0),
+                            "engagedSessionsChange": engaged_sessions_change,
+                            "averageSessionDuration": traffic_overview.get("averageSessionDuration", 0),
+                            "avgSessionDurationChange": avg_session_duration_change,
+                            "engagementRate": traffic_overview.get("engagementRate", 0),
+                            "engagementRateChange": engagement_rate_change
+                        }
+                    else:
+                        logger.warning(f"[GA4 STORED DATA] No traffic overview data found in database for date range {start_date} to {end_date}")
+                
+                # Get daily metrics over time from stored data (NO live API calls)
+                logger.info(f"[GA4 STORED DATA] Fetching daily metrics from stored records")
+                daily_metrics = {}
+                prev_daily_metrics = {}
+                
+                # Calculate previous period dates
                 start_dt = datetime.strptime(start_date, "%Y-%m-%d")
                 end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-                period_duration = (end_dt - start_dt).days + 1  # Include both start and end dates
-                
-                # Previous period should be the same duration, ending the day before start_date
+                period_duration = (end_dt - start_dt).days + 1
                 prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
                 prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
-            except:
-                # Fallback to 60-day lookback if date parsing fails
-                prev_start = (datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=60)).strftime("%Y-%m-%d")
-                prev_end = (datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-            
-            # Get responses for this brand filtered by date range (current period)
-            # Only select needed columns to avoid loading large JSONB fields unnecessarily
-            responses_query = supabase.client.table("responses").select(
-                "id,brand_id,prompt_id,platform,brand_present,brand_sentiment,competitors_present,citations"
-            ).eq("brand_id", brand_id)
-            responses_query = responses_query.gte("created_at", f"{start_date}T00:00:00Z").lte("created_at", f"{end_date}T23:59:59Z")
-            
-            responses_query_start = time.time()
-            responses_result = responses_query.execute()
-            section_times["scrunch_responses_query"] = time.time() - responses_query_start
-            responses = responses_result.data if hasattr(responses_result, 'data') else []
-            
-            logger.info(f"Found {len(responses)} Scrunch responses for brand {brand_id} in date range {start_date} to {end_date} (query took {section_times.get('scrunch_responses_query', 0):.2f}s)")
-            
-            # Log response count for performance debugging
-            if len(responses) > 1000:
-                logger.warning(f"[PERFORMANCE] Large response set: {len(responses)} responses for brand {brand_id}. Consider pagination or date range limits.")
-            
-            # Get responses for previous period (for change calculation)
-            prev_responses_query = supabase.client.table("responses").select(
-                "id,brand_id,prompt_id,platform,brand_present,brand_sentiment,competitors_present,citations"
-            ).eq("brand_id", brand_id)
-            prev_responses_query = prev_responses_query.gte("created_at", f"{prev_start}T00:00:00Z").lte("created_at", f"{prev_end}T23:59:59Z")
-            
-            prev_responses_query_start = time.time()
-            prev_responses_result = prev_responses_query.execute()
-            section_times["scrunch_prev_responses_query"] = time.time() - prev_responses_query_start
-            prev_responses = prev_responses_result.data if hasattr(prev_responses_result, 'data') else []
-            
-            logger.info(f"Found {len(prev_responses)} Scrunch responses for brand {brand_id} in previous period {prev_start} to {prev_end} (query took {section_times.get('scrunch_prev_responses_query', 0):.2f}s)")
-            
-            # Get prompts for this brand to calculate top 10 prompt percentage
-            # Only select id column since we only need to count prompts
-            prompts_query = supabase.client.table("prompts").select("id").eq("brand_id", brand_id)
-            prompts_query_start = time.time()
-            prompts_result = prompts_query.execute()
-            section_times["scrunch_prompts_query"] = time.time() - prompts_query_start
-            prompts = prompts_result.data if hasattr(prompts_result, 'data') else []
-            
-            logger.info(f"Found {len(prompts)} Scrunch prompts for brand {brand_id}")
-            
-            # Check if brand has any Scrunch data at all (to determine if we should show Scrunch section)
-            # This ensures we show Scrunch section even if date range has no data
-            has_any_scrunch_data = len(responses) > 0 or len(prompts) > 0
-            logger.info(f"Brand {brand_id} Scrunch data check: responses={len(responses)}, prompts={len(prompts)}, has_any_scrunch_data={has_any_scrunch_data}")
-            if not has_any_scrunch_data:
-                # Check if brand has any Scrunch data (without date filter)
-                any_responses_query = supabase.client.table("responses").select("id").eq("brand_id", brand_id).limit(1)
-                any_responses_result = any_responses_query.execute()
-                any_responses = any_responses_result.data if hasattr(any_responses_result, 'data') else []
                 
-                any_prompts_query = supabase.client.table("prompts").select("id").eq("brand_id", brand_id).limit(1)
-                any_prompts_result = any_prompts_query.execute()
-                any_prompts = any_prompts_result.data if hasattr(any_prompts_result, 'data') else []
-                
-                logger.info(f"Brand {brand_id} checking for any Scrunch data (no date filter): any_responses={len(any_responses)}, any_prompts={len(any_prompts)}")
-                if len(any_responses) > 0 or len(any_prompts) > 0:
-                    logger.info(f"Brand {brand_id} has Scrunch data but none in date range {start_date} to {end_date}. Will show Scrunch section with zero values.")
-                    has_any_scrunch_data = True
-                else:
-                    logger.warning(f"Brand {brand_id} has no Scrunch data at all. Skipping Scrunch KPIs.")
-            
-            # Helper function to calculate metrics from responses
-            # Note: responses_list should already be filtered by brand_id, but we validate for safety
-            # OPTIMIZED: Single pass through responses to calculate all metrics
-            def calculate_scrunch_metrics(responses_list, prompts_list=None, brand_id_filter=None):
-                if not responses_list:
-                    return {
-                        "total_citations": 0,
-                        "brand_present_count": 0,
-                        "brand_presence_rate": 0,
-                        "sentiment_score": 0,
-                        "prompt_search_volume": 0,
-                        "top10_prompt_percentage": 0,
-                        "competitive_benchmarking": {
-                            "brand_visibility_percent": 0,
-                            "competitor_avg_visibility_percent": 0
-                        },
-                        "citations_by_prompt": {},
-                        "prompt_reach": {
-                            "total_prompts_tracked": 0,
-                            "prompts_with_brand": 0,
-                            "display": "Tracked prompts: 0; brand appeared in 0 of them"
+                try:
+                    # First, generate all dates in the range to ensure we have entries for all days
+                    all_dates_map = {}
+                    current_date = start_dt
+                    while current_date <= end_dt:
+                        date_str = current_date.strftime("%Y-%m-%d")
+                        date_formatted = current_date.strftime("%Y%m%d")  # YYYYMMDD format for chart
+                        all_dates_map[date_str] = date_formatted
+                        # Initialize with zeros - will be filled from actual data
+                        daily_metrics[date_str] = {
+                            "date": date_formatted,
+                            "users": 0,
+                            "sessions": 0,
+                            "new_users": 0,
+                            "conversions": 0,
+                            "revenue": 0
                         }
-                    }
+                        current_date += timedelta(days=1)
+                    
+                    # Get daily traffic overview records for current period using SQLAlchemy Core
+                    # CLIENT-CENTRIC: Use client_id when available, otherwise use brand_id
+                    traffic_table = supabase._get_table("ga4_traffic_overview")
+                    query_conditions = [
+                        traffic_table.c.property_id == property_id,
+                        traffic_table.c.date >= start_date,
+                        traffic_table.c.date <= end_date
+                    ]
+                    if client_id:
+                        query_conditions.append(traffic_table.c.client_id == client_id)
+                    else:
+                        query_conditions.append(traffic_table.c.brand_id == brand_id)
+                    daily_traffic_query = select(traffic_table).where(and_(*query_conditions)).order_by(traffic_table.c.date.asc())
+                    daily_traffic_result = db.execute(daily_traffic_query)
+                    daily_traffic_records = [dict(row._mapping) for row in daily_traffic_result]
+                    
+                    for record in daily_traffic_records:
+                        date = record.get("date")
+                        if date and date in daily_metrics:
+                            daily_metrics[date]["users"] = record.get("users", 0)
+                            daily_metrics[date]["sessions"] = record.get("sessions", 0)
+                            daily_metrics[date]["new_users"] = record.get("new_users", 0)
+                    
+                    # Get daily conversions - match to existing dates or create new entries
+                    conversions_table = supabase._get_table("ga4_daily_conversions")
+                    conv_query_conditions = [
+                        conversions_table.c.property_id == property_id,
+                        conversions_table.c.date >= start_date,
+                        conversions_table.c.date <= end_date
+                    ]
+                    if client_id:
+                        conv_query_conditions.append(conversions_table.c.client_id == client_id)
+                    else:
+                        conv_query_conditions.append(conversions_table.c.brand_id == brand_id)
+                    daily_conversions_query = select(conversions_table).where(and_(*conv_query_conditions))
+                    daily_conversions_result = db.execute(daily_conversions_query)
+                    daily_conversions_records = [dict(row._mapping) for row in daily_conversions_result]
+                    
+                    for record in daily_conversions_records:
+                        date = record.get("date")
+                        if date:
+                            if date not in daily_metrics:
+                                # Create entry if it doesn't exist (shouldn't happen, but just in case)
+                                date_formatted = date.replace("-", "") if "-" in date else date
+                                daily_metrics[date] = {
+                                    "date": date_formatted,
+                                    "users": 0,
+                                    "sessions": 0,
+                                    "new_users": 0,
+                                    "conversions": 0,
+                                    "revenue": 0
+                                }
+                            daily_metrics[date]["conversions"] = record.get("total_conversions", 0)
+                    
+                    # Get daily revenue
+                    revenue_table = supabase._get_table("ga4_revenue")
+                    rev_query_conditions = [
+                        revenue_table.c.property_id == property_id,
+                        revenue_table.c.date >= start_date,
+                        revenue_table.c.date <= end_date
+                    ]
+                    if client_id:
+                        rev_query_conditions.append(revenue_table.c.client_id == client_id)
+                    else:
+                        rev_query_conditions.append(revenue_table.c.brand_id == brand_id)
+                    daily_revenue_query = select(revenue_table).where(and_(*rev_query_conditions))
+                    daily_revenue_result = db.execute(daily_revenue_query)
+                    daily_revenue_records = [dict(row._mapping) for row in daily_revenue_result]
+                    
+                    for record in daily_revenue_records:
+                        date = record.get("date")
+                        if date:
+                            if date not in daily_metrics:
+                                date_formatted = date.replace("-", "") if "-" in date else date
+                                daily_metrics[date] = {
+                                    "date": date_formatted,
+                                    "users": 0,
+                                    "sessions": 0,
+                                    "new_users": 0,
+                                    "conversions": 0,
+                                    "revenue": 0
+                                }
+                            daily_metrics[date]["revenue"] = float(record.get("total_revenue", 0))
+                    
+                    # Generate all dates for previous period first
+                    prev_all_dates_map = {}
+                    prev_current_date = datetime.strptime(prev_start, "%Y-%m-%d")
+                    prev_end_dt = datetime.strptime(prev_end, "%Y-%m-%d")
+                    while prev_current_date <= prev_end_dt:
+                        date_str = prev_current_date.strftime("%Y-%m-%d")
+                        date_formatted = prev_current_date.strftime("%Y%m%d")
+                        prev_all_dates_map[date_str] = date_formatted
+                        # Initialize with zeros
+                        prev_daily_metrics[date_str] = {
+                            "date": date_formatted,
+                            "users": 0,
+                            "sessions": 0,
+                            "new_users": 0,
+                            "conversions": 0,
+                            "revenue": 0
+                        }
+                        prev_current_date += timedelta(days=1)
+                    
+                    # Get previous period daily metrics using SQLAlchemy Core
+                    # CLIENT-CENTRIC: Use client_id when available, otherwise use brand_id
+                    prev_query_conditions = [
+                        traffic_table.c.property_id == property_id,
+                        traffic_table.c.date >= prev_start,
+                        traffic_table.c.date <= prev_end
+                    ]
+                    if client_id:
+                        prev_query_conditions.append(traffic_table.c.client_id == client_id)
+                    else:
+                        prev_query_conditions.append(traffic_table.c.brand_id == brand_id)
+                    prev_daily_traffic_query = select(traffic_table).where(and_(*prev_query_conditions)).order_by(traffic_table.c.date.asc())
+                    prev_daily_traffic_result = db.execute(prev_daily_traffic_query)
+                    prev_daily_traffic_records = [dict(row._mapping) for row in prev_daily_traffic_result]
+                    
+                    for record in prev_daily_traffic_records:
+                        date = record.get("date")
+                        if date and date in prev_daily_metrics:
+                            prev_daily_metrics[date]["users"] = record.get("users", 0)
+                            prev_daily_metrics[date]["sessions"] = record.get("sessions", 0)
+                            prev_daily_metrics[date]["new_users"] = record.get("new_users", 0)
+                    
+                    # Get previous period conversions and revenue
+                    prev_conv_query_conditions = [
+                        conversions_table.c.property_id == property_id,
+                        conversions_table.c.date >= prev_start,
+                        conversions_table.c.date <= prev_end
+                    ]
+                    if client_id:
+                        prev_conv_query_conditions.append(conversions_table.c.client_id == client_id)
+                    else:
+                        prev_conv_query_conditions.append(conversions_table.c.brand_id == brand_id)
+                    prev_daily_conversions_query = select(conversions_table).where(and_(*prev_conv_query_conditions))
+                    prev_daily_conversions_result = db.execute(prev_daily_conversions_query)
+                    prev_daily_conversions_records = [dict(row._mapping) for row in prev_daily_conversions_result]
+                    for record in prev_daily_conversions_records:
+                        date = record.get("date")
+                        if date:
+                            if date not in prev_daily_metrics:
+                                date_formatted = date.replace("-", "") if "-" in date else date
+                                prev_daily_metrics[date] = {
+                                    "date": date_formatted,
+                                    "users": 0,
+                                    "sessions": 0,
+                                    "new_users": 0,
+                                    "conversions": 0,
+                                    "revenue": 0
+                                }
+                            prev_daily_metrics[date]["conversions"] = record.get("total_conversions", 0)
+                    
+                    prev_rev_query_conditions = [
+                        revenue_table.c.property_id == property_id,
+                        revenue_table.c.date >= prev_start,
+                        revenue_table.c.date <= prev_end
+                    ]
+                    if client_id:
+                        prev_rev_query_conditions.append(revenue_table.c.client_id == client_id)
+                    else:
+                        prev_rev_query_conditions.append(revenue_table.c.brand_id == brand_id)
+                    prev_daily_revenue_query = select(revenue_table).where(and_(*prev_rev_query_conditions))
+                    prev_daily_revenue_result = db.execute(prev_daily_revenue_query)
+                    prev_daily_revenue_records = [dict(row._mapping) for row in prev_daily_revenue_result]
+                    for record in prev_daily_revenue_records:
+                        date = record.get("date")
+                        if date:
+                            if date not in prev_daily_metrics:
+                                date_formatted = date.replace("-", "") if "-" in date else date
+                                prev_daily_metrics[date] = {
+                                    "date": date_formatted,
+                                    "users": 0,
+                                    "sessions": 0,
+                                    "new_users": 0,
+                                    "conversions": 0,
+                                    "revenue": 0
+                                }
+                            prev_daily_metrics[date]["revenue"] = float(record.get("total_revenue", 0))
+                    
+                    logger.info(f"[GA4 STORED DATA] Loaded {len(daily_metrics)} daily metrics records for current period, {len(prev_daily_metrics)} for previous period")
+                    
+                    # Combine current and previous period data
+                    if daily_metrics:
+                        ga4_daily_comparison = []
+                        prev_data_list = sorted(prev_daily_metrics.items())
+                        current_dates = sorted(daily_metrics.keys())
+                        
+                        for idx, date_str in enumerate(current_dates):
+                            current = daily_metrics[date_str]
+                            # Get corresponding previous period data by index
+                            prev_idx = idx if idx < len(prev_data_list) else len(prev_data_list) - 1
+                            previous = prev_data_list[prev_idx][1] if prev_data_list else {}
+                            
+                            ga4_daily_comparison.append({
+                                "date": current["date"],  # Already in YYYYMMDD format
+                                "current_users": current["users"],
+                                "previous_users": previous.get("users", 0),
+                                "current_sessions": current["sessions"],
+                                "previous_sessions": previous.get("sessions", 0),
+                                "current_new_users": current["new_users"],
+                                "previous_new_users": previous.get("new_users", 0),
+                                "current_conversions": current["conversions"],
+                                "previous_conversions": previous.get("conversions", 0),
+                                "current_revenue": current["revenue"],
+                                "previous_revenue": previous.get("revenue", 0)
+                            })
+                        
+                        chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                        
+                        # Keep backward compatibility - users_over_time (all days in range)
+                        users_over_time = []
+                        for date_str in sorted(daily_metrics.keys()):
+                            users_over_time.append({
+                                "date": daily_metrics[date_str]["date"],  # Already in YYYYMMDD format
+                                "users": daily_metrics[date_str]["users"]
+                            })
+                        chart_data["users_over_time"] = users_over_time
+                    else:
+                        chart_data["ga4_daily_comparison"] = []
+                        chart_data["users_over_time"] = []
+                except Exception as e:
+                    logger.warning(f"[GA4 STORED DATA] Could not fetch daily metrics from stored data: {str(e)}")
+                    chart_data["ga4_daily_comparison"] = []
+                    chart_data["users_over_time"] = []
+            except Exception as e:
+                logger.warning(f"Error fetching GA4 chart data: {str(e)}")
+        
+        # Get impressions vs clicks and top campaigns (Agency Analytics) using SQLAlchemy Core
+        try:
+            campaign_brands_table = supabase._get_table("agency_analytics_campaign_brands")
+            campaign_links_query = select(campaign_brands_table).where(
+                campaign_brands_table.c.brand_id == brand_id
+            )
+            campaign_links_result = db.execute(campaign_links_query)
+            campaign_links = [dict(row._mapping) for row in campaign_links_result]
+        except:
+            campaign_links = []
+        
+        if campaign_links:
+            # try:
+                    #     "brand_present_count": 0,
+                    #     "brand_presence_rate": 0,
+                    #     "sentiment_score": 0,
+                    #     "prompt_search_volume": 0,
+                    #     "top10_prompt_percentage": 0,
+                    #     "competitive_benchmarking": {
+                    #         "brand_visibility_percent": 0,
+                    #         "competitor_avg_visibility_percent": 0
+                    #     },
+                    #     "citations_by_prompt": {},
+                    #     "prompt_reach": {
+                    #         "total_prompts_tracked": 0,
+                    #         "prompts_with_brand": 0,
+                    #         "display": "Tracked prompts: 0; brand appeared in 0 of them"
+                    #     }
+                    # }
                 
                 # Initialize all tracking variables
                 total_citations = 0
@@ -2144,304 +2397,311 @@ async def get_reporting_dashboard(
                     "citations_by_prompt": citations_by_prompt,
                 }
             
-            # Calculate Scrunch KPIs if brand has any Scrunch data (prompts or responses)
-            # This ensures all brands with Scrunch data show the section (with zero values if no data in date range)
-            logger.info(f"Brand {brand_id} Scrunch KPI calculation: has_any_scrunch_data={has_any_scrunch_data}")
-            if has_any_scrunch_data:
-                # Calculate current period metrics (will be zero if no responses)
-                current_metrics = calculate_scrunch_metrics(responses, prompts, brand_id)
+            # # Calculate Scrunch KPIs if brand has any Scrunch data (prompts or responses)
+            # # This ensures all brands with Scrunch data show the section (with zero values if no data in date range)
+            # logger.info(f"Brand {brand_id} Scrunch KPI calculation: has_any_scrunch_data={has_any_scrunch_data}")
+            # if has_any_scrunch_data:
+            #     # Calculate current period metrics (will be zero if no responses)
+            #     current_metrics = calculate_scrunch_metrics(responses, prompts, brand_id)
                 
-                # Extract citations_by_prompt for use in chart data
-                citations_by_prompt = current_metrics.get("citations_by_prompt", {})
+            #     # Extract citations_by_prompt for use in chart data
+            #     citations_by_prompt = current_metrics.get("citations_by_prompt", {})
                 
-                # Calculate previous period metrics (will be zero if no responses)
-                prev_metrics = calculate_scrunch_metrics(prev_responses, prompts, brand_id)
+            #     # Calculate previous period metrics (will be zero if no responses)
+            #     prev_metrics = calculate_scrunch_metrics(prev_responses, prompts, brand_id)
                 
-                # Calculate percentage changes
-                # Each KPI is compared to its own previous value
-                def calculate_change(current, previous, metric_name=""):
-                    # If both are zero, no change
-                    if current == 0 and previous == 0:
-                        return 0.0
+            #     # Calculate percentage changes
+            #     # Each KPI is compared to its own previous value
+            #     def calculate_change(current, previous, metric_name=""):
+            #         # If both are zero, no change
+            #         if current == 0 and previous == 0:
+            #             return 0.0
                     
-                    # If previous is zero but current has value
-                    # This means the metric appeared for the first time
-                    if previous == 0 and current > 0:
-                        # Return a large positive change to indicate new metric
-                        # But use a consistent value so all new metrics show the same
-                        return 100.0  # Indicates new metric appeared
+            #         # If previous is zero but current has value
+            #         # This means the metric appeared for the first time
+            #         if previous == 0 and current > 0:
+            #             # Return a large positive change to indicate new metric
+            #             # But use a consistent value so all new metrics show the same
+            #             return 100.0  # Indicates new metric appeared
                     
-                    # If current is zero but previous had value, show 100% decrease
-                    if current == 0 and previous > 0:
-                        return -100.0
+            #         # If current is zero but previous had value, show 100% decrease
+            #         if current == 0 and previous > 0:
+            #             return -100.0
                     
-                    # Normal calculation when both have values
-                    # This is where each KPI gets its unique change percentage
-                    if previous > 0:
-                        change = ((current - previous) / previous) * 100
-                        return change
+            #         # Normal calculation when both have values
+            #         # This is where each KPI gets its unique change percentage
+            #         if previous > 0:
+            #             change = ((current - previous) / previous) * 100
+            #             return change
                     
-                    return 0.0
+            #         return 0.0
                 
-                # NOTE: influencer_reach, engagement_rate, total_interactions, cost_per_engagement are NOT calculated
-                # as they require assumptions. Only 100% accurate source data KPIs are calculated.
-                total_citations_change = calculate_change(current_metrics["total_citations"], prev_metrics["total_citations"], "total_citations")
-                brand_presence_rate_change = calculate_change(current_metrics["brand_presence_rate"], prev_metrics["brand_presence_rate"], "brand_presence_rate")
-                sentiment_score_change = calculate_change(current_metrics["sentiment_score"], prev_metrics["sentiment_score"], "sentiment_score")
-                top10_prompt_change = calculate_change(current_metrics["top10_prompt_percentage"], prev_metrics["top10_prompt_percentage"], "top10_prompt_percentage")
-                prompt_search_volume_change = calculate_change(current_metrics["prompt_search_volume"], prev_metrics["prompt_search_volume"], "prompt_search_volume")
+            #     # NOTE: influencer_reach, engagement_rate, total_interactions, cost_per_engagement are NOT calculated
+            #     # as they require assumptions. Only 100% accurate source data KPIs are calculated.
+            #     total_citations_change = calculate_change(current_metrics["total_citations"], prev_metrics["total_citations"], "total_citations")
+            #     brand_presence_rate_change = calculate_change(current_metrics["brand_presence_rate"], prev_metrics["brand_presence_rate"], "brand_presence_rate")
+            #     sentiment_score_change = calculate_change(current_metrics["sentiment_score"], prev_metrics["sentiment_score"], "sentiment_score")
+            #     top10_prompt_change = calculate_change(current_metrics["top10_prompt_percentage"], prev_metrics["top10_prompt_percentage"], "top10_prompt_percentage")
+            #     prompt_search_volume_change = calculate_change(current_metrics["prompt_search_volume"], prev_metrics["prompt_search_volume"], "prompt_search_volume")
                 
-                # Calculate changes for new KPIs
-                competitive_current = current_metrics.get("competitive_benchmarking", {})
-                competitive_prev = prev_metrics.get("competitive_benchmarking", {})
-                brand_visibility_change = calculate_change(
-                    competitive_current.get("brand_visibility_percent", 0),
-                    competitive_prev.get("brand_visibility_percent", 0),
-                    "brand_visibility"
-                )
-                competitor_avg_change = calculate_change(
-                    competitive_current.get("competitor_avg_visibility_percent", 0),
-                    competitive_prev.get("competitor_avg_visibility_percent", 0),
-                    "competitor_avg_visibility"
-                )
+            #     # Calculate changes for new KPIs
+            #     competitive_current = current_metrics.get("competitive_benchmarking", {})
+            #     competitive_prev = prev_metrics.get("competitive_benchmarking", {})
+            #     brand_visibility_change = calculate_change(
+            #         competitive_current.get("brand_visibility_percent", 0),
+            #         competitive_prev.get("brand_visibility_percent", 0),
+            #         "brand_visibility"
+            #     )
+            #     competitor_avg_change = calculate_change(
+            #         competitive_current.get("competitor_avg_visibility_percent", 0),
+            #         competitive_prev.get("competitor_avg_visibility_percent", 0),
+            #         "competitor_avg_visibility"
+            #     )
                 
-                # NOTE: influencer_reach, total_interactions, engagement_rate, cost_per_engagement
-                # are NOT included as they require assumptions. Only 100% accurate source data KPIs are included.
-                scrunch_kpis = {
-                    "total_citations": {
-                        "value": int(current_metrics["total_citations"]),
-                        "change": round(total_citations_change, 2),
-                        "source": "Scrunch",
-                        "label": "Total Citations",
-                        "icon": "Link",
-                        "format": "number"
-                    },
-                    "brand_presence_rate": {
-                        "value": round(current_metrics["brand_presence_rate"], 1),
-                        "change": round(brand_presence_rate_change, 2),
-                        "source": "Scrunch",
-                        "label": "Brand Presence Rate",
-                        "icon": "CheckCircle",
-                        "format": "percentage"
-                    },
-                    "brand_sentiment_score": {
-                        "value": round(current_metrics["sentiment_score"], 1),
-                        "change": round(sentiment_score_change, 2),
-                        "source": "Scrunch",
-                        "label": "Brand Sentiment Score",
-                        "icon": "SentimentSatisfied",
-                        "format": "number"
-                    },
-                    # NOTE: scrunch_engagement_rate, total_interactions, cost_per_engagement are NOT included
-                    # as they require assumptions. Only 100% accurate source data KPIs are included.
-                    "top10_prompt_percentage": {
-                        "value": round(current_metrics["top10_prompt_percentage"], 1),
-                        "change": round(top10_prompt_change, 2),
-                        "source": "Scrunch",
-                        "label": "Top 10 Prompt",
-                        "icon": "Article",
-                        "format": "percentage"
-                    },
-                    "prompt_search_volume": {
-                        "value": current_metrics["prompt_search_volume"],
-                        "change": round(prompt_search_volume_change, 2),
-                        "source": "Scrunch",
-                        "label": "Prompt Search Volume",
-                        "icon": "TrendingUp",
-                        "format": "number"
-                    },
-                    # New KPIs
-                    "competitive_benchmarking": {
-                        "value": {
-                            "brand_visibility_percent": round(competitive_current.get("brand_visibility_percent", 0), 1),
-                            "competitor_avg_visibility_percent": round(competitive_current.get("competitor_avg_visibility_percent", 0), 1)
-                        },
-                        "change": {
-                            "brand_visibility": round(brand_visibility_change, 2),
-                            "competitor_avg_visibility": round(competitor_avg_change, 2)
-                        },
-                        "source": "Scrunch",
-                        "label": "Competitive Benchmarking",
-                        "icon": "BarChart",
-                        "format": "custom",
-                        "display": f"Your brand's AI visibility: {round(competitive_current.get('brand_visibility_percent', 0), 1)}% vs competitor average: {round(competitive_current.get('competitor_avg_visibility_percent', 0), 1)}%"
-                    },
-                    "prompt_reach": {
-                        "value": current_metrics.get("prompt_reach", {}),
-                        "change": None,  # Not calculating change for this metric
-                        "source": "Scrunch",
-                        "label": "Prompt Reach",
-                        "icon": "Article",
-                        "format": "custom"
-                    }
-                }
+            #     # NOTE: influencer_reach, total_interactions, engagement_rate, cost_per_engagement
+            #     # are NOT included as they require assumptions. Only 100% accurate source data KPIs are included.
+            #     scrunch_kpis = {
+            #         "total_citations": {
+            #             "value": int(current_metrics["total_citations"]),
+            #             "change": round(total_citations_change, 2),
+            #             "source": "Scrunch",
+            #             "label": "Total Citations",
+            #             "icon": "Link",
+            #             "format": "number"
+            #         },
+            #         "brand_presence_rate": {
+            #             "value": round(current_metrics["brand_presence_rate"], 1),
+            #             "change": round(brand_presence_rate_change, 2),
+            #             "source": "Scrunch",
+            #             "label": "Brand Presence Rate",
+            #             "icon": "CheckCircle",
+            #             "format": "percentage"
+            #         },
+            #         "brand_sentiment_score": {
+            #             "value": round(current_metrics["sentiment_score"], 1),
+            #             "change": round(sentiment_score_change, 2),
+            #             "source": "Scrunch",
+            #             "label": "Brand Sentiment Score",
+            #             "icon": "SentimentSatisfied",
+            #             "format": "number"
+            #         },
+            #         # NOTE: scrunch_engagement_rate, total_interactions, cost_per_engagement are NOT included
+            #         # as they require assumptions. Only 100% accurate source data KPIs are included.
+            #         "top10_prompt_percentage": {
+            #             "value": round(current_metrics["top10_prompt_percentage"], 1),
+            #             "change": round(top10_prompt_change, 2),
+            #             "source": "Scrunch",
+            #             "label": "Top 10 Prompt",
+            #             "icon": "Article",
+            #             "format": "percentage"
+            #         },
+            #         "prompt_search_volume": {
+            #             "value": current_metrics["prompt_search_volume"],
+            #             "change": round(prompt_search_volume_change, 2),
+            #             "source": "Scrunch",
+            #             "label": "Prompt Search Volume",
+            #             "icon": "TrendingUp",
+            #             "format": "number"
+            #         },
+            #         # New KPIs
+            #         "competitive_benchmarking": {
+            #             "value": {
+            #                 "brand_visibility_percent": round(competitive_current.get("brand_visibility_percent", 0), 1),
+            #                 "competitor_avg_visibility_percent": round(competitive_current.get("competitor_avg_visibility_percent", 0), 1)
+            #             },
+            #             "change": {
+            #                 "brand_visibility": round(brand_visibility_change, 2),
+            #                 "competitor_avg_visibility": round(competitor_avg_change, 2)
+            #             },
+            #             "source": "Scrunch",
+            #             "label": "Competitive Benchmarking",
+            #             "icon": "BarChart",
+            #             "format": "custom",
+            #             "display": f"Your brand's AI visibility: {round(competitive_current.get('brand_visibility_percent', 0), 1)}% vs competitor average: {round(competitive_current.get('competitor_avg_visibility_percent', 0), 1)}%"
+            #         },
+            #         "prompt_reach": {
+            #             "value": current_metrics.get("prompt_reach", {}),
+            #             "change": None,  # Not calculating change for this metric
+            #             "source": "Scrunch",
+            #             "label": "Prompt Reach",
+            #             "icon": "Article",
+            #             "format": "custom"
+            #         }
+            #     }
                 
-                # Calculate Top Performing Prompts
-                # Filter by brand_id: only count responses for this brand_id and match with prompts for this brand_id
-                if prompts and responses:
-                    # Create a set of valid prompt IDs for this brand_id for quick lookup
-                    valid_prompt_ids = {prompt.get("id") for prompt in prompts if prompt.get("id")}
+            #     # Calculate Top Performing Prompts
+            #     # Filter by brand_id: only count responses for this brand_id and match with prompts for this brand_id
+            #     if prompts and responses:
+            #         # Create a set of valid prompt IDs for this brand_id for quick lookup
+            #         valid_prompt_ids = {prompt.get("id") for prompt in prompts if prompt.get("id")}
                     
-                    # Count responses per prompt_id, but only for responses that:
-                    # 1. Have a prompt_id
-                    # 2. The prompt_id belongs to a prompt for this brand_id
-                    # 3. The response already belongs to this brand_id (from the query filter)
-                    prompt_counts = {}
-                    total_responses_for_brand = 0
-                    for r in responses:
-                        # Double-check brand_id matches (defensive programming)
-                        response_brand_id = r.get("brand_id")
-                        if response_brand_id != brand_id:
-                            continue  # Skip responses that don't match brand_id
+            #         # Count responses per prompt_id, but only for responses that:
+            #         # 1. Have a prompt_id
+            #         # 2. The prompt_id belongs to a prompt for this brand_id
+            #         # 3. The response already belongs to this brand_id (from the query filter)
+            #         prompt_counts = {}
+            #         total_responses_for_brand = 0
+            #         for r in responses:
+            #             # Double-check brand_id matches (defensive programming)
+            #             response_brand_id = r.get("brand_id")
+            #             if response_brand_id != brand_id:
+            #                 continue  # Skip responses that don't match brand_id
                         
-                        total_responses_for_brand += 1
-                        prompt_id = r.get("prompt_id")
-                        if prompt_id and prompt_id in valid_prompt_ids:
-                            prompt_counts[prompt_id] = prompt_counts.get(prompt_id, 0) + 1
+            #             total_responses_for_brand += 1
+            #             prompt_id = r.get("prompt_id")
+            #             if prompt_id and prompt_id in valid_prompt_ids:
+            #                 prompt_counts[prompt_id] = prompt_counts.get(prompt_id, 0) + 1
                     
-                    # Map prompts with response counts and unique platform variants (only prompts for this brand_id)
-                    # First, collect platform variants for each prompt
-                    prompt_variants = {}
-                    for r in responses:
-                        # Double-check brand_id matches
-                        response_brand_id = r.get("brand_id")
-                        if response_brand_id != brand_id:
-                            continue
+            #         # Map prompts with response counts and unique platform variants (only prompts for this brand_id)
+            #         # First, collect platform variants for each prompt
+            #         prompt_variants = {}
+            #         for r in responses:
+            #             # Double-check brand_id matches
+            #             response_brand_id = r.get("brand_id")
+            #             if response_brand_id != brand_id:
+            #                 continue
                         
-                        prompt_id = r.get("prompt_id")
-                        if prompt_id and prompt_id in valid_prompt_ids:
-                            if prompt_id not in prompt_variants:
-                                prompt_variants[prompt_id] = set()
-                            platform = r.get("platform")
-                            if platform:
-                                prompt_variants[prompt_id].add(platform)
+            #             prompt_id = r.get("prompt_id")
+            #             if prompt_id and prompt_id in valid_prompt_ids:
+            #                 if prompt_id not in prompt_variants:
+            #                     prompt_variants[prompt_id] = set()
+            #                 platform = r.get("platform")
+            #                 if platform:
+            #                     prompt_variants[prompt_id].add(platform)
                     
-                    top_prompts_data = []
-                    for prompt in prompts:
-                        # Ensure prompt belongs to this brand_id
-                        prompt_brand_id = prompt.get("brand_id")
-                        if prompt_brand_id != brand_id:
-                            continue  # Skip prompts that don't match brand_id
+            #         top_prompts_data = []
+            #         for prompt in prompts:
+            #             # Ensure prompt belongs to this brand_id
+            #             prompt_brand_id = prompt.get("brand_id")
+            #             if prompt_brand_id != brand_id:
+            #                 continue  # Skip prompts that don't match brand_id
                         
-                        prompt_id = prompt.get("id")
-                        response_count = prompt_counts.get(prompt_id, 0)
-                        if response_count > 0:
-                            # Count unique platforms (variants) for this prompt
-                            unique_variants = len(prompt_variants.get(prompt_id, set()))
-                            # If no platforms found, default to 1 (at least one variant exists)
-                            variants_count = unique_variants if unique_variants > 0 else 1
+            #             prompt_id = prompt.get("id")
+            #             response_count = prompt_counts.get(prompt_id, 0)
+            #             if response_count > 0:
+            #                 # Count unique platforms (variants) for this prompt
+            #                 unique_variants = len(prompt_variants.get(prompt_id, set()))
+            #                 # If no platforms found, default to 1 (at least one variant exists)
+            #                 variants_count = unique_variants if unique_variants > 0 else 1
                             
-                            top_prompts_data.append({
-                                "id": prompt_id,
-                                "text": prompt.get("text") or prompt.get("prompt_text") or "N/A",
-                                "responseCount": response_count,
-                                "variants": variants_count,  # Count of unique platforms (ChatGPT, Perplexity, Claude, etc.)
-                                "citations": citations_by_prompt.get(prompt_id, 0),  # New: Citations per prompt
-                                "totalResponsesForBrand": total_responses_for_brand  # Total responses for this brand_id
-                            })
+            #                 top_prompts_data.append({
+            #                     "id": prompt_id,
+            #                     "text": prompt.get("text") or prompt.get("prompt_text") or "N/A",
+            #                     "responseCount": response_count,
+            #                     "variants": variants_count,  # Count of unique platforms (ChatGPT, Perplexity, Claude, etc.)
+            #                     "citations": citations_by_prompt.get(prompt_id, 0),  # New: Citations per prompt
+            #                     "totalResponsesForBrand": total_responses_for_brand  # Total responses for this brand_id
+            #                 })
                     
-                    # Sort by response count and get top 10
-                    top_prompts_data.sort(key=lambda x: x["responseCount"], reverse=True)
-                    top_performing_prompts = []
-                    for idx, prompt_data in enumerate(top_prompts_data[:10], 1):
-                        top_performing_prompts.append({
-                            **prompt_data,
-                            "rank": idx
-                        })
-                    chart_data["top_performing_prompts"] = top_performing_prompts
+            #         # Sort by response count and get top 10
+            #         top_prompts_data.sort(key=lambda x: x["responseCount"], reverse=True)
+            #         top_performing_prompts = []
+            #         for idx, prompt_data in enumerate(top_prompts_data[:10], 1):
+            #             top_performing_prompts.append({
+            #                 **prompt_data,
+            #                 "rank": idx
+            #             })
+            #         chart_data["top_performing_prompts"] = top_performing_prompts
                 
-                # Calculate Scrunch AI Insights
-                if prompts and responses:
-                    # Group responses by prompt
-                    prompt_data_map = {}
-                    for prompt in prompts:
-                        prompt_data_map[prompt.get("id")] = {
-                            "prompt": prompt,
-                            "responses": [],
-                            "variants": set(),
-                            "citations": 0,
-                            "competitors": set()
-                        }
+            #     # Calculate Scrunch AI Insights
+            #     if prompts and responses:
+            #         # Group responses by prompt
+            #         prompt_data_map = {}
+            #         for prompt in prompts:
+            #             prompt_data_map[prompt.get("id")] = {
+            #                 "prompt": prompt,
+            #                 "responses": [],
+            #                 "variants": set(),
+            #                 "citations": 0,
+            #                 "competitors": set()
+            #             }
                     
-                    for r in responses:
-                        prompt_id = r.get("prompt_id")
-                        if prompt_id and prompt_id in prompt_data_map:
-                            prompt_data_map[prompt_id]["responses"].append(r)
-                            if r.get("platform"):
-                                prompt_data_map[prompt_id]["variants"].add(r.get("platform"))
+            #         for r in responses:
+            #             prompt_id = r.get("prompt_id")
+            #             if prompt_id and prompt_id in prompt_data_map:
+            #                 prompt_data_map[prompt_id]["responses"].append(r)
+            #                 if r.get("platform"):
+            #                     prompt_data_map[prompt_id]["variants"].add(r.get("platform"))
                             
-                            # Count citations
-                            citations = r.get("citations")
-                            if citations:
-                                if isinstance(citations, list):
-                                    prompt_data_map[prompt_id]["citations"] += len(citations)
-                                elif isinstance(citations, str):
-                                    try:
-                                        import json
-                                        parsed = json.loads(citations)
-                                        if isinstance(parsed, list):
-                                            prompt_data_map[prompt_id]["citations"] += len(parsed)
-                                    except:
-                                        pass
+            #                 # Count citations
+            #                 citations = r.get("citations")
+            #                 if citations:
+            #                     if isinstance(citations, list):
+            #                         prompt_data_map[prompt_id]["citations"] += len(citations)
+            #                     elif isinstance(citations, str):
+            #                         try:
+            #                             import json
+            #                             parsed = json.loads(citations)
+            #                             if isinstance(parsed, list):
+            #                                 prompt_data_map[prompt_id]["citations"] += len(parsed)
+            #                         except:
+            #                             pass
                             
-                            # Track competitors
-                            competitors_present = r.get("competitors_present", [])
-                            if isinstance(competitors_present, list):
-                                for comp in competitors_present:
-                                    prompt_data_map[prompt_id]["competitors"].add(comp)
+            #                 # Track competitors
+            #                 competitors_present = r.get("competitors_present", [])
+            #                 if isinstance(competitors_present, list):
+            #                     for comp in competitors_present:
+            #                         prompt_data_map[prompt_id]["competitors"].add(comp)
                     
-                    # Calculate insights for each prompt
-                    insights = []
-                    for prompt_id, data in prompt_data_map.items():
-                        if len(data["responses"]) > 0:
-                            prompt = data["prompt"]
-                            response_count = len(data["responses"])
-                            presence_count = sum(1 for r in data["responses"] if r.get("brand_present") == True)
-                            presence = (presence_count / response_count * 100) if response_count > 0 else 0
+            #         # Calculate insights for each prompt
+            #         insights = []
+            #         for prompt_id, data in prompt_data_map.items():
+            #             if len(data["responses"]) > 0:
+            #                 prompt = data["prompt"]
+            #                 response_count = len(data["responses"])
+            #                 presence_count = sum(1 for r in data["responses"] if r.get("brand_present") == True)
+            #                 presence = (presence_count / response_count * 100) if response_count > 0 else 0
                             
-                            # Get category from topics or prompt text
-                            category = (
-                                prompt.get("topics", [None])[0] if prompt.get("topics") else None
-                            ) or (
-                                (prompt.get("text") or prompt.get("prompt_text") or "").split(" ")[:3]
-                            ) or prompt.get("stage") or "General"
+            #                 # Get category from topics or prompt text
+            #                 category = (
+            #                     prompt.get("topics", [None])[0] if prompt.get("topics") else None
+            #                 ) or (
+            #                     (prompt.get("text") or prompt.get("prompt_text") or "").split(" ")[:3]
+            #                 ) or prompt.get("stage") or "General"
                             
-                            if isinstance(category, list):
-                                category = " ".join(category)
+            #                 if isinstance(category, list):
+            #                     category = " ".join(category)
                             
-                            insights.append({
-                                "id": prompt_id,
-                                "seedPrompt": prompt.get("text") or prompt.get("prompt_text") or "N/A",
-                                "stage": prompt.get("stage") or "Unknown",
-                                "variants": len(data["variants"]) or 1,
-                                "responses": response_count,
-                                "presence": round(presence, 1),
-                                "presenceChange": 0,  # Would need historical comparison
-                                "citations": data["citations"],
-                                "citationsChange": 0,  # Would need historical comparison
-                                "competitors": len(data["competitors"]),
-                                "competitorsChange": 0,  # Would need historical comparison
-                                "category": category
-                            })
+            #                 insights.append({
+            #                     "id": prompt_id,
+            #                     "seedPrompt": prompt.get("text") or prompt.get("prompt_text") or "N/A",
+            #                     "stage": prompt.get("stage") or "Unknown",
+            #                     "variants": len(data["variants"]) or 1,
+            #                     "responses": response_count,
+            #                     "presence": round(presence, 1),
+            #                     "presenceChange": 0,  # Would need historical comparison
+            #                     "citations": data["citations"],
+            #                     "citationsChange": 0,  # Would need historical comparison
+            #                     "competitors": len(data["competitors"]),
+            #                     "competitorsChange": 0,  # Would need historical comparison
+            #                     "category": category
+            #                 })
                     
         
         # Log KPI counts for debugging
-        logger.info(f"Combined KPIs for brand {brand_id}: GA4={len(ga4_kpis)}, AgencyAnalytics={len(agency_kpis)}, Scrunch={len(scrunch_kpis)}, Total={len(kpis)}")
+        if client_id:
+            logger.info(f"Combined KPIs for client {client_id}: GA4={len(ga4_kpis)}, AgencyAnalytics={len(agency_kpis)}, Scrunch={len(scrunch_kpis)}, Total={len(kpis)}")
+        else:
+            logger.info(f"Combined KPIs for brand {brand_id}: GA4={len(ga4_kpis)}, AgencyAnalytics={len(agency_kpis)}, Scrunch={len(scrunch_kpis)}, Total={len(kpis)}")
         
         # Chart data is already initialized above (before Scrunch AI section)
         # Continue populating chart_data with GA4 and Agency Analytics data
         
         # Get users over time (GA4)
-        if brand.get("ga4_property_id"):
+        # Use client's ga4_property_id if available, otherwise brand's
+        chart_ga4_property_id = client.get("ga4_property_id") if client_id and client else (brand.get("ga4_property_id") if brand else None)
+        if chart_ga4_property_id:
             try:
-                property_id = brand["ga4_property_id"]
+                property_id = chart_ga4_property_id
                 
                 # Get all chart data from stored database records (NO live API calls)
                 logger.info(f"[GA4 STORED DATA] Fetching chart data from stored records for date range: {start_date} to {end_date}")
-                top_pages = supabase.get_ga4_top_pages_by_date_range(brand_id, property_id, start_date, end_date, limit=10)
-                traffic_sources = supabase.get_ga4_traffic_sources_by_date_range(brand_id, property_id, start_date, end_date)
-                geographic = supabase.get_ga4_geographic_by_date_range(brand_id, property_id, start_date, end_date, limit=10)
-                devices = supabase.get_ga4_devices_by_date_range(brand_id, property_id, start_date, end_date)
+                # Use client_id for all queries - brand_id is only used as fallback for Scrunch
+                query_brand_id = scrunch_brand_id if client_id else brand_id
+                top_pages = supabase.get_ga4_top_pages_by_date_range(query_brand_id, property_id, start_date, end_date, limit=10, client_id=client_id)
+                traffic_sources = supabase.get_ga4_traffic_sources_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
+                geographic = supabase.get_ga4_geographic_by_date_range(query_brand_id, property_id, start_date, end_date, limit=10, client_id=client_id)
+                devices = supabase.get_ga4_devices_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
                 
                 chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
                 chart_data["top_pages"] = top_pages if top_pages else []
@@ -2451,7 +2711,8 @@ async def get_reporting_dashboard(
                 logger.info(f"[GA4 STORED DATA] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic)}, devices: {len(devices)}")
                 
                 # Get GA4 traffic overview for detailed metrics from stored data
-                traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(brand_id, property_id, start_date, end_date)
+                query_brand_id = scrunch_brand_id if client_id else brand_id
+                traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
                 if traffic_overview:
                     # Calculate previous period for change comparison based on selected date range duration
                     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
@@ -2459,7 +2720,7 @@ async def get_reporting_dashboard(
                     period_duration = (end_dt - start_dt).days + 1
                     prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
                     prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
-                    prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(brand_id, property_id, prev_start, prev_end)
+                    prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, prev_start, prev_end, client_id=client_id)
                     
                     if traffic_overview:
                         # Calculate changes
@@ -2528,9 +2789,21 @@ async def get_reporting_dashboard(
                         }
                         current_date += timedelta(days=1)
                     
-                    # Get daily traffic overview records for current period
-                    daily_traffic_result = supabase.client.table("ga4_traffic_overview").select("*").eq("brand_id", brand_id).eq("property_id", property_id).gte("date", start_date).lte("date", end_date).order("date", desc=False).execute()
-                    daily_traffic_records = daily_traffic_result.data if hasattr(daily_traffic_result, 'data') else []
+                    # Get daily traffic overview records for current period using SQLAlchemy Core
+                    # CLIENT-CENTRIC: Use client_id when available, otherwise use brand_id
+                    traffic_table = supabase._get_table("ga4_traffic_overview")
+                    query_conditions = [
+                        traffic_table.c.property_id == property_id,
+                        traffic_table.c.date >= start_date,
+                        traffic_table.c.date <= end_date
+                    ]
+                    if client_id:
+                        query_conditions.append(traffic_table.c.client_id == client_id)
+                    else:
+                        query_conditions.append(traffic_table.c.brand_id == brand_id)
+                    daily_traffic_query = select(traffic_table).where(and_(*query_conditions)).order_by(traffic_table.c.date.asc())
+                    daily_traffic_result = db.execute(daily_traffic_query)
+                    daily_traffic_records = [dict(row._mapping) for row in daily_traffic_result]
                     
                     for record in daily_traffic_records:
                         date = record.get("date")
@@ -2540,8 +2813,19 @@ async def get_reporting_dashboard(
                             daily_metrics[date]["new_users"] = record.get("new_users", 0)
                     
                     # Get daily conversions - match to existing dates or create new entries
-                    daily_conversions_result = supabase.client.table("ga4_daily_conversions").select("*").eq("brand_id", brand_id).eq("property_id", property_id).gte("date", start_date).lte("date", end_date).execute()
-                    daily_conversions_records = daily_conversions_result.data if hasattr(daily_conversions_result, 'data') else []
+                    conversions_table = supabase._get_table("ga4_daily_conversions")
+                    conv_query_conditions = [
+                        conversions_table.c.property_id == property_id,
+                        conversions_table.c.date >= start_date,
+                        conversions_table.c.date <= end_date
+                    ]
+                    if client_id:
+                        conv_query_conditions.append(conversions_table.c.client_id == client_id)
+                    else:
+                        conv_query_conditions.append(conversions_table.c.brand_id == brand_id)
+                    daily_conversions_query = select(conversions_table).where(and_(*conv_query_conditions))
+                    daily_conversions_result = db.execute(daily_conversions_query)
+                    daily_conversions_records = [dict(row._mapping) for row in daily_conversions_result]
                     for record in daily_conversions_records:
                         date = record.get("date")
                         if date:
@@ -2559,8 +2843,19 @@ async def get_reporting_dashboard(
                             daily_metrics[date]["conversions"] = record.get("total_conversions", 0)
                     
                     # Get daily revenue - match to existing dates or create new entries
-                    daily_revenue_result = supabase.client.table("ga4_revenue").select("*").eq("brand_id", brand_id).eq("property_id", property_id).gte("date", start_date).lte("date", end_date).execute()
-                    daily_revenue_records = daily_revenue_result.data if hasattr(daily_revenue_result, 'data') else []
+                    revenue_table = supabase._get_table("ga4_revenue")
+                    rev_query_conditions = [
+                        revenue_table.c.property_id == property_id,
+                        revenue_table.c.date >= start_date,
+                        revenue_table.c.date <= end_date
+                    ]
+                    if client_id:
+                        rev_query_conditions.append(revenue_table.c.client_id == client_id)
+                    else:
+                        rev_query_conditions.append(revenue_table.c.brand_id == brand_id)
+                    daily_revenue_query = select(revenue_table).where(and_(*rev_query_conditions))
+                    daily_revenue_result = db.execute(daily_revenue_query)
+                    daily_revenue_records = [dict(row._mapping) for row in daily_revenue_result]
                     for record in daily_revenue_records:
                         date = record.get("date")
                         if date:
@@ -2596,9 +2891,20 @@ async def get_reporting_dashboard(
                         }
                         prev_current_date += timedelta(days=1)
                     
-                    # Get previous period daily metrics
-                    prev_daily_traffic_result = supabase.client.table("ga4_traffic_overview").select("*").eq("brand_id", brand_id).eq("property_id", property_id).gte("date", prev_start).lte("date", prev_end).order("date", desc=False).execute()
-                    prev_daily_traffic_records = prev_daily_traffic_result.data if hasattr(prev_daily_traffic_result, 'data') else []
+                    # Get previous period daily metrics using SQLAlchemy Core
+                    # CLIENT-CENTRIC: Use client_id when available, otherwise use brand_id
+                    prev_query_conditions = [
+                        traffic_table.c.property_id == property_id,
+                        traffic_table.c.date >= prev_start,
+                        traffic_table.c.date <= prev_end
+                    ]
+                    if client_id:
+                        prev_query_conditions.append(traffic_table.c.client_id == client_id)
+                    else:
+                        prev_query_conditions.append(traffic_table.c.brand_id == brand_id)
+                    prev_daily_traffic_query = select(traffic_table).where(and_(*prev_query_conditions)).order_by(traffic_table.c.date.asc())
+                    prev_daily_traffic_result = db.execute(prev_daily_traffic_query)
+                    prev_daily_traffic_records = [dict(row._mapping) for row in prev_daily_traffic_result]
                     
                     for record in prev_daily_traffic_records:
                         date = record.get("date")
@@ -2608,8 +2914,18 @@ async def get_reporting_dashboard(
                             prev_daily_metrics[date]["new_users"] = record.get("new_users", 0)
                     
                     # Get previous period conversions and revenue
-                    prev_daily_conversions_result = supabase.client.table("ga4_daily_conversions").select("*").eq("brand_id", brand_id).eq("property_id", property_id).gte("date", prev_start).lte("date", prev_end).execute()
-                    prev_daily_conversions_records = prev_daily_conversions_result.data if hasattr(prev_daily_conversions_result, 'data') else []
+                    prev_conv_query_conditions = [
+                        conversions_table.c.property_id == property_id,
+                        conversions_table.c.date >= prev_start,
+                        conversions_table.c.date <= prev_end
+                    ]
+                    if client_id:
+                        prev_conv_query_conditions.append(conversions_table.c.client_id == client_id)
+                    else:
+                        prev_conv_query_conditions.append(conversions_table.c.brand_id == brand_id)
+                    prev_daily_conversions_query = select(conversions_table).where(and_(*prev_conv_query_conditions))
+                    prev_daily_conversions_result = db.execute(prev_daily_conversions_query)
+                    prev_daily_conversions_records = [dict(row._mapping) for row in prev_daily_conversions_result]
                     for record in prev_daily_conversions_records:
                         date = record.get("date")
                         if date:
@@ -2625,8 +2941,18 @@ async def get_reporting_dashboard(
                                 }
                             prev_daily_metrics[date]["conversions"] = record.get("total_conversions", 0)
                     
-                    prev_daily_revenue_result = supabase.client.table("ga4_revenue").select("*").eq("brand_id", brand_id).eq("property_id", property_id).gte("date", prev_start).lte("date", prev_end).execute()
-                    prev_daily_revenue_records = prev_daily_revenue_result.data if hasattr(prev_daily_revenue_result, 'data') else []
+                    prev_rev_query_conditions = [
+                        revenue_table.c.property_id == property_id,
+                        revenue_table.c.date >= prev_start,
+                        revenue_table.c.date <= prev_end
+                    ]
+                    if client_id:
+                        prev_rev_query_conditions.append(revenue_table.c.client_id == client_id)
+                    else:
+                        prev_rev_query_conditions.append(revenue_table.c.brand_id == brand_id)
+                    prev_daily_revenue_query = select(revenue_table).where(and_(*prev_rev_query_conditions))
+                    prev_daily_revenue_result = db.execute(prev_daily_revenue_query)
+                    prev_daily_revenue_records = [dict(row._mapping) for row in prev_daily_revenue_result]
                     for record in prev_daily_revenue_records:
                         date = record.get("date")
                         if date:
@@ -2691,10 +3017,14 @@ async def get_reporting_dashboard(
             except Exception as e:
                 logger.warning(f"Error fetching GA4 chart data: {str(e)}")
         
-        # Get impressions vs clicks and top campaigns (Agency Analytics)
+        # Get impressions vs clicks and top campaigns (Agency Analytics) using SQLAlchemy Core
         try:
-            campaign_links_result = supabase.client.table("agency_analytics_campaign_brands").select("*").eq("brand_id", brand_id).execute()
-            campaign_links = campaign_links_result.data if hasattr(campaign_links_result, 'data') else []
+            campaign_brands_table = supabase._get_table("agency_analytics_campaign_brands")
+            campaign_links_query = select(campaign_brands_table).where(
+                campaign_brands_table.c.brand_id == brand_id
+            )
+            campaign_links_result = db.execute(campaign_links_query)
+            campaign_links = [dict(row._mapping) for row in campaign_links_result]
         except:
             campaign_links = []
         
@@ -2702,9 +3032,13 @@ async def get_reporting_dashboard(
             try:
                 campaign_ids = [link["campaign_id"] for link in campaign_links]
                 
-                # Get campaign data
-                campaigns_result = supabase.client.table("agency_analytics_campaigns").select("*").in_("id", campaign_ids).execute()
-                campaigns = campaigns_result.data if hasattr(campaigns_result, 'data') else []
+                # Get campaign data using SQLAlchemy Core
+                campaigns_table = supabase._get_table("agency_analytics_campaigns")
+                campaigns_query = select(campaigns_table).where(
+                    campaigns_table.c.id.in_(campaign_ids)
+                )
+                campaigns_result = db.execute(campaigns_query)
+                campaigns = [dict(row._mapping) for row in campaigns_result]
                 
                 # NOTE: impressions_vs_clicks and top_campaigns charts are NOT populated
                 # as they require estimated impressions/clicks calculations.
@@ -2718,10 +3052,16 @@ async def get_reporting_dashboard(
                 chart_all_keywords_rankings = []
                 
                 for campaign_id in campaign_ids:
-                    summaries_query = supabase.client.table("agency_analytics_keyword_ranking_summaries").select("*").eq("campaign_id", campaign_id)
-                    summaries_query = summaries_query.gte("date", start_date).lte("date", end_date)
-                    summaries_result = summaries_query.execute()
-                    campaign_summaries = summaries_result.data if hasattr(summaries_result, 'data') else []
+                    summaries_table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
+                    summaries_query = select(summaries_table).where(
+                        and_(
+                            summaries_table.c.campaign_id == campaign_id,
+                            summaries_table.c.date >= start_date,
+                            summaries_table.c.date <= end_date
+                        )
+                    )
+                    summaries_result = db.execute(summaries_query)
+                    campaign_summaries = [dict(row._mapping) for row in summaries_result]
                     
                     for summary in campaign_summaries:
                         ranking = summary.get("google_ranking") or summary.get("google_mobile_ranking") or 999
@@ -2766,9 +3106,22 @@ async def get_reporting_dashboard(
                 percentage = (duration / total_time * 100) if total_time > 0 else 0
                 logger.info(f"[PERFORMANCE]   - {section}: {duration:.2f}s ({percentage:.1f}%)")
         
+        # Determine brand_name and ga4_configured based on client or brand
+        if client:
+            brand_name = client.get("company_name") or client.get("name")
+            ga4_configured = bool(client.get("ga4_property_id"))
+        elif brand:
+            brand_name = brand.get("name")
+            ga4_configured = bool(brand.get("ga4_property_id"))
+        else:
+            brand_name = None
+            ga4_configured = False
+        
         return {
             "brand_id": brand_id,
-            "brand_name": brand.get("name"),
+            "client_id": client_id if client_id else None,
+            "brand_name": brand_name,
+            "client_name": client.get("company_name") if client else None,
             "date_range": {
                 "start_date": start_date,
                 "end_date": end_date
@@ -2781,7 +3134,7 @@ async def get_reporting_dashboard(
                 "scrunch": bool(scrunch_kpis)
             },
             "diagnostics": {
-                "ga4_configured": bool(brand.get("ga4_property_id")),
+                "ga4_configured": ga4_configured,
                 "agency_analytics_configured": bool(campaign_links),
                 "ga4_errors": ga4_errors,
                 "agency_errors": agency_errors,
@@ -2800,7 +3153,7 @@ async def get_reporting_dashboard(
 
 
 @router.get("/data/brands/slug/{slug}")
-async def get_brand_by_slug(slug: str):
+async def get_brand_by_slug(slug: str, db: Session = Depends(get_db)):
     """Get brand by slug for public access
     
     Supports both client url_slug and brand slug:
@@ -2808,7 +3161,7 @@ async def get_brand_by_slug(slug: str):
     - Falls back to finding a brand by slug if no client found
     """
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
         # First, try to find a client by url_slug (for /reporting/client/:slug routes)
         client = supabase.get_client_by_slug(slug)
@@ -2816,11 +3169,10 @@ async def get_brand_by_slug(slug: str):
             # If client found, get the associated brand via scrunch_brand_id
             if client.get("scrunch_brand_id"):
                 brand_id = client["scrunch_brand_id"]
-                brand_result = supabase.client.table("brands").select("*").eq("id", brand_id).execute()
-                brands = brand_result.data if hasattr(brand_result, 'data') else []
-                if brands:
+                brand = supabase.get_brand_by_id(brand_id)
+                if brand:
                     logger.info(f"Found client by url_slug '{slug}', returning associated brand")
-                    return brands[0]
+                    return brand
                 else:
                     raise HTTPException(
                         status_code=404,
@@ -2833,13 +3185,12 @@ async def get_brand_by_slug(slug: str):
                 )
         
         # Fall back to finding a brand by slug (for backward compatibility)
-        brand_result = supabase.client.table("brands").select("*").eq("slug", slug).execute()
-        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        brand = supabase.get_brand_by_slug(slug)
         
-        if not brands:
+        if not brand:
             raise HTTPException(status_code=404, detail="Brand or client not found")
         
-        return brands[0]
+        return brand
     except HTTPException:
         raise
     except Exception as e:
@@ -2850,41 +3201,40 @@ async def get_brand_by_slug(slug: str):
 async def get_reporting_dashboard_by_client(
     client_id: int,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)")
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    db: Session = Depends(get_db)
 ):
     """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard by client ID (client-centric)
     
     Uses the client's scrunch_brand_id to fetch the data.
     """
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         brand_id = None
         
-        # Get client from database
-        client_result = supabase.client.table("clients").select("*").eq("id", client_id).execute()
-        clients = client_result.data if hasattr(client_result, 'data') else []
+        # Get client from database using SQLAlchemy
+        client = supabase.get_client_by_id(client_id)
         
-        if not clients:
+        if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
-        client = clients[0]
+        # CLIENT-CENTRIC: Pass client_id directly to the main endpoint
+        # The main endpoint will use client_id for all queries
+        # scrunch_brand_id is only used for Scrunch queries (responses/prompts tables)
+        scrunch_brand_id = client.get("scrunch_brand_id")
+        if not scrunch_brand_id:
+            logger.warning(f"Client {client_id} has no scrunch_brand_id configured. Scrunch data will not be available.")
         
-        # Use the scrunch_brand_id from the client
-        if client.get("scrunch_brand_id"):
-            brand_id = client["scrunch_brand_id"]
-            logger.info(f"Found client {client_id}, using scrunch_brand_id: {brand_id}")
-        else:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Client found but no brand mapping configured (scrunch_brand_id is null)"
-            )
+        # Use scrunch_brand_id as brand_id parameter for backward compatibility
+        # But the main endpoint will use client_id for all actual data queries
+        brand_id = scrunch_brand_id if scrunch_brand_id else 0  # Use 0 as fallback if no scrunch_brand_id
         
-        if not brand_id:
-            raise HTTPException(status_code=404, detail="Brand ID not found")
+        logger.info(f"Found client {client_id}, using client-centric approach. scrunch_brand_id={scrunch_brand_id}")
         
-        # Call the existing get_reporting_dashboard function directly
-        # Since it's in the same module, we can call it directly
-        return await get_reporting_dashboard(brand_id, start_date, end_date)
+        # Call the main reporting dashboard endpoint with client_id
+        # The main endpoint will use client_id for all data queries
+        # Pass client_id so GA4 queries can use it
+        return await get_reporting_dashboard(brand_id, start_date, end_date, client_id=client_id, db=db)
         
     except HTTPException:
         raise
@@ -2898,7 +3248,8 @@ async def get_reporting_dashboard_by_client(
 async def get_reporting_dashboard_by_slug(
     slug: str,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)")
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    db: Session = Depends(get_db)
 ):
     """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard by slug (public access)
     
@@ -2907,16 +3258,18 @@ async def get_reporting_dashboard_by_slug(
     - Falls back to finding a brand by slug if no client found
     """
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         brand_id = None
         
         # First, try to find a client by url_slug (for /reporting/client/:slug routes)
         client = supabase.get_client_by_slug(slug)
+        client_id_for_dashboard = None
         if client:
             # If client found, use the scrunch_brand_id from the client
             if client.get("scrunch_brand_id"):
                 brand_id = client["scrunch_brand_id"]
-                logger.info(f"Found client by url_slug '{slug}', using scrunch_brand_id: {brand_id}")
+                client_id_for_dashboard = client.get("id")  # Pass client_id to dashboard
+                logger.info(f"Found client by url_slug '{slug}', using scrunch_brand_id: {brand_id}, client_id: {client_id_for_dashboard}")
             else:
                 raise HTTPException(
                     status_code=404,
@@ -2924,13 +3277,11 @@ async def get_reporting_dashboard_by_slug(
                 )
         else:
             # Fall back to finding a brand by slug (for backward compatibility)
-            brand_result = supabase.client.table("brands").select("*").eq("slug", slug).execute()
-            brands = brand_result.data if hasattr(brand_result, 'data') else []
+            brand = supabase.get_brand_by_slug(slug)
             
-            if not brands:
+            if not brand:
                 raise HTTPException(status_code=404, detail="Brand or client not found")
             
-            brand = brands[0]
             brand_id = brand["id"]
             logger.info(f"Found brand by slug '{slug}', using brand_id: {brand_id}")
         
@@ -2938,7 +3289,7 @@ async def get_reporting_dashboard_by_slug(
             raise HTTPException(status_code=404, detail="Brand ID not found")
         
         # Call the existing get_reporting_dashboard function directly instead of making HTTP request
-        result = await get_reporting_dashboard(brand_id, start_date, end_date)
+        result = await get_reporting_dashboard(brand_id, start_date, end_date, client_id=client_id_for_dashboard, db=db)
         result["brand_slug"] = slug
         return result
         
@@ -2955,7 +3306,8 @@ async def get_reporting_dashboard_by_slug(
 async def get_scrunch_dashboard_data_by_slug(
     slug: str,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)")
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    db: Session = Depends(get_db)
 ):
     """Get Scrunch AI KPIs and chart data for reporting dashboard by slug (public access)
     
@@ -2964,7 +3316,7 @@ async def get_scrunch_dashboard_data_by_slug(
     - Falls back to finding a brand by slug if no client found
     """
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         brand_id = None
         
         # First, try to find a client by url_slug (for /reporting/client/:slug routes)
@@ -2981,21 +3333,22 @@ async def get_scrunch_dashboard_data_by_slug(
                 )
         else:
             # Fall back to finding a brand by slug (for backward compatibility)
-            brand_result = supabase.client.table("brands").select("*").eq("slug", slug).execute()
-            brands = brand_result.data if hasattr(brand_result, 'data') else []
+            brand = supabase.get_brand_by_slug(slug)
             
-            if not brands:
+            if not brand:
                 raise HTTPException(status_code=404, detail="Brand or client not found")
             
-            brand = brands[0]
             brand_id = brand["id"]
             logger.info(f"Found brand by slug '{slug}', using brand_id: {brand_id}")
         
         if not brand_id:
             raise HTTPException(status_code=404, detail="Brand ID not found")
         
+        # Get client_id if we found a client
+        client_id_for_scrunch = client.get("id") if client else None
+        
         # Call the existing get_scrunch_dashboard_data function
-        result = await get_scrunch_dashboard_data(brand_id, start_date, end_date)
+        result = await get_scrunch_dashboard_data(brand_id, start_date, end_date, client_id=client_id_for_scrunch, db=db)
         result["brand_slug"] = slug
         return result
         
@@ -3012,20 +3365,31 @@ async def get_scrunch_dashboard_data_by_slug(
 async def get_scrunch_dashboard_data(
     brand_id: int,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)")
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    client_id: Optional[int] = None,
+    db: Session = Depends(get_db)
 ):
-    """Get Scrunch AI KPIs and chart data for reporting dashboard (separate endpoint for parallel loading)"""
+    """Get Scrunch AI KPIs and chart data for reporting dashboard (separate endpoint for parallel loading)
+    
+    Supports querying by brand_id or client_id. When client_id is provided, uses scrunch_brand_id from client.
+    """
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Get brand info
-        brand_result = supabase.client.table("brands").select("*").eq("id", brand_id).execute()
-        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        # If client_id is provided, get the scrunch_brand_id from client
+        actual_brand_id = brand_id
+        if client_id:
+            client = supabase.get_client_by_id(client_id)
+            if client and client.get("scrunch_brand_id"):
+                actual_brand_id = client["scrunch_brand_id"]
+                logger.info(f"Using scrunch_brand_id {actual_brand_id} from client {client_id} for Scrunch queries")
         
-        if not brands:
+        # Get brand info using SQLAlchemy (may not exist if using scrunch_brand_id)
+        brand = supabase.get_brand_by_id(actual_brand_id)
+        
+        # If brand doesn't exist in brands table but we have client_id, that's okay - we'll use scrunch_brand_id directly
+        if not brand and not client_id:
             raise HTTPException(status_code=404, detail="Brand not found")
-        
-        brand = brands[0]
         
         # Set default date range
         if not start_date:
@@ -3065,43 +3429,73 @@ async def get_scrunch_dashboard_data(
             prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
             prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
             
-            # Get responses for this brand filtered by date range (current period)
-            # Only select needed columns to avoid loading large JSONB fields unnecessarily
-            responses_query = supabase.client.table("responses").select(
-                "id,brand_id,prompt_id,platform,brand_present,brand_sentiment,competitors_present,citations"
-            ).eq("brand_id", brand_id)
-            responses_query = responses_query.gte("created_at", f"{start_date}T00:00:00Z").lte("created_at", f"{end_date}T23:59:59Z")
-            responses_result = responses_query.execute()
-            responses = responses_result.data if hasattr(responses_result, 'data') else []
+            # Get responses for this brand filtered by date range (current period) using SQLAlchemy
+            from app.db.models import Response, Prompt
+            responses_query = select(
+                Response.id,
+                Response.brand_id,
+                Response.prompt_id,
+                Response.platform,
+                Response.brand_present,
+                Response.brand_sentiment,
+                Response.competitors_present,
+                Response.citations
+            ).where(
+                and_(
+                    Response.brand_id == actual_brand_id,
+                    Response.created_at >= datetime.fromisoformat(f"{start_date}T00:00:00+00:00"),
+                    Response.created_at <= datetime.fromisoformat(f"{end_date}T23:59:59+00:00")
+                )
+            )
+            responses_result = db.execute(responses_query)
+            responses = [dict(row._mapping) for row in responses_result]
             
-            logger.info(f"Found {len(responses)} Scrunch responses for brand {brand_id} in date range {start_date} to {end_date}")
+            logger.info(f"Found {len(responses)} Scrunch responses for brand {actual_brand_id} in date range {start_date} to {end_date}")
             
-            # Get responses for previous period
-            prev_responses_query = supabase.client.table("responses").select(
-                "id,brand_id,prompt_id,platform,brand_present,brand_sentiment,competitors_present,citations"
-            ).eq("brand_id", brand_id)
-            prev_responses_query = prev_responses_query.gte("created_at", f"{prev_start}T00:00:00Z").lte("created_at", f"{prev_end}T23:59:59Z")
-            prev_responses_result = prev_responses_query.execute()
-            prev_responses = prev_responses_result.data if hasattr(prev_responses_result, 'data') else []
+            # Get responses for previous period using SQLAlchemy
+            prev_responses_query = select(
+                Response.id,
+                Response.brand_id,
+                Response.prompt_id,
+                Response.platform,
+                Response.brand_present,
+                Response.brand_sentiment,
+                Response.competitors_present,
+                Response.citations
+            ).where(
+                and_(
+                    Response.brand_id == actual_brand_id,
+                    Response.created_at >= datetime.fromisoformat(f"{prev_start}T00:00:00+00:00"),
+                    Response.created_at <= datetime.fromisoformat(f"{prev_end}T23:59:59+00:00")
+                )
+            )
+            prev_responses_result = db.execute(prev_responses_query)
+            prev_responses = [dict(row._mapping) for row in prev_responses_result]
             
-            logger.info(f"Found {len(prev_responses)} Scrunch responses for brand {brand_id} in previous period {prev_start} to {prev_end}")
+            logger.info(f"Found {len(prev_responses)} Scrunch responses for brand {actual_brand_id} in previous period {prev_start} to {prev_end}")
             
-            # Get prompts for this brand (only select needed columns)
-            prompts_query = supabase.client.table("prompts").select("id,text,stage,topics,brand_id").eq("brand_id", brand_id)
-            prompts_result = prompts_query.execute()
-            prompts = prompts_result.data if hasattr(prompts_result, 'data') else []
+            # Get prompts for this brand using SQLAlchemy
+            prompts_query = select(
+                Prompt.id,
+                Prompt.text,
+                Prompt.stage,
+                Prompt.topics,
+                Prompt.brand_id
+            ).where(Prompt.brand_id == actual_brand_id)
+            prompts_result = db.execute(prompts_query)
+            prompts = [dict(row._mapping) for row in prompts_result]
             
             logger.info(f"Found {len(prompts)} Scrunch prompts for brand {brand_id}")
             
-            # Check if brand has any Scrunch data
+            # Check if brand has any Scrunch data using SQLAlchemy
             has_any_scrunch_data = len(responses) > 0 or len(prompts) > 0
             if not has_any_scrunch_data:
-                any_responses_query = supabase.client.table("responses").select("id").eq("brand_id", brand_id).limit(1)
-                any_responses_result = any_responses_query.execute()
-                any_responses = any_responses_result.data if hasattr(any_responses_result, 'data') else []
-                any_prompts_query = supabase.client.table("prompts").select("id").eq("brand_id", brand_id).limit(1)
-                any_prompts_result = any_prompts_query.execute()
-                any_prompts = any_prompts_result.data if hasattr(any_prompts_result, 'data') else []
+                any_responses_query = select(Response.id).where(Response.brand_id == brand_id).limit(1)
+                any_responses_result = db.execute(any_responses_query)
+                any_responses = [dict(row._mapping) for row in any_responses_result]
+                any_prompts_query = select(Prompt.id).where(Prompt.brand_id == brand_id).limit(1)
+                any_prompts_result = db.execute(any_prompts_query)
+                any_prompts = [dict(row._mapping) for row in any_prompts_result]
                 if len(any_responses) > 0 or len(any_prompts) > 0:
                     has_any_scrunch_data = True
             
@@ -3591,39 +3985,44 @@ class KPISelectionRequest(BaseModel):
 
 @router.get("/data/reporting-dashboard/{brand_id}/kpi-selections")
 @handle_api_errors(context="fetching KPI selections")
-async def get_brand_kpi_selections(brand_id: int):
+async def get_brand_kpi_selections(brand_id: int, db: Session = Depends(get_db)):
     """Get saved KPI selections for a brand (used to control public view visibility)"""
     import time
     start_time = time.time()
     
     try:
         init_start = time.time()
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         init_time = time.time() - init_start
         if init_time > 0.5:
             logger.warning(f"Slow SupabaseService initialization: {init_time:.2f}s for brand {brand_id}")
         
-        # Get KPI selections for this brand (only select needed columns, limit to 1 since brand_id is unique)
-        # Removed unnecessary brand check - if brand doesn't exist, this will just return empty
+        # Get KPI selections for this brand using SQLAlchemy Core
         query_start = time.time()
-        selection_result = supabase.client.table("brand_kpi_selections").select(
-            "selected_kpis,visible_sections,selected_charts,updated_at,version,last_modified_by"
-        ).eq("brand_id", brand_id).limit(1).execute()
+        table = supabase._get_table("brand_kpi_selections")
+        query = select(
+            table.c.selected_kpis,
+            table.c.visible_sections,
+            table.c.selected_charts,
+            table.c.updated_at,
+            table.c.version,
+            table.c.last_modified_by
+        ).where(table.c.brand_id == brand_id).limit(1)
+        result = supabase.db.execute(query)
+        row = result.first()
         query_time = time.time() - query_start
         
         if query_time > 1.0:
             logger.warning(f"Slow KPI selections query: {query_time:.2f}s for brand {brand_id}")
         
-        selections = selection_result.data if hasattr(selection_result, 'data') else []
-        
-        if selections and len(selections) > 0:
-            selection = selections[0]
+        if row:
+            selection = dict(row._mapping)
             result = {
                 "brand_id": brand_id,
                 "selected_kpis": selection.get("selected_kpis", []),
                 "visible_sections": selection.get("visible_sections", ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"]),
                 "selected_charts": selection.get("selected_charts", []),
-                "updated_at": selection.get("updated_at"),
+                "updated_at": selection.get("updated_at").isoformat() if selection.get("updated_at") else None,
                 "version": selection.get("version", 1),
                 "last_modified_by": selection.get("last_modified_by")
             }
@@ -3656,29 +4055,27 @@ async def get_brand_kpi_selections(brand_id: int):
 async def save_brand_kpi_selections(
     brand_id: int,
     request: KPISelectionRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Save KPI selections for a brand (used by managers/admins to control public view visibility)"""
     from app.services.websocket_manager import websocket_manager
     from datetime import datetime
     
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Check if brand exists
-        brand_result = supabase.client.table("brands").select("id").eq("id", brand_id).execute()
-        brands = brand_result.data if hasattr(brand_result, 'data') else []
-        
-        if not brands:
+        # Check if brand exists using SQLAlchemy
+        brand = supabase.get_brand_by_id(brand_id)
+        if not brand:
             raise HTTPException(status_code=404, detail="Brand not found")
         
         # Get current KPI selection record to check version
-        existing_result = supabase.client.table("brand_kpi_selections").select("version, selected_kpis, visible_sections, last_modified_by").eq("brand_id", brand_id).execute()
-        existing = existing_result.data if hasattr(existing_result, 'data') else []
+        existing = supabase.get_brand_kpi_selection(brand_id)
         
         # Version conflict check (only if version is provided and record exists)
-        if request.version is not None and existing and len(existing) > 0:
-            current_version = existing[0].get("version", 1)
+        if request.version is not None and existing:
+            current_version = existing.get("version", 1)
             if request.version != current_version:
                 raise HTTPException(
                     status_code=409,
@@ -3687,48 +4084,42 @@ async def save_brand_kpi_selections(
                         "message": "Resource was modified by another user. Please refresh and try again.",
                         "current_version": current_version,
                         "current_data": {
-                            "selected_kpis": existing[0].get("selected_kpis", []),
-                            "visible_sections": existing[0].get("visible_sections", []),
-                            "last_modified_by": existing[0].get("last_modified_by")
+                            "selected_kpis": existing.get("selected_kpis", []),
+                            "visible_sections": existing.get("visible_sections", []),
+                            "last_modified_by": existing.get("last_modified_by")
                         }
                     }
                 )
         
-        # Upsert KPI selections (insert or update)
-        selection_data = {
-            "brand_id": brand_id,
-            "selected_kpis": request.selected_kpis,
-            "last_modified_by": current_user.get("email")
-        }
-        
-        # Add visible_sections if provided, otherwise use default (all sections)
-        if request.visible_sections is not None:
-            selection_data["visible_sections"] = request.visible_sections
-        else:
+        # Prepare visible_sections
+        visible_sections = request.visible_sections
+        if visible_sections is None:
             # If not provided, keep existing sections or use default
-            if existing and len(existing) > 0 and existing[0].get("visible_sections"):
-                selection_data["visible_sections"] = existing[0]["visible_sections"]
+            if existing and existing.get("visible_sections"):
+                visible_sections = existing["visible_sections"]
             else:
-                selection_data["visible_sections"] = ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"]
+                visible_sections = ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"]
         
-        # Add selected_charts if provided, otherwise keep existing or use empty array
-        if request.selected_charts is not None:
-            selection_data["selected_charts"] = request.selected_charts
-        else:
+        # Prepare selected_charts
+        selected_charts = request.selected_charts
+        if selected_charts is None:
             # If not provided, keep existing charts or use empty array
-            if existing and len(existing) > 0 and existing[0].get("selected_charts") is not None:
-                selection_data["selected_charts"] = existing[0]["selected_charts"]
+            if existing and existing.get("selected_charts") is not None:
+                selected_charts = existing["selected_charts"]
             else:
-                selection_data["selected_charts"] = []
+                selected_charts = []
         
-        upsert_result = supabase.client.table("brand_kpi_selections").upsert(
-            selection_data,
-            on_conflict="brand_id"
-        ).execute()
+        # Upsert KPI selections using SQLAlchemy
+        result = supabase.upsert_brand_kpi_selection(
+            brand_id=brand_id,
+            selected_kpis=request.selected_kpis,
+            visible_sections=visible_sections,
+            selected_charts=selected_charts,
+            version=request.version,
+            last_modified_by=current_user.get("email")
+        )
         
-        # Get updated version
-        updated_result = supabase.client.table("brand_kpi_selections").select("version").eq("brand_id", brand_id).execute()
-        updated_version = updated_result.data[0].get("version", 1) if updated_result.data else 1
+        updated_version = result.get("version", 1)
         
         logger.info(f"Saved KPI selections for brand {brand_id}: {len(request.selected_kpis)} KPIs, {len(selection_data.get('visible_sections', []))} sections, {len(selection_data.get('selected_charts', []))} charts, version={updated_version}")
         
@@ -3772,24 +4163,23 @@ class GA4PropertyUpdateRequest(BaseModel):
 async def update_brand_ga4_property_id(
     brand_id: int,
     request: GA4PropertyUpdateRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Update GA4 Property ID for a brand"""
     from app.services.websocket_manager import websocket_manager
     from datetime import datetime
     
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Get current brand to check version
-        brand_result = supabase.client.table("brands").select("id, version, ga4_property_id, last_modified_by").eq("id", brand_id).execute()
-        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        # Get current brand to check version using SQLAlchemy
+        brand = supabase.get_brand_by_id(brand_id)
         
-        if not brands:
+        if not brand:
             raise HTTPException(status_code=404, detail="Brand not found")
         
-        current_brand = brands[0]
-        current_version = current_brand.get("version", 1)
+        current_version = brand.get("version", 1)
         
         # Version conflict check
         if request.version is not None and request.version != current_version:
@@ -3800,24 +4190,26 @@ async def update_brand_ga4_property_id(
                     "message": "Resource was modified by another user. Please refresh and try again.",
                     "current_version": current_version,
                     "current_data": {
-                        "ga4_property_id": current_brand.get("ga4_property_id"),
-                        "last_modified_by": current_brand.get("last_modified_by")
+                        "ga4_property_id": brand.get("ga4_property_id"),
+                        "last_modified_by": brand.get("last_modified_by")
                     }
                 }
             )
         
-        # Update GA4 property ID (set to None if empty string or None)
+        # Update GA4 property ID using SQLAlchemy method
         ga4_property_id = request.ga4_property_id
-        update_data = {
-            "ga4_property_id": ga4_property_id if ga4_property_id else None,
-            "last_modified_by": current_user.get("email")
-        }
+        success = supabase.update_brand_ga4_property_id(
+            brand_id=brand_id,
+            ga4_property_id=ga4_property_id if ga4_property_id else None,
+            user_email=current_user.get("email")
+        )
         
-        result = supabase.client.table("brands").update(update_data).eq("id", brand_id).execute()
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update GA4 property ID")
         
-        # Get updated version
-        updated_result = supabase.client.table("brands").select("version").eq("id", brand_id).execute()
-        updated_version = updated_result.data[0].get("version", 1) if updated_result.data else 1
+        # Get updated version using SQLAlchemy
+        updated_brand = supabase.get_brand_by_id(brand_id)
+        updated_version = updated_brand.get("version", 1) if updated_brand else 1
         
         logger.info(f"Updated GA4 property ID for brand {brand_id} by user {current_user.get('email')}, version={updated_version}")
         
@@ -3851,46 +4243,54 @@ async def update_brand_ga4_property_id(
 async def link_agency_analytics_campaign(
     brand_id: int,
     campaign_id: int,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Link an Agency Analytics campaign to a brand"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Check if brand exists
-        brand_result = supabase.client.table("brands").select("id").eq("id", brand_id).execute()
-        brands = brand_result.data if hasattr(brand_result, 'data') else []
-        
-        if not brands:
+        # Check if brand exists using SQLAlchemy
+        brand = supabase.get_brand_by_id(brand_id)
+        if not brand:
             raise HTTPException(status_code=404, detail="Brand not found")
         
-        # Check if campaign exists
-        campaign_result = supabase.client.table("agency_analytics_campaigns").select("id").eq("id", campaign_id).execute()
-        campaigns = campaign_result.data if hasattr(campaign_result, 'data') else []
+        # Check if campaign exists using SQLAlchemy Core
+        campaigns_table = supabase._get_table("agency_analytics_campaigns")
+        campaign_query = select(campaigns_table).where(campaigns_table.c.id == campaign_id).limit(1)
+        campaign_result = supabase.db.execute(campaign_query)
+        campaign_row = campaign_result.first()
         
-        if not campaigns:
+        if not campaign_row:
             raise HTTPException(status_code=404, detail="Agency Analytics campaign not found")
         
-        # Check if link already exists
-        existing_link_result = supabase.client.table("agency_analytics_campaign_brands").select("*").eq("brand_id", brand_id).eq("campaign_id", campaign_id).execute()
-        existing_links = existing_link_result.data if hasattr(existing_link_result, 'data') else []
+        # Check if link already exists using SQLAlchemy Core
+        links_table = supabase._get_table("agency_analytics_campaign_brands")
+        existing_query = select(links_table).where(
+            and_(links_table.c.brand_id == brand_id, links_table.c.campaign_id == campaign_id)
+        ).limit(1)
+        existing_result = supabase.db.execute(existing_query)
+        existing_row = existing_result.first()
         
-        if existing_links:
+        if existing_row:
             return {
                 "brand_id": brand_id,
                 "campaign_id": campaign_id,
                 "message": "Campaign is already linked to this brand"
             }
         
-        # Create link
+        # Create link using SQLAlchemy Core
         link_data = {
             "brand_id": brand_id,
             "campaign_id": campaign_id,
             "match_method": "manual",
-            "match_confidence": "manual"
+            "match_confidence": "manual",
+            "updated_at": datetime.utcnow()
         }
         
-        result = supabase.client.table("agency_analytics_campaign_brands").insert(link_data).execute()
+        stmt = insert(links_table).values(**link_data)
+        supabase.db.execute(stmt)
+        supabase.db.commit()
         
         logger.info(f"Linked campaign {campaign_id} to brand {brand_id} by user {current_user.get('email')}")
         
@@ -3910,28 +4310,35 @@ async def link_agency_analytics_campaign(
 async def unlink_agency_analytics_campaign(
     brand_id: int,
     campaign_id: int,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Unlink an Agency Analytics campaign from a brand"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Check if brand exists
-        brand_result = supabase.client.table("brands").select("id").eq("id", brand_id).execute()
-        brands = brand_result.data if hasattr(brand_result, 'data') else []
-        
-        if not brands:
+        # Check if brand exists using SQLAlchemy
+        brand = supabase.get_brand_by_id(brand_id)
+        if not brand:
             raise HTTPException(status_code=404, detail="Brand not found")
         
-        # Check if link exists
-        existing_link_result = supabase.client.table("agency_analytics_campaign_brands").select("*").eq("brand_id", brand_id).eq("campaign_id", campaign_id).execute()
-        existing_links = existing_link_result.data if hasattr(existing_link_result, 'data') else []
+        # Check if link exists using SQLAlchemy Core
+        links_table = supabase._get_table("agency_analytics_campaign_brands")
+        existing_query = select(links_table).where(
+            and_(links_table.c.brand_id == brand_id, links_table.c.campaign_id == campaign_id)
+        ).limit(1)
+        existing_result = supabase.db.execute(existing_query)
+        existing_row = existing_result.first()
         
-        if not existing_links:
+        if not existing_row:
             raise HTTPException(status_code=404, detail="Campaign is not linked to this brand")
         
-        # Delete link
-        result = supabase.client.table("agency_analytics_campaign_brands").delete().eq("brand_id", brand_id).eq("campaign_id", campaign_id).execute()
+        # Delete link using SQLAlchemy Core
+        delete_stmt = delete(links_table).where(
+            and_(links_table.c.brand_id == brand_id, links_table.c.campaign_id == campaign_id)
+        )
+        supabase.db.execute(delete_stmt)
+        supabase.db.commit()
         
         logger.info(f"Unlinked campaign {campaign_id} from brand {brand_id} by user {current_user.get('email')}")
         
@@ -3950,15 +4357,15 @@ async def unlink_agency_analytics_campaign(
 @handle_api_errors(context="fetching linked campaigns")
 async def get_brand_linked_campaigns(
     brand_id: int,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Get all Agency Analytics campaigns linked to a brand"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Get linked campaigns
-        links_result = supabase.client.table("agency_analytics_campaign_brands").select("*").eq("brand_id", brand_id).execute()
-        links = links_result.data if hasattr(links_result, 'data') else []
+        # Get linked campaigns using SQLAlchemy
+        links = supabase.get_campaign_brand_links(brand_id=brand_id)
         
         if not links:
             return {
@@ -3967,14 +4374,17 @@ async def get_brand_linked_campaigns(
                 "available_campaigns": []
             }
         
-        # Get campaign details
+        # Get campaign details using SQLAlchemy Core
         campaign_ids = [link["campaign_id"] for link in links]
-        campaigns_result = supabase.client.table("agency_analytics_campaigns").select("*").in_("id", campaign_ids).execute()
-        linked_campaigns = campaigns_result.data if hasattr(campaigns_result, 'data') else []
+        campaigns_table = supabase._get_table("agency_analytics_campaigns")
+        query = select(campaigns_table).where(campaigns_table.c.id.in_(campaign_ids))
+        result = supabase.db.execute(query)
+        linked_campaigns = [dict(row._mapping) for row in result]
         
-        # Get all available campaigns for selection
-        all_campaigns_result = supabase.client.table("agency_analytics_campaigns").select("*").order("id", desc=True).execute()
-        all_campaigns = all_campaigns_result.data if hasattr(all_campaigns_result, 'data') else []
+        # Get all available campaigns for selection using SQLAlchemy Core
+        all_campaigns_query = select(campaigns_table).order_by(campaigns_table.c.id.desc())
+        all_campaigns_result = supabase.db.execute(all_campaigns_query)
+        all_campaigns = [dict(row._mapping) for row in all_campaigns_result]
         
         return {
             "brand_id": brand_id,
@@ -3998,18 +4408,21 @@ class ThemeUpdateRequest(BaseModel):
 async def upload_brand_logo(
     brand_id: int,
     file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Upload brand logo to Supabase Storage"""
     try:
-        supabase = SupabaseService()
+        # Check if brand exists using SQLAlchemy
+        supabase = SupabaseService(db=db)
+        brand = supabase.get_brand_by_id(brand_id)
         
-        # Check if brand exists
-        brand_result = supabase.client.table("brands").select("id").eq("id", brand_id).execute()
-        brands = brand_result.data if hasattr(brand_result, 'data') else []
-        
-        if not brands:
+        if not brand:
             raise HTTPException(status_code=404, detail="Brand not found")
+        
+        # Create Supabase client for storage operations (storage still uses Supabase)
+        from app.core.database import get_supabase_client
+        storage_client = get_supabase_client()
         
         # Validate file type
         if not file.content_type or not file.content_type.startswith('image/'):
@@ -4028,10 +4441,10 @@ async def upload_brand_logo(
         try:
             logger.info(f"Uploading file to storage: bucket=brand-logos, path={file_path}, size={len(file_content)} bytes, content-type={file.content_type}")
             
-            responseBuckets = supabase.client.storage.list_buckets()
+            responseBuckets = storage_client.storage.list_buckets()
             logger.info(f"Buckets: {responseBuckets}")
             # Upload using Supabase storage client
-            storage_response = supabase.client.storage.from_("brand-logos").upload(
+            storage_response = storage_client.storage.from_("brand-logos").upload(
                 file=file_content,
                 path=file_path,
                 file_options={
@@ -4045,7 +4458,7 @@ async def upload_brand_logo(
             
             # Get public URL using Supabase client
             try:
-                public_url_response = supabase.client.storage.from_("brand-logos").get_public_url(file_path)
+                public_url_response = storage_client.storage.from_("brand-logos").get_public_url(file_path)
                 if isinstance(public_url_response, str):
                     logo_url = public_url_response
                 elif hasattr(public_url_response, 'get'):
@@ -4074,9 +4487,15 @@ async def upload_brand_logo(
                 detail=f"Failed to upload to storage. Error: {str(storage_error)}"
             )
         
-        # Update brand with logo URL
-        update_data = {"logo_url": logo_url}
-        result = supabase.client.table("brands").update(update_data).eq("id", brand_id).execute()
+        # Update brand with logo URL using SQLAlchemy
+        supabase = SupabaseService(db=db)
+        success = supabase.update_brand_logo_url(
+            brand_id=brand_id,
+            logo_url=logo_url,
+            user_email=current_user.get("email")
+        )
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update brand logo URL")
         
         logger.info(f"Uploaded logo for brand {brand_id} by user {current_user.get('email')}")
         
@@ -4095,25 +4514,27 @@ async def upload_brand_logo(
 @handle_api_errors(context="deleting brand logo")
 async def delete_brand_logo(
     brand_id: int,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Delete brand logo"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Check if brand exists and get current logo
-        brand_result = supabase.client.table("brands").select("id, logo_url").eq("id", brand_id).execute()
-        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        # Check if brand exists and get current logo using SQLAlchemy
+        brand = supabase.get_brand_by_id(brand_id)
         
-        if not brands:
+        if not brand:
             raise HTTPException(status_code=404, detail="Brand not found")
         
-        brand = brands[0]
         logo_url = brand.get("logo_url")
         
-        # Delete from storage if URL exists
+        # Delete from storage if URL exists (storage still uses Supabase)
         if logo_url:
             try:
+                from app.core.database import get_supabase_client
+                storage_client = get_supabase_client()
+                
                 # Extract file path from URL
                 # URL format: .../storage/v1/object/public/brand-logos/{filename}
                 if "brand-logos/" in logo_url:
@@ -4126,13 +4547,19 @@ async def delete_brand_logo(
                 
                 if file_path:
                     logger.info(f"Deleting file from storage: {file_path}")
-                    supabase.client.storage.from_("brand-logos").remove([file_path])
+                    storage_client.storage.from_("brand-logos").remove([file_path])
             except Exception as storage_error:
                 logger.warning(f"Failed to delete logo from storage: {str(storage_error)}")
         
-        # Update brand to remove logo URL
-        update_data = {"logo_url": None}
-        result = supabase.client.table("brands").update(update_data).eq("id", brand_id).execute()
+        # Update brand to remove logo URL using SQLAlchemy
+        success = supabase.update_brand_logo_url(
+            brand_id=brand_id,
+            logo_url=None,
+            user_email=current_user.get("email")
+        )
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update brand logo URL")
         
         logger.info(f"Deleted logo for brand {brand_id} by user {current_user.get('email')}")
         
@@ -4151,24 +4578,23 @@ async def delete_brand_logo(
 async def update_brand_theme(
     brand_id: int,
     request: ThemeUpdateRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Update brand theme configuration"""
     from app.services.websocket_manager import websocket_manager
     from datetime import datetime
     
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Get current brand to check version
-        brand_result = supabase.client.table("brands").select("id, version, theme, last_modified_by").eq("id", brand_id).execute()
-        brands = brand_result.data if hasattr(brand_result, 'data') else []
+        # Get current brand to check version using SQLAlchemy
+        brand = supabase.get_brand_by_id(brand_id)
         
-        if not brands:
+        if not brand:
             raise HTTPException(status_code=404, detail="Brand not found")
         
-        current_brand = brands[0]
-        current_version = current_brand.get("version", 1)
+        current_version = brand.get("version", 1)
         
         # Version conflict check
         if request.version is not None and request.version != current_version:
@@ -4179,14 +4605,14 @@ async def update_brand_theme(
                     "message": "Resource was modified by another user. Please refresh and try again.",
                     "current_version": current_version,
                     "current_data": {
-                        "theme": current_brand.get("theme"),
-                        "last_modified_by": current_brand.get("last_modified_by")
+                        "theme": brand.get("theme"),
+                        "last_modified_by": brand.get("last_modified_by")
                     }
                 }
             )
         
         # Get existing theme or initialize empty dict
-        existing_theme = current_brand.get("theme") or {}
+        existing_theme = brand.get("theme") or {}
         if not isinstance(existing_theme, dict):
             existing_theme = {}
         
@@ -4203,16 +4629,19 @@ async def update_brand_theme(
         if request.custom is not None:
             updated_theme["custom"] = request.custom
         
-        # Update brand theme
-        update_data = {
-            "theme": updated_theme,
-            "last_modified_by": current_user.get("email")
-        }
-        result = supabase.client.table("brands").update(update_data).eq("id", brand_id).execute()
+        # Update brand theme using SQLAlchemy method
+        success = supabase.update_brand_theme(
+            brand_id=brand_id,
+            theme=updated_theme,
+            user_email=current_user.get("email")
+        )
         
-        # Get updated version
-        updated_result = supabase.client.table("brands").select("version").eq("id", brand_id).execute()
-        updated_version = updated_result.data[0].get("version", 1) if updated_result.data else 1
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update brand theme")
+        
+        # Get updated version using SQLAlchemy
+        updated_brand = supabase.get_brand_by_id(brand_id)
+        updated_version = updated_brand.get("version", 1) if updated_brand else 1
         
         logger.info(f"Updated theme for brand {brand_id} by user {current_user.get('email')}, version={updated_version}")
         
@@ -4251,62 +4680,129 @@ async def get_clients(
     page: Optional[int] = Query(1, description="Page number (1-indexed)"),
     page_size: Optional[int] = Query(25, description="Number of records per page"),
     search: Optional[str] = Query(None, description="Search by company name"),
-    current_user: dict = Depends(get_current_user)
+    ga4_assigned: Optional[bool] = Query(None, description="Filter by GA4 assignment (true=assigned, false=not assigned)"),
+    scrunch_assigned: Optional[bool] = Query(None, description="Filter by Scrunch assignment (true=assigned, false=not assigned)"),
+    active: Optional[bool] = Query(None, description="Filter by active status (true=active, false=inactive)"),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    """Get all clients from database with pagination and search"""
+    """Get all clients from database with pagination, search, and filters"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
         # Calculate offset from page
         offset = (page - 1) * page_size if page > 0 else 0
         
-        # Build query with search filter and count
-        # First get all clients with their campaigns
-        query = supabase.client.table("clients").select(
-            "*, client_campaigns(campaign_id, agency_analytics_campaigns(*))",
-            count="exact"
-        )
+        # Build query using SQLAlchemy Core
+        clients_table = supabase._get_table("clients")
+        query = select(clients_table)
         
         # Apply search filter if provided
         if search and search.strip():
-            search_term = search.strip()
-            query = query.ilike("company_name", f"%{search_term}%")
+            search_term = f"%{search.strip()}%"
+            query = query.where(clients_table.c.company_name.ilike(search_term))
+        
+        # Apply GA4 filter
+        if ga4_assigned is not None:
+            if ga4_assigned:
+                query = query.where(clients_table.c.ga4_property_id.isnot(None))
+                query = query.where(clients_table.c.ga4_property_id != '')
+            else:
+                query = query.where(
+                    or_(
+                        clients_table.c.ga4_property_id.is_(None),
+                        clients_table.c.ga4_property_id == ''
+                    )
+                )
+        
+        # Apply Scrunch filter
+        if scrunch_assigned is not None:
+            if scrunch_assigned:
+                query = query.where(clients_table.c.scrunch_brand_id.isnot(None))
+            else:
+                query = query.where(clients_table.c.scrunch_brand_id.is_(None))
+        
+        # Get total count before applying active filter (since active depends on campaigns)
+        count_query = select(func.count()).select_from(query.alias())
+        total_count = supabase.db.execute(count_query).scalar()
         
         # Order by company name for consistent results
-        query = query.order("company_name", desc=False)
+        query = query.order_by(clients_table.c.company_name.asc())
         
         # Apply pagination
-        query = query.range(offset, offset + page_size - 1)
+        query = query.offset(offset).limit(page_size)
         
         # Execute query
-        result = query.execute()
-        all_items = result.data if hasattr(result, 'data') else []
-        total_count = result.count if hasattr(result, 'count') else len(all_items)
+        result = supabase.db.execute(query)
+        items = [dict(row._mapping) for row in result]
         
-        # Calculate total pages
-        total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 0
-        
-        # Use all items (no filtering - show all clients regardless of campaign status)
-        items = all_items
-        
-        # For each client, get keyword count from their campaigns
+        # For each client, get campaigns and keyword count
         for item in items:
             client_id = item.get("id")
-            keywords_count = 0
             
-            # Get all campaigns for this client
-            campaigns = item.get("client_campaigns", [])
+            # Get campaigns for this client
+            campaigns = supabase.get_client_campaigns(client_id)
+            item["client_campaigns"] = campaigns
+            
+            # Get keyword count from campaigns
+            keywords_count = 0
             campaign_ids = [c.get("campaign_id") for c in campaigns if c.get("campaign_id")]
             
             if campaign_ids:
-                # Get count of keywords for all campaigns
-                keywords_result = supabase.client.table("agency_analytics_keywords").select(
-                    "id", count="exact"
-                ).in_("campaign_id", campaign_ids).execute()
-                
-                keywords_count = keywords_result.count if hasattr(keywords_result, 'count') else 0
+                keywords_table = supabase._get_table("agency_analytics_keywords")
+                keywords_query = select(func.count()).select_from(
+                    keywords_table
+                ).where(keywords_table.c.campaign_id.in_(campaign_ids))
+                keywords_result = supabase.db.execute(keywords_query)
+                keywords_count = keywords_result.scalar() or 0
             
             item["keywords_count"] = keywords_count
+        
+        # Apply active filter after fetching campaigns (since active = has campaigns)
+        if active is not None:
+            if active:
+                items = [item for item in items if len(item.get("client_campaigns", [])) > 0]
+            else:
+                items = [item for item in items if len(item.get("client_campaigns", [])) == 0]
+            
+            # Recalculate total count for active filter
+            # We need to get all clients matching other filters, then filter by active
+            base_query = select(clients_table)
+            if search and search.strip():
+                search_term = f"%{search.strip()}%"
+                base_query = base_query.where(clients_table.c.company_name.ilike(search_term))
+            if ga4_assigned is not None:
+                if ga4_assigned:
+                    base_query = base_query.where(clients_table.c.ga4_property_id.isnot(None))
+                    base_query = base_query.where(clients_table.c.ga4_property_id != '')
+                else:
+                    base_query = base_query.where(
+                        or_(
+                            clients_table.c.ga4_property_id.is_(None),
+                            clients_table.c.ga4_property_id == ''
+                        )
+                    )
+            if scrunch_assigned is not None:
+                if scrunch_assigned:
+                    base_query = base_query.where(clients_table.c.scrunch_brand_id.isnot(None))
+                else:
+                    base_query = base_query.where(clients_table.c.scrunch_brand_id.is_(None))
+            
+            all_matching = supabase.db.execute(base_query).fetchall()
+            all_matching_dicts = [dict(row._mapping) for row in all_matching]
+            
+            # Get campaigns for all matching clients to determine active status
+            active_count = 0
+            for client_dict in all_matching_dicts:
+                client_id = client_dict.get("id")
+                campaigns = supabase.get_client_campaigns(client_id)
+                has_campaigns = len(campaigns) > 0
+                if active and has_campaigns:
+                    active_count += 1
+                elif not active and not has_campaigns:
+                    active_count += 1
+            
+            total_count = active_count
         
         # Calculate pagination metadata
         total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 1
@@ -4329,18 +4825,22 @@ async def get_clients(
 @handle_api_errors(context="fetching client")
 async def get_client(
     client_id: int,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Get a specific client by ID"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
+        client = supabase.get_client_by_id(client_id)
         
-        result = supabase.client.table("clients").select("*, client_campaigns(campaign_id, agency_analytics_campaigns(*))").eq("id", client_id).limit(1).execute()
-        
-        if not result.data:
+        if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
-        return result.data[0]
+        # Get campaigns for this client
+        campaigns = supabase.get_client_campaigns(client_id)
+        client["client_campaigns"] = campaigns
+        
+        return client
     except HTTPException:
         raise
     except Exception as e:
@@ -4350,11 +4850,12 @@ async def get_client(
 @router.get("/data/clients/slug/{url_slug}")
 @handle_api_errors(context="fetching client by slug")
 async def get_client_by_slug(
-    url_slug: str
+    url_slug: str,
+    db: Session = Depends(get_db)
 ):
     """Get client by URL slug (public access for whitelabeled reports)"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         client = supabase.get_client_by_slug(url_slug)
         
         if not client:
@@ -4377,23 +4878,34 @@ class ClientMappingUpdateRequest(BaseModel):
 async def update_client_mappings(
     client_id: int,
     request: ClientMappingUpdateRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Update client mappings (GA4 property ID and/or Scrunch brand ID)"""
     from app.services.websocket_manager import websocket_manager
     from datetime import datetime
+    from sqlalchemy import select, update, text
     
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Get current client to check version
-        client_result = supabase.client.table("clients").select("id, version, ga4_property_id, scrunch_brand_id, last_modified_by").eq("id", client_id).execute()
-        clients = client_result.data if hasattr(client_result, 'data') else []
+        # Get current client to check version using SQLAlchemy Core
+        table = supabase._get_table("clients")
+        query = select(
+            table.c.id,
+            table.c.version,
+            table.c.ga4_property_id,
+            table.c.scrunch_brand_id,
+            table.c.last_modified_by
+        ).where(table.c.id == client_id).limit(1)
         
-        if not clients:
+        result = db.execute(query)
+        current_client_row = result.first()
+        
+        if not current_client_row:
             raise HTTPException(status_code=404, detail="Client not found")
         
-        current_client = clients[0]
+        current_client = dict(current_client_row._mapping)
         current_version = current_client.get("version", 1)
         
         # Version conflict check
@@ -4412,6 +4924,7 @@ async def update_client_mappings(
                 }
             )
         
+        # Update client mappings
         success = supabase.update_client_mapping(
             client_id=client_id,
             ga4_property_id=request.ga4_property_id,
@@ -4422,9 +4935,11 @@ async def update_client_mappings(
         if not success:
             raise HTTPException(status_code=500, detail="Failed to update client mappings")
         
-        # Get updated version
-        updated_result = supabase.client.table("clients").select("version").eq("id", client_id).execute()
-        updated_version = updated_result.data[0].get("version", 1) if updated_result.data else 1
+        # Get updated version using SQLAlchemy Core
+        updated_query = select(table.c.version).where(table.c.id == client_id).limit(1)
+        updated_result = db.execute(updated_query)
+        updated_row = updated_result.first()
+        updated_version = updated_row.version if updated_row else 1
         
         # Broadcast WebSocket notification
         try:
@@ -4467,24 +4982,23 @@ class ClientThemeUpdateRequest(BaseModel):
 async def update_client_theme(
     client_id: int,
     request: ClientThemeUpdateRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Update client theme and branding"""
     from app.services.websocket_manager import websocket_manager
     from datetime import datetime
     
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Get current client to check version
-        client_result = supabase.client.table("clients").select("id, version, theme_color, logo_url, secondary_color, font_family, favicon_url, report_title, custom_css, footer_text, header_text, last_modified_by").eq("id", client_id).execute()
-        clients = client_result.data if hasattr(client_result, 'data') else []
+        # Get current client to check version using SQLAlchemy
+        client = supabase.get_client_by_id(client_id)
         
-        if not clients:
+        if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
-        current_client = clients[0]
-        current_version = current_client.get("version", 1)
+        current_version = client.get("version", 1)
         
         # Version conflict check
         if request.version is not None and request.version != current_version:
@@ -4495,16 +5009,16 @@ async def update_client_theme(
                     "message": "Resource was modified by another user. Please refresh and try again.",
                     "current_version": current_version,
                     "current_data": {
-                        "theme_color": current_client.get("theme_color"),
-                        "logo_url": current_client.get("logo_url"),
-                        "secondary_color": current_client.get("secondary_color"),
-                        "font_family": current_client.get("font_family"),
-                        "favicon_url": current_client.get("favicon_url"),
-                        "report_title": current_client.get("report_title"),
-                        "custom_css": current_client.get("custom_css"),
-                        "footer_text": current_client.get("footer_text"),
-                        "header_text": current_client.get("header_text"),
-                        "last_modified_by": current_client.get("last_modified_by")
+                        "theme_color": client.get("theme_color"),
+                        "logo_url": client.get("logo_url"),
+                        "secondary_color": client.get("secondary_color"),
+                        "font_family": client.get("font_family"),
+                        "favicon_url": client.get("favicon_url"),
+                        "report_title": client.get("report_title"),
+                        "custom_css": client.get("custom_css"),
+                        "footer_text": client.get("footer_text"),
+                        "header_text": client.get("header_text"),
+                        "last_modified_by": client.get("last_modified_by")
                     }
                 }
             )
@@ -4530,9 +5044,9 @@ async def update_client_theme(
         if not success:
             raise HTTPException(status_code=500, detail="Failed to update client theme")
         
-        # Get updated version
-        updated_result = supabase.client.table("clients").select("version").eq("id", client_id).execute()
-        updated_version = updated_result.data[0].get("version", 1) if updated_result.data else 1
+        # Get updated version using SQLAlchemy
+        updated_client = supabase.get_client_by_id(client_id)
+        updated_version = updated_client.get("version", 1) if updated_client else 1
         
         # Broadcast WebSocket notification
         try:
@@ -4563,18 +5077,21 @@ async def update_client_theme(
 async def upload_client_logo(
     client_id: int,
     file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Upload client logo to Supabase Storage"""
     try:
-        supabase = SupabaseService()
+        # Check if client exists using SQLAlchemy
+        supabase = SupabaseService(db=db)
+        client = supabase.get_client_by_id(client_id)
         
-        # Check if client exists (same pattern as brand logo upload)
-        client_result = supabase.client.table("clients").select("id").eq("id", client_id).execute()
-        clients = client_result.data if hasattr(client_result, 'data') else []
-        
-        if not clients:
+        if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Create Supabase client for storage operations (storage still uses Supabase)
+        from app.core.database import get_supabase_client
+        storage_client = get_supabase_client()
         
         # Validate file type
         if not file.content_type or not file.content_type.startswith('image/'):
@@ -4593,10 +5110,10 @@ async def upload_client_logo(
         try:
             logger.info(f"Uploading client logo to storage: bucket=brand-logos, path={file_path}, size={len(file_content)} bytes, content-type={file.content_type}")
             
-            responseBuckets = supabase.client.storage.list_buckets()
+            responseBuckets = storage_client.storage.list_buckets()
             logger.info(f"Buckets: {responseBuckets}")
             # Upload using Supabase storage client
-            storage_response = supabase.client.storage.from_("brand-logos").upload(
+            storage_response = storage_client.storage.from_("brand-logos").upload(
                 file=file_content,
                 path=file_path,
                 file_options={
@@ -4610,7 +5127,7 @@ async def upload_client_logo(
             
             # Get public URL using Supabase client
             try:
-                public_url_response = supabase.client.storage.from_("brand-logos").get_public_url(file_path)
+                public_url_response = storage_client.storage.from_("brand-logos").get_public_url(file_path)
                 if isinstance(public_url_response, str):
                     logo_url = public_url_response
                 elif hasattr(public_url_response, 'get'):
@@ -4635,9 +5152,16 @@ async def upload_client_logo(
                 detail=f"Failed to upload to storage. Error: {str(storage_error)}"
             )
         
-        # Update client with logo URL
-        update_data = {"logo_url": logo_url}
-        result = supabase.client.table("clients").update(update_data).eq("id", client_id).execute()
+        # Update client with logo URL using SQLAlchemy
+        theme_data = {"logo_url": logo_url}
+        success = supabase.update_client_theme(
+            client_id=client_id,
+            theme_data=theme_data,
+            user_email=current_user.get("email")
+        )
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update client logo URL")
         
         logger.info(f"Uploaded logo for client {client_id} by user {current_user.get('email')}")
         
@@ -4656,22 +5180,26 @@ async def upload_client_logo(
 @handle_api_errors(context="deleting client logo")
 async def delete_client_logo(
     client_id: int,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Delete client logo"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Check if client exists and get current logo
+        # Check if client exists and get current logo using SQLAlchemy
         client = supabase.get_client_by_id(client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
         logo_url = client.get("logo_url")
         
-        # Delete from storage if URL exists
+        # Delete from storage if URL exists (storage still uses Supabase)
         if logo_url:
             try:
+                from app.core.database import get_supabase_client
+                storage_client = get_supabase_client()
+                
                 # Extract file path from URL
                 if "brand-logos/" in logo_url:
                     file_path = logo_url.split("brand-logos/")[-1].split("?")[0]
@@ -4682,13 +5210,20 @@ async def delete_client_logo(
                 
                 if file_path:
                     logger.info(f"Deleting file from storage: {file_path}")
-                    supabase.client.storage.from_("brand-logos").remove([file_path])
+                    storage_client.storage.from_("brand-logos").remove([file_path])
             except Exception as storage_error:
                 logger.warning(f"Failed to delete logo from storage: {str(storage_error)}")
         
-        # Update client to remove logo URL
-        update_data = {"logo_url": None}
-        result = supabase.client.table("clients").update(update_data).eq("id", client_id).execute()
+        # Update client to remove logo URL using SQLAlchemy
+        theme_data = {"logo_url": None}
+        success = supabase.update_client_theme(
+            client_id=client_id,
+            theme_data=theme_data,
+            user_email=current_user.get("email")
+        )
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update client logo URL")
         
         logger.info(f"Deleted logo for client {client_id} by user {current_user.get('email')}")
         
@@ -4706,13 +5241,14 @@ async def delete_client_logo(
 @handle_api_errors(context="fetching client campaigns")
 async def get_client_campaigns(
     client_id: int,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Get all campaigns linked to a client"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Check if client exists
+        # Check if client exists using SQLAlchemy
         client = supabase.get_client_by_id(client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
@@ -4736,51 +5272,29 @@ async def link_client_campaign(
     client_id: int,
     campaign_id: int,
     is_primary: Optional[bool] = Query(False, description="Mark as primary campaign"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Link a campaign to a client"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Check if client exists
+        # Check if client exists using SQLAlchemy
         client = supabase.get_client_by_id(client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
-        # Check if campaign exists
-        campaign_result = supabase.client.table("agency_analytics_campaigns").select("id").eq("id", campaign_id).execute()
-        campaigns = campaign_result.data if hasattr(campaign_result, 'data') else []
+        # Check if campaign exists using SQLAlchemy Core
+        campaigns_table = supabase._get_table("agency_analytics_campaigns")
+        campaign_query = select(campaigns_table.c.id).where(campaigns_table.c.id == campaign_id).limit(1)
+        campaign_result = db.execute(campaign_query)
+        campaign_row = campaign_result.first()
         
-        if not campaigns:
+        if not campaign_row:
             raise HTTPException(status_code=404, detail="Agency Analytics campaign not found")
         
-        # Check if link already exists
-        existing_link_result = supabase.client.table("client_campaigns").select("*").eq("client_id", client_id).eq("campaign_id", campaign_id).execute()
-        existing_links = existing_link_result.data if hasattr(existing_link_result, 'data') else []
-        
-        if existing_links:
-            # Update existing link
-            update_data = {"is_primary": is_primary}
-            result = supabase.client.table("client_campaigns").update(update_data).eq("client_id", client_id).eq("campaign_id", campaign_id).execute()
-            logger.info(f"Updated campaign {campaign_id} link for client {client_id} by user {current_user.get('email')}")
-            return {
-                "client_id": client_id,
-                "campaign_id": campaign_id,
-                "is_primary": is_primary,
-                "message": "Campaign link updated successfully"
-            }
-        
-        # If setting as primary, unset other primary campaigns
-        if is_primary:
-            supabase.client.table("client_campaigns").update({"is_primary": False}).eq("client_id", client_id).execute()
-        
-        # Create new link
-        link_data = {
-            "client_id": client_id,
-            "campaign_id": campaign_id,
-            "is_primary": is_primary
-        }
-        result = supabase.client.table("client_campaigns").insert(link_data).execute()
+        # Use the existing SQLAlchemy method to link campaign
+        supabase._link_campaign_to_client(campaign_id, client_id, is_primary)
         
         logger.info(f"Linked campaign {campaign_id} to client {client_id} by user {current_user.get('email')}")
         
@@ -4801,26 +5315,41 @@ async def link_client_campaign(
 async def unlink_client_campaign(
     client_id: int,
     campaign_id: int,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Unlink a campaign from a client"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Check if client exists
+        # Check if client exists using SQLAlchemy
         client = supabase.get_client_by_id(client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
-        # Check if link exists
-        existing_link_result = supabase.client.table("client_campaigns").select("*").eq("client_id", client_id).eq("campaign_id", campaign_id).execute()
-        existing_links = existing_link_result.data if hasattr(existing_link_result, 'data') else []
+        # Check if link exists using SQLAlchemy Core
+        client_campaigns_table = supabase._get_table("client_campaigns")
+        link_query = select(client_campaigns_table).where(
+            and_(
+                client_campaigns_table.c.client_id == client_id,
+                client_campaigns_table.c.campaign_id == campaign_id
+            )
+        ).limit(1)
+        link_result = db.execute(link_query)
+        existing_link = link_result.first()
         
-        if not existing_links:
+        if not existing_link:
             raise HTTPException(status_code=404, detail="Campaign is not linked to this client")
         
-        # Delete the link
-        result = supabase.client.table("client_campaigns").delete().eq("client_id", client_id).eq("campaign_id", campaign_id).execute()
+        # Delete the link using SQLAlchemy Core
+        delete_stmt = delete(client_campaigns_table).where(
+            and_(
+                client_campaigns_table.c.client_id == client_id,
+                client_campaigns_table.c.campaign_id == campaign_id
+            )
+        )
+        db.execute(delete_stmt)
+        db.commit()
         
         logger.info(f"Unlinked campaign {campaign_id} from client {client_id} by user {current_user.get('email')}")
         
@@ -4859,13 +5388,14 @@ async def get_client_keywords(
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     page: Optional[int] = Query(1, description="Page number (1-indexed)"),
     page_size: Optional[int] = Query(50, description="Items per page"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Get keywords for a client with filtering, sorting, and pagination"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Check if client exists
+        # Check if client exists using SQLAlchemy
         client = supabase.get_client_by_id(client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
@@ -4892,35 +5422,55 @@ async def get_client_keywords(
                 }
             }
         
-        # Build base query for keywords with joins
-        # We'll need to get keywords, then join with summaries
-        query = supabase.client.table("agency_analytics_keywords").select(
-            "id, keyword_phrase, campaign_id, primary_keyword, search_location, "
-            "search_location_formatted_name, search_location_region_name, "
-            "search_location_country_code, search_language, tags, "
-            "agency_analytics_campaigns(company), "
-            "agency_analytics_keyword_ranking_summaries(*)"
-        ).in_("campaign_id", campaign_ids)
+        # Build base query for keywords with joins using SQLAlchemy Core
+        keywords_table = supabase._get_table("agency_analytics_keywords")
+        campaigns_table = supabase._get_table("agency_analytics_campaigns")
+        summaries_table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
         
-        # Apply filters
+        # Build conditions
+        conditions = [keywords_table.c.campaign_id.in_(campaign_ids)]
         if campaign_id:
-            query = query.eq("campaign_id", campaign_id)
+            conditions.append(keywords_table.c.campaign_id == campaign_id)
         if location_country:
-            query = query.eq("search_location_country_code", location_country)
+            conditions.append(keywords_table.c.search_location_country_code == location_country)
         if location_region:
-            query = query.eq("search_location_region_name", location_region)
+            conditions.append(keywords_table.c.search_location_region_name == location_region)
         if location_city:
-            query = query.eq("search_location_formatted_name", location_city)
+            conditions.append(keywords_table.c.search_location_formatted_name == location_city)
         if primary_only:
-            query = query.eq("primary_keyword", True)
+            conditions.append(keywords_table.c.primary_keyword == True)
         if language:
-            query = query.eq("search_language", language)
+            conditions.append(keywords_table.c.search_language == language)
         if search:
-            query = query.ilike("keyword_phrase", f"%{search}%")
+            conditions.append(keywords_table.c.keyword_phrase.ilike(f"%{search}%"))
         
-        # Get all keywords first (we'll filter by summary fields in Python)
-        all_keywords = query.execute()
-        keywords_data = all_keywords.data if hasattr(all_keywords, 'data') else []
+        # Get keywords with joins
+        query = select(
+            keywords_table,
+            campaigns_table.c.company,
+            summaries_table
+        ).join(
+            campaigns_table, keywords_table.c.campaign_id == campaigns_table.c.id, isouter=True
+        ).join(
+            summaries_table, keywords_table.c.id == summaries_table.c.keyword_id, isouter=True
+        ).where(and_(*conditions))
+        
+        # Execute query
+        result = db.execute(query)
+        keywords_data = []
+        for row in result:
+            kw_dict = dict(row._mapping)
+            # Handle the joined data
+            if 'company' in kw_dict:
+                kw_dict['agency_analytics_campaigns'] = {'company': kw_dict.pop('company')}
+            # Handle summaries - they might be in the row
+            if summaries_table.name in kw_dict:
+                summary_data = kw_dict.get(summaries_table.name)
+                if summary_data:
+                    kw_dict['agency_analytics_keyword_ranking_summaries'] = [summary_data] if not isinstance(summary_data, list) else summary_data
+                else:
+                    kw_dict['agency_analytics_keyword_ranking_summaries'] = []
+            keywords_data.append(kw_dict)
         
         # Process and filter by summary fields (volume, rankings, competition)
         filtered_keywords = []
@@ -5091,13 +5641,14 @@ async def get_client_keyword_rankings_over_time(
     location_country: Optional[str] = Query(None, description="Filter by country code"),
     group_by: Optional[str] = Query("day", description="Group by: day, week, month"),
     engine: Optional[str] = Query("both", description="Engine: google, bing, both"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Get keyword rankings distribution over time by position buckets"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Check if client exists
+        # Check if client exists using SQLAlchemy
         client = supabase.get_client_by_id(client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
@@ -5108,33 +5659,44 @@ async def get_client_keyword_rankings_over_time(
         if not start_date:
             start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
         
-        # Get campaign IDs for this client
+        # Get campaign IDs for this client using SQLAlchemy
         client_campaigns = supabase.get_client_campaigns(client_id)
         campaign_ids = [c.get("campaign_id") for c in client_campaigns if c.get("campaign_id")]
         
         if not campaign_ids:
             return {"data": []}
         
-        # Get keyword IDs for filtering
-        keyword_query = supabase.client.table("agency_analytics_keywords").select("id").in_("campaign_id", campaign_ids)
+        # Get keyword IDs for filtering using SQLAlchemy Core
+        keywords_table = supabase._get_table("agency_analytics_keywords")
+        keyword_conditions = [keywords_table.c.campaign_id.in_(campaign_ids)]
         if campaign_id:
-            keyword_query = keyword_query.eq("campaign_id", campaign_id)
+            keyword_conditions.append(keywords_table.c.campaign_id == campaign_id)
         if location_country:
-            keyword_query = keyword_query.eq("search_location_country_code", location_country)
+            keyword_conditions.append(keywords_table.c.search_location_country_code == location_country)
         
-        keywords_result = keyword_query.execute()
-        keyword_ids = [kw.get("id") for kw in (keywords_result.data if hasattr(keywords_result, 'data') else []) if kw.get("id")]
+        keyword_query = select(keywords_table.c.id).where(and_(*keyword_conditions))
+        keywords_result = db.execute(keyword_query)
+        keyword_ids = [row.id for row in keywords_result if row.id]
         
         if not keyword_ids:
             return {"data": []}
         
-        # Get rankings data
-        rankings_query = supabase.client.table("agency_analytics_keyword_rankings").select(
-            "date, google_ranking, bing_ranking"
-        ).in_("keyword_id", keyword_ids).gte("date", start_date).lte("date", end_date).order("date", desc=False)
+        # Get rankings data using SQLAlchemy Core
+        rankings_table = supabase._get_table("agency_analytics_keyword_rankings")
+        rankings_query = select(
+            rankings_table.c.date,
+            rankings_table.c.google_ranking,
+            rankings_table.c.bing_ranking
+        ).where(
+            and_(
+                rankings_table.c.keyword_id.in_(keyword_ids),
+                rankings_table.c.date >= start_date,
+                rankings_table.c.date <= end_date
+            )
+        ).order_by(rankings_table.c.date.asc())
         
-        rankings_result = rankings_query.execute()
-        rankings_data = rankings_result.data if hasattr(rankings_result, 'data') else []
+        rankings_result = db.execute(rankings_query)
+        rankings_data = [dict(row._mapping) for row in rankings_result]
         
         # Group by date and calculate position buckets
         date_groups = {}
@@ -5231,13 +5793,14 @@ async def get_client_keyword_summary(
     date_range: Optional[str] = Query("last_30_days", description="Date range: last_7_days, last_30_days, last_90_days, custom"),
     start_date: Optional[str] = Query(None, description="Custom start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="Custom end date (YYYY-MM-DD)"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Get keyword summary KPIs for a client"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         
-        # Check if client exists
+        # Check if client exists using SQLAlchemy
         client = supabase.get_client_by_id(client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
@@ -5262,18 +5825,48 @@ async def get_client_keyword_summary(
                 "stable_keywords_count": 0
             }
         
-        # Build query for keywords with summaries
-        query = supabase.client.table("agency_analytics_keywords").select(
-            "id, agency_analytics_keyword_ranking_summaries(*)"
-        ).in_("campaign_id", campaign_ids)
+        # Build query for keywords with summaries using SQLAlchemy Core
+        keywords_table = supabase._get_table("agency_analytics_keywords")
+        summaries_table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
         
+        conditions = [keywords_table.c.campaign_id.in_(campaign_ids)]
         if campaign_id:
-            query = query.eq("campaign_id", campaign_id)
+            conditions.append(keywords_table.c.campaign_id == campaign_id)
         if location_country:
-            query = query.eq("search_location_country_code", location_country)
+            conditions.append(keywords_table.c.search_location_country_code == location_country)
         
-        keywords_result = query.execute()
-        keywords_data = keywords_result.data if hasattr(keywords_result, 'data') else []
+        # Get keywords with summaries using left join
+        query = select(
+            keywords_table.c.id,
+            summaries_table
+        ).join(
+            summaries_table, keywords_table.c.id == summaries_table.c.keyword_id, isouter=True
+        ).where(and_(*conditions))
+        
+        keywords_result = db.execute(query)
+        keywords_data = []
+        current_keyword_id = None
+        current_keyword = None
+        
+        for row in keywords_result:
+            row_dict = dict(row._mapping)
+            kw_id = row_dict.get('id')
+            summary_data = row_dict.get(summaries_table.name)
+            
+            if kw_id != current_keyword_id:
+                if current_keyword:
+                    keywords_data.append(current_keyword)
+                current_keyword_id = kw_id
+                current_keyword = {
+                    'id': kw_id,
+                    'agency_analytics_keyword_ranking_summaries': []
+                }
+            
+            if summary_data:
+                current_keyword['agency_analytics_keyword_ranking_summaries'].append(summary_data)
+        
+        if current_keyword:
+            keywords_data.append(current_keyword)
         
         # Calculate KPIs
         total_keywords = len(keywords_data)
@@ -5511,18 +6104,19 @@ async def get_prompts_analytics(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     limit: Optional[int] = Query(50, description="Number of records to return"),
-    offset: Optional[int] = Query(0, description="Offset for pagination")
+    offset: Optional[int] = Query(0, description="Offset for pagination"),
+    db: Session = Depends(get_db)
 ):
     """Get aggregated prompts and responses analytics by different dimensions"""
     try:
-        supabase = SupabaseService()
+        supabase = SupabaseService(db=db)
         brand_id = None
         
-        # Resolve brand_id from client_id or slug
+        # Resolve brand_id from client_id or slug using SQLAlchemy
         if client_id:
-            client_result = supabase.client.table("clients").select("scrunch_brand_id").eq("id", client_id).limit(1).execute()
-            if client_result.data and client_result.data[0].get("scrunch_brand_id"):
-                brand_id = client_result.data[0]["scrunch_brand_id"]
+            client = supabase.get_client_by_id(client_id)
+            if client and client.get("scrunch_brand_id"):
+                brand_id = client["scrunch_brand_id"]
             else:
                 return {
                     "items": [],
@@ -5535,10 +6129,10 @@ async def get_prompts_analytics(
             if client and client.get("scrunch_brand_id"):
                 brand_id = client["scrunch_brand_id"]
             else:
-                # Fall back to brand by slug
-                brand_result = supabase.client.table("brands").select("id").eq("slug", slug).limit(1).execute()
-                if brand_result.data:
-                    brand_id = brand_result.data[0]["id"]
+                # Fall back to brand by slug using SQLAlchemy
+                brand = supabase.get_brand_by_slug(slug)
+                if brand:
+                    brand_id = brand["id"]
                 else:
                     return {
                         "items": [],
@@ -5553,22 +6147,28 @@ async def get_prompts_analytics(
                 "total_count": 0
             }
         
-        # Get prompts and responses
-        prompts_query = supabase.client.table("prompts").select("*").eq("brand_id", brand_id)
-        if start_date:
-            prompts_query = prompts_query.gte("created_at", f"{start_date}T00:00:00Z")
-        if end_date:
-            prompts_query = prompts_query.lte("created_at", f"{end_date}T23:59:59Z")
-        prompts_result = prompts_query.execute()
-        prompts = prompts_result.data if hasattr(prompts_result, 'data') else []
+        # Get prompts and responses using SQLAlchemy
+        from app.db.models import Prompt, Response
         
-        responses_query = supabase.client.table("responses").select("*").eq("brand_id", brand_id)
+        prompts_conditions = [Prompt.brand_id == brand_id]
         if start_date:
-            responses_query = responses_query.gte("created_at", f"{start_date}T00:00:00Z")
+            prompts_conditions.append(Prompt.created_at >= datetime.fromisoformat(f"{start_date}T00:00:00+00:00"))
         if end_date:
-            responses_query = responses_query.lte("created_at", f"{end_date}T23:59:59Z")
-        responses_result = responses_query.execute()
-        responses = responses_result.data if hasattr(responses_result, 'data') else []
+            prompts_conditions.append(Prompt.created_at <= datetime.fromisoformat(f"{end_date}T23:59:59+00:00"))
+        
+        prompts_query = select(Prompt).where(and_(*prompts_conditions))
+        prompts_result = db.execute(prompts_query)
+        prompts = [dict(row._mapping) for row in prompts_result]
+        
+        responses_conditions = [Response.brand_id == brand_id]
+        if start_date:
+            responses_conditions.append(Response.created_at >= datetime.fromisoformat(f"{start_date}T00:00:00+00:00"))
+        if end_date:
+            responses_conditions.append(Response.created_at <= datetime.fromisoformat(f"{end_date}T23:59:59+00:00"))
+        
+        responses_query = select(Response).where(and_(*responses_conditions))
+        responses_result = db.execute(responses_query)
+        responses = [dict(row._mapping) for row in responses_result]
         
         # Get previous period data for change calculation
         prev_responses = []
@@ -5580,11 +6180,15 @@ async def get_prompts_analytics(
                 prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
                 prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
                 
-                prev_responses_query = supabase.client.table("responses").select("*").eq("brand_id", brand_id)
-                prev_responses_query = prev_responses_query.gte("created_at", f"{prev_start}T00:00:00Z")
-                prev_responses_query = prev_responses_query.lte("created_at", f"{prev_end}T23:59:59Z")
-                prev_responses_result = prev_responses_query.execute()
-                prev_responses = prev_responses_result.data if hasattr(prev_responses_result, 'data') else []
+                prev_responses_query = select(Response).where(
+                    and_(
+                        Response.brand_id == brand_id,
+                        Response.created_at >= datetime.fromisoformat(f"{prev_start}T00:00:00+00:00"),
+                        Response.created_at <= datetime.fromisoformat(f"{prev_end}T23:59:59+00:00")
+                    )
+                )
+                prev_responses_result = db.execute(prev_responses_query)
+                prev_responses = [dict(row._mapping) for row in prev_responses_result]
             except:
                 pass
         

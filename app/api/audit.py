@@ -8,7 +8,10 @@ from app.services.supabase_service import SupabaseService
 from app.services.audit_logger import audit_logger
 from app.api.auth import get_current_user
 from app.core.error_utils import handle_api_errors
-from app.db.models import AuditLogAction
+from app.db.models import AuditLogAction, AuditLog
+from app.db.database import get_db
+from sqlalchemy.orm import Session
+from sqlalchemy import select, func, and_, or_
 
 router = APIRouter()
 
@@ -23,30 +26,41 @@ async def get_audit_logs(
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     limit: Optional[int] = Query(100, description="Number of records to return"),
     offset: Optional[int] = Query(0, description="Offset for pagination"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     Get audit logs with optional filtering.
     Only accessible to authenticated users.
     """
-    supabase = SupabaseService()
-    
-    query = supabase.client.table("audit_logs").select("*")
+    # Build query using SQLAlchemy ORM
+    query = select(AuditLog)
+    count_query = select(func.count(AuditLog.id))
     
     # Apply filters
+    conditions = []
     if action:
-        query = query.eq("action", action)
+        conditions.append(AuditLog.action == action)
     if user_email:
-        query = query.eq("user_email", user_email)
+        conditions.append(AuditLog.user_email == user_email)
     if status:
-        query = query.eq("status", status)
+        conditions.append(AuditLog.status == status)
     if start_date:
-        query = query.gte("created_at", f"{start_date}T00:00:00Z")
+        start_datetime = datetime.fromisoformat(f"{start_date}T00:00:00+00:00")
+        conditions.append(AuditLog.created_at >= start_datetime)
     if end_date:
-        query = query.lte("created_at", f"{end_date}T23:59:59Z")
+        end_datetime = datetime.fromisoformat(f"{end_date}T23:59:59+00:00")
+        conditions.append(AuditLog.created_at <= end_datetime)
+    
+    if conditions:
+        query = query.where(and_(*conditions))
+        count_query = count_query.where(and_(*conditions))
+    
+    # Get total count
+    total_count = db.execute(count_query).scalar() or 0
     
     # Order by created_at descending (most recent first)
-    query = query.order("created_at", desc=True)
+    query = query.order_by(AuditLog.created_at.desc())
     
     # Apply pagination
     if limit:
@@ -54,28 +68,30 @@ async def get_audit_logs(
     if offset:
         query = query.offset(offset)
     
-    result = query.execute()
-    logs = result.data if hasattr(result, 'data') else []
+    # Execute query
+    result = db.execute(query)
+    logs = result.scalars().all()
     
-    # Get total count for pagination
-    count_query = supabase.client.table("audit_logs").select("id", count="exact")
-    if action:
-        count_query = count_query.eq("action", action)
-    if user_email:
-        count_query = count_query.eq("user_email", user_email)
-    if status:
-        count_query = count_query.eq("status", status)
-    if start_date:
-        count_query = count_query.gte("created_at", f"{start_date}T00:00:00Z")
-    if end_date:
-        count_query = count_query.lte("created_at", f"{end_date}T23:59:59Z")
-    
-    count_result = count_query.execute()
-    total_count = count_result.count if hasattr(count_result, 'count') else len(logs)
+    # Convert to dict format
+    logs_data = []
+    for log in logs:
+        log_dict = {
+            "id": log.id,
+            "action": log.action.value if hasattr(log.action, 'value') else str(log.action),
+            "user_id": log.user_id,
+            "user_email": log.user_email,
+            "ip_address": log.ip_address,
+            "user_agent": log.user_agent,
+            "details": log.details,
+            "status": log.status,
+            "error_message": log.error_message,
+            "created_at": log.created_at.isoformat() if log.created_at else None
+        }
+        logs_data.append(log_dict)
     
     return {
-        "items": logs,
-        "count": len(logs),
+        "items": logs_data,
+        "count": len(logs_data),
         "total": total_count,
         "limit": limit,
         "offset": offset
@@ -87,24 +103,30 @@ async def get_audit_logs(
 async def get_audit_stats(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     Get audit log statistics.
     Returns counts by action type, status, and user.
     """
-    supabase = SupabaseService()
+    # Build query with date filters
+    query = select(AuditLog)
+    conditions = []
     
-    # Build base query
-    base_query = supabase.client.table("audit_logs").select("*")
     if start_date:
-        base_query = base_query.gte("created_at", f"{start_date}T00:00:00Z")
+        start_datetime = datetime.fromisoformat(f"{start_date}T00:00:00+00:00")
+        conditions.append(AuditLog.created_at >= start_datetime)
     if end_date:
-        base_query = base_query.lte("created_at", f"{end_date}T23:59:59Z")
+        end_datetime = datetime.fromisoformat(f"{end_date}T23:59:59+00:00")
+        conditions.append(AuditLog.created_at <= end_datetime)
+    
+    if conditions:
+        query = query.where(and_(*conditions))
     
     # Get all logs in date range (for aggregation)
-    result = base_query.execute()
-    logs = result.data if hasattr(result, 'data') else []
+    result = db.execute(query)
+    logs = result.scalars().all()
     
     # Aggregate statistics
     stats = {
@@ -119,9 +141,9 @@ async def get_audit_stats(
     
     # Calculate stats
     for log in logs:
-        action = log.get("action")
-        status = log.get("status")
-        user_email = log.get("user_email")
+        action = log.action.value if hasattr(log.action, 'value') else str(log.action)
+        status = log.status
+        user_email = log.user_email
         
         # Count by action
         if action:
@@ -151,26 +173,44 @@ async def get_audit_stats(
 async def get_user_activity(
     user_email: Optional[str] = Query(None, description="Filter by user email (defaults to current user)"),
     limit: Optional[int] = Query(50, description="Number of records to return"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     Get activity logs for a specific user.
     Defaults to current user if user_email not provided.
     """
-    supabase = SupabaseService()
-    
     # Use current user if no email provided
     target_email = user_email or current_user["email"]
     
-    query = supabase.client.table("audit_logs").select("*").eq("user_email", target_email)
-    query = query.order("created_at", desc=True).limit(limit or 50)
+    # Build query using SQLAlchemy ORM
+    query = select(AuditLog).where(AuditLog.user_email == target_email)
+    query = query.order_by(AuditLog.created_at.desc()).limit(limit or 50)
     
-    result = query.execute()
-    logs = result.data if hasattr(result, 'data') else []
+    # Execute query
+    result = db.execute(query)
+    logs = result.scalars().all()
+    
+    # Convert to dict format
+    logs_data = []
+    for log in logs:
+        log_dict = {
+            "id": log.id,
+            "action": log.action.value if hasattr(log.action, 'value') else str(log.action),
+            "user_id": log.user_id,
+            "user_email": log.user_email,
+            "ip_address": log.ip_address,
+            "user_agent": log.user_agent,
+            "details": log.details,
+            "status": log.status,
+            "error_message": log.error_message,
+            "created_at": log.created_at.isoformat() if log.created_at else None
+        }
+        logs_data.append(log_dict)
     
     return {
         "user_email": target_email,
-        "items": logs,
-        "count": len(logs)
+        "items": logs_data,
+        "count": len(logs_data)
     }
 

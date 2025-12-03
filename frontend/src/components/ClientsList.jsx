@@ -50,6 +50,11 @@ function ClientsList() {
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [persistedTotalCount, setPersistedTotalCount] = useState(0)
+  const [filters, setFilters] = useState({
+    ga4: null, // null = all, true = has GA4, false = no GA4
+    scrunch: null, // null = all, true = has Scrunch, false = no Scrunch
+    active: null, // null = all, true = active, false = inactive
+  })
   const navigate = useNavigate()
   const theme = useTheme()
   const queryClient = useQueryClient()
@@ -63,11 +68,21 @@ function ClientsList() {
     return () => clearTimeout(timer)
   }, [searchTerm])
   
-  // Use React Query hook for clients with pagination
+  // Reset page when filters change
+  useEffect(() => {
+    setPage(0)
+  }, [filters.ga4, filters.scrunch, filters.active])
+  
+  // Use React Query hook for clients with pagination and filters
   const { data: clientsData = {}, isLoading: loading, isFetching, error } = useQuery({
-    queryKey: queryKeys.clients.list({ page: page + 1, pageSize, search: debouncedSearch }),
+    queryKey: queryKeys.clients.list({ 
+      page: page + 1, 
+      pageSize, 
+      search: debouncedSearch,
+      filters 
+    }),
     queryFn: async () => {
-      const response = await clientAPI.getClients(page + 1, pageSize, debouncedSearch)
+      const response = await clientAPI.getClients(page + 1, pageSize, debouncedSearch, filters)
       return response
     },
     staleTime: 5 * 60 * 1000, // 5 minutes
@@ -82,13 +97,10 @@ function ClientsList() {
     }
   }, [clientsData.total_count])
 
+  // Clients are already filtered by the API, no need for client-side filtering
   const clients = clientsData.items || []
-  // Use persisted count if current data doesn't have it (during loading)
-  const totalCount = clientsData.total_count !== undefined && clientsData.total_count !== null 
-    ? clientsData.total_count 
-    : persistedTotalCount
-  const totalPages = clientsData.total_pages || 0
-
+  
+  // Helper function to get client stats (for display purposes)
   const getClientStats = (client) => {
     const campaigns = client.client_campaigns || []
     const hasGA4 = !!client.ga4_property_id
@@ -101,6 +113,12 @@ function ClientsList() {
       hasMappings: hasGA4 || hasScrunch
     }
   }
+  
+  // Use persisted count if current data doesn't have it (during loading)
+  const totalCount = clientsData.total_count !== undefined && clientsData.total_count !== null 
+    ? clientsData.total_count 
+    : persistedTotalCount
+  const totalPages = clientsData.total_pages || 0
 
   const handleManageClick = (e, client) => {
     e.stopPropagation()
@@ -129,6 +147,20 @@ function ClientsList() {
 
   const handleSearchChange = (event) => {
     setSearchTerm(event.target.value)
+  }
+
+  const handleFilterChange = (filterType, value) => {
+    setFilters((prev) => {
+      const currentValue = prev[filterType]
+      // If clicking the same value, deselect it (set to null)
+      // Otherwise, set to the new value
+      const newValue = currentValue === value ? null : value
+      return {
+        ...prev,
+        [filterType]: newValue,
+      }
+    })
+    setPage(0) // Reset to first page when filter changes
   }
 
   if (loading && page === 0) {
@@ -164,7 +196,9 @@ function ClientsList() {
             color="text.secondary"
             sx={{ fontSize: '0.875rem' }}
           >
-            {totalCount} {totalCount === 1 ? 'client' : 'clients'} {debouncedSearch ? `matching "${debouncedSearch}"` : ''}
+            {clients.length} of {totalCount} {totalCount === 1 ? 'client' : 'clients'} 
+            {debouncedSearch ? ` matching "${debouncedSearch}"` : ''}
+            {(filters.ga4 !== null || filters.scrunch !== null || filters.active !== null) && ' (filtered)'}
           </Typography>
         </Box>
         <Button 
@@ -211,6 +245,109 @@ function ClientsList() {
             },
           }}
         />
+      </Box>
+
+      {/* Filters */}
+      <Box mb={3} display="flex" gap={1.5} flexWrap="wrap" alignItems="center">
+        <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.875rem', fontWeight: 600, mr: 1 }}>
+          Filters:
+        </Typography>
+        
+        {/* GA4 Filter */}
+        <Chip
+          icon={<AnalyticsIcon sx={{ fontSize: 16 }} />}
+          label="GA4 Assigned"
+          onClick={() => handleFilterChange('ga4', true)}
+          onDelete={filters.ga4 === true ? () => handleFilterChange('ga4', null) : undefined}
+          color={filters.ga4 === true ? 'primary' : 'default'}
+          variant={filters.ga4 === true ? 'filled' : 'outlined'}
+          sx={{
+            cursor: 'pointer',
+            fontWeight: 500,
+            '&:hover': {
+              bgcolor: filters.ga4 === true 
+                ? alpha(theme.palette.primary.main, 0.2)
+                : alpha(theme.palette.primary.main, 0.1),
+            },
+          }}
+        />
+
+        {/* Scrunch Filter */}
+        <Chip
+          icon={<LinkIcon sx={{ fontSize: 16 }} />}
+          label="Scrunch Assigned"
+          onClick={() => handleFilterChange('scrunch', true)}
+          onDelete={filters.scrunch === true ? () => handleFilterChange('scrunch', null) : undefined}
+          color={filters.scrunch === true ? 'secondary' : 'default'}
+          variant={filters.scrunch === true ? 'filled' : 'outlined'}
+          sx={{
+            cursor: 'pointer',
+            fontWeight: 500,
+            '&:hover': {
+              bgcolor: filters.scrunch === true 
+                ? alpha(theme.palette.secondary.main, 0.2)
+                : alpha(theme.palette.secondary.main, 0.1),
+            },
+          }}
+        />
+
+        {/* Active Filter */}
+        <Chip
+          icon={<CampaignIcon sx={{ fontSize: 16 }} />}
+          label="Active"
+          onClick={() => handleFilterChange('active', true)}
+          onDelete={filters.active === true ? () => handleFilterChange('active', null) : undefined}
+          color={filters.active === true ? 'success' : 'default'}
+          variant={filters.active === true ? 'filled' : 'outlined'}
+          sx={{
+            cursor: 'pointer',
+            fontWeight: 500,
+            '&:hover': {
+              bgcolor: filters.active === true 
+                ? alpha(theme.palette.success.main, 0.2)
+                : alpha(theme.palette.success.main, 0.1),
+            },
+          }}
+        />
+
+        {/* Inactive Filter */}
+        <Chip
+          icon={<CampaignIcon sx={{ fontSize: 16 }} />}
+          label="Inactive"
+          onClick={() => handleFilterChange('active', false)}
+          onDelete={filters.active === false ? () => handleFilterChange('active', null) : undefined}
+          color={filters.active === false ? 'error' : 'default'}
+          variant={filters.active === false ? 'filled' : 'outlined'}
+          sx={{
+            cursor: 'pointer',
+            fontWeight: 500,
+            '&:hover': {
+              bgcolor: filters.active === false 
+                ? alpha(theme.palette.error.main, 0.2)
+                : alpha(theme.palette.error.main, 0.1),
+            },
+          }}
+        />
+
+        {/* Clear Filters Button */}
+        {(filters.ga4 !== null || filters.scrunch !== null || filters.active !== null) && (
+          <Button
+            size="small"
+            onClick={() => setFilters({ ga4: null, scrunch: null, active: null })}
+            sx={{
+              fontSize: '0.875rem',
+              textTransform: 'none',
+              color: 'text.secondary',
+              ml: 1,
+              '&:hover': {
+                bgcolor: alpha(theme.palette.error.main, 0.1),
+                color: theme.palette.error.main,
+              },
+            }}
+          >
+            Clear All
+          </Button>
+        )}
       </Box>
 
       {error && (

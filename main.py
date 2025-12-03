@@ -4,7 +4,7 @@ from fastapi.exceptions import RequestValidationError, HTTPException
 from contextlib import asynccontextmanager
 import uvicorn
 from app.core.config import settings
-from app.api import sync, data, database, auth, audit, sync_jobs, openai, websocket
+from app.api import sync, data, database, auth, auth_v2, audit, sync_jobs, openai, websocket
 from app.db.database import init_db, check_db_connection
 from app.core.logging_config import setup_logging
 from app.core.error_handlers import (
@@ -24,24 +24,44 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Startup: Check database connection and initialize
     logger.info("Starting application...")
-    logger.info(f"Supabase URL: {settings.SUPABASE_URL[:30] if settings.SUPABASE_URL else 'NOT SET'}...")
-    logger.info(f"Supabase Key: {'SET' if settings.SUPABASE_KEY else 'NOT SET'}")
+    logger.info(f"Supabase URL (for auth): {settings.SUPABASE_URL[:30] if settings.SUPABASE_URL else 'NOT SET'}...")
+    logger.info(f"Supabase Key (for auth): {'SET' if settings.SUPABASE_KEY else 'NOT SET'}")
     
-    # Check REST API connection first
+    # Log database configuration
+    import os
+    db_host_env = os.getenv("SUPABASE_DB_HOST", "NOT SET IN ENV")
+    db_host_config = settings.SUPABASE_DB_HOST or "NOT SET"
+    logger.info(f"Database Host - Environment: {db_host_env}, Config: {db_host_config}")
+    
+    if "supabase.co" in str(db_host_config):
+        logger.error(
+            "⚠️  ERROR: Database host is set to Supabase instead of local PostgreSQL!\n"
+            "   This means SUPABASE_DB_HOST in .env file is overriding docker-compose.yml environment variables.\n"
+            "   Solution: Either:\n"
+            "   1. Remove SUPABASE_DB_HOST from .env file, OR\n"
+            "   2. Set SUPABASE_DB_HOST=postgres in .env file, OR\n"
+            "   3. Comment out the .env file mount in docker-compose.yml"
+        )
+    
+    # Check REST API connection first (for auth only)
     try:
         from app.core.database import get_supabase_client
         client = get_supabase_client()
-        logger.info("REST API connection: SUCCESS")
+        logger.info("Supabase REST API connection (for auth): SUCCESS")
     except Exception as e:
-        logger.error(f"REST API connection failed: {e}")
+        logger.warning(f"Supabase REST API connection failed (auth may not work): {e}")
     
-    # Check direct DB connection (optional)
-    logger.info("Checking database connection...")
+    # Check direct DB connection (for database operations)
+    logger.info("Checking PostgreSQL database connection...")
     if check_db_connection():
-        logger.info("Direct database connection successful!")
-        init_db()
+        logger.info("✅ PostgreSQL database connection successful!")
+        try:
+            init_db()
+        except Exception as e:
+            logger.warning(f"Database initialization warning: {e}")
     else:
-        logger.warning("Direct database connection failed (this is OK if using REST API)")
+        logger.error("❌ PostgreSQL database connection failed!")
+        logger.error("   Make sure PostgreSQL container is running and SUPABASE_DB_HOST=postgres is set")
     
     yield
     # Shutdown (if needed)
@@ -70,6 +90,7 @@ app.add_exception_handler(Exception, general_exception_handler)
 
 # Include routers
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
+app.include_router(auth_v2.router, prefix="/api/v1", tags=["auth-v2"])
 app.include_router(sync.router, prefix="/api/v1", tags=["sync"])
 app.include_router(sync_jobs.router, prefix="/api/v1", tags=["sync-jobs"])
 app.include_router(data.router, prefix="/api/v1", tags=["data"])

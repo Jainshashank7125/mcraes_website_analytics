@@ -7,9 +7,10 @@ from app.services.scrunch_client import ScrunchAPIClient
 from app.services.supabase_service import SupabaseService
 from app.services.ga4_client import GA4APIClient
 from app.services.agency_analytics_client import AgencyAnalyticsClient
-from app.services.sync_job_service import sync_job_service
+from app.services.sync_job_service import SyncJobService
 from app.services.audit_logger import audit_logger
 from app.db.models import AuditLogAction
+from app.db.database import SessionLocal
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,11 @@ async def sync_all_background(
     request = None
 ):
     """Background task to sync all Scrunch AI data"""
+    # Create database session for background task
+    db = SessionLocal()
+    sync_job_service = SyncJobService(db=db)
     client = ScrunchAPIClient()
-    supabase = SupabaseService()
+    supabase = SupabaseService(db=db)
     
     try:
         # Check for cancellation before starting
@@ -192,6 +196,8 @@ async def sync_all_background(
             request=request
         )
         raise
+    finally:
+        db.close()
 
 
 async def sync_ga4_background(
@@ -205,8 +211,11 @@ async def sync_ga4_background(
     request = None
 ):
     """Background task to sync GA4 data - now iterates over Clients instead of Brands"""
+    # Create database session for background task
+    db = SessionLocal()
+    sync_job_service = SyncJobService(db=db)
     ga4_client = GA4APIClient()
-    supabase = SupabaseService()
+    supabase = SupabaseService(db=db)
     
     try:
         # Get date range
@@ -220,13 +229,33 @@ async def sync_ga4_background(
             current_step="Fetching clients with GA4...", total_steps=1
         )
         
-        # Get clients with GA4 configured
+        # Get clients with GA4 configured from local PostgreSQL database
+        from app.db.models import Client
+        from sqlalchemy import and_
+        
         if client_id:
-            client_result = supabase.client.table("clients").select("*").eq("id", client_id).execute()
-            clients = client_result.data if client_result.data else []
+            # Get specific client
+            client_obj = db.query(Client).filter(Client.id == client_id).first()
+            clients = [client_obj] if client_obj else []
         else:
-            clients_result = supabase.client.table("clients").select("*").not_.is_("ga4_property_id", "null").execute()
-            clients = clients_result.data if clients_result.data else []
+            # Get all clients with GA4 property ID configured (not null and not empty)
+            clients = db.query(Client).filter(
+                and_(
+                    Client.ga4_property_id.isnot(None),
+                    Client.ga4_property_id != ''
+                )
+            ).all()
+        
+        # Convert ORM objects to dicts for compatibility
+        clients = [
+            {
+                "id": c.id,
+                "company_name": c.company_name,
+                "ga4_property_id": c.ga4_property_id,
+                "scrunch_brand_id": c.scrunch_brand_id
+            }
+            for c in clients if c
+        ]
         
         if not clients:
             # Check for cancellation before completing
@@ -694,6 +723,8 @@ async def sync_ga4_background(
             request=request
         )
         raise
+    finally:
+        db.close()
 
 
 async def sync_agency_analytics_background(
@@ -705,8 +736,11 @@ async def sync_agency_analytics_background(
     request = None
 ):
     """Background task to sync Agency Analytics data"""
+    # Create database session for background task
+    db = SessionLocal()
+    sync_job_service = SyncJobService(db=db)
     client = AgencyAnalyticsClient()
-    supabase = SupabaseService()
+    supabase = SupabaseService(db=db)
     
     try:
         # Check for cancellation before starting
@@ -1039,4 +1073,6 @@ async def sync_agency_analytics_background(
             request=request
         )
         raise
+    finally:
+        db.close()
 
