@@ -158,33 +158,20 @@ export const AuthProvider = ({ children }) => {
   const signup = async (email, password, fullName = null) => {
     try {
       const response = await authAPI.signup(email, password, fullName)
-      const { access_token, refresh_token, user: userData, expires_in } = response
-
-      if (access_token) {
-        localStorage.setItem('access_token', access_token)
-        if (refresh_token) {
-          localStorage.setItem('refresh_token', refresh_token)
+      
+      // Signup should only return success message - no tokens
+      // Do NOT update logged-in user state or store tokens
+      if (response.success) {
+        return { 
+          success: true, 
+          message: response.message || "Account created successfully. Please sign in to continue."
         }
-        localStorage.setItem('user', JSON.stringify(userData))
-
-        // Calculate and store expiration time (3 hours from now)
-        if (expires_in) {
-          const expiresAt = Date.now() + (expires_in * 1000)
-          localStorage.setItem('token_expires_at', expiresAt.toString())
-        } else {
-          // Default to 3 hours if expires_in not provided
-          const expiresAt = Date.now() + (3 * 60 * 60 * 1000)
-          localStorage.setItem('token_expires_at', expiresAt.toString())
+      } else {
+        return {
+          success: false,
+          error: response.message || "Failed to create account"
         }
-
-        setUser(userData)
-        setIsAuthenticated(true)
-        
-        // Start automatic token refresh
-        startTokenRefresh()
       }
-
-      return { success: true, requiresEmailConfirmation: !access_token }
     } catch (error) {
       return {
         success: false,

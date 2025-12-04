@@ -44,11 +44,13 @@ function Signup() {
     const result = await signup(email, password, fullName || null)
 
     if (result.success) {
-      if (result.requiresEmailConfirmation) {
-        setSuccess('Please check your email to confirm your account before signing in.')
-      } else {
-        navigate('/')
-      }
+      // Show success message
+      setSuccess(result.message || 'Account created successfully. Please sign in to continue.')
+      // Redirect to login page after showing success message
+      // User must sign in separately - we don't auto-login after signup
+      setTimeout(() => {
+        navigate('/login')
+      }, 3000)
     } else {
       setError(result.error || 'Sign up failed')
     }
