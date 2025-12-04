@@ -82,3 +82,11 @@ htmlcov/
 .dmypy.json
 dmypy.json
 
+# Database dumps (unencrypted)
+dumps/*.dump
+*.dump
+
+# Note: Password-protected ZIP files (*.zip) in dumps/ can be committed if needed
+# Uncomment the line below if you want to exclude all ZIP files too:
+# dumps/*.zip
+
