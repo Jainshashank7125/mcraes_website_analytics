@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect } from 'react'
 import { authAPI } from '../services/api'
 import { getErrorMessage } from '../utils/errorHandler'
+import { startTokenRefresh, stopTokenRefresh, isTokenExpired } from '../services/tokenRefresh'
 
 const AuthContext = createContext(null)
 
@@ -25,32 +26,103 @@ export const AuthProvider = ({ children }) => {
 
       if (storedToken && storedUser) {
         try {
-          // Verify token is still valid
-          const userData = await authAPI.getCurrentUser()
-          setUser(userData)
-          setIsAuthenticated(true)
+          // Check if token is expired
+          if (isTokenExpired()) {
+            // Try to refresh the token
+            const refreshToken = localStorage.getItem('refresh_token')
+            if (refreshToken) {
+              try {
+                const response = await authAPI.refreshToken(refreshToken)
+                const { access_token, refresh_token: newRefreshToken, user: userData, expires_in } = response
+                
+                localStorage.setItem('access_token', access_token)
+                if (newRefreshToken) {
+                  localStorage.setItem('refresh_token', newRefreshToken)
+                }
+                if (userData) {
+                  localStorage.setItem('user', JSON.stringify(userData))
+                  setUser(userData)
+                }
+                
+                // Calculate and store expiration time
+                if (expires_in) {
+                  const expiresAt = Date.now() + (expires_in * 1000)
+                  localStorage.setItem('token_expires_at', expiresAt.toString())
+                } else {
+                  // Default to 3 hours if expires_in not provided
+                  const expiresAt = Date.now() + (3 * 60 * 60 * 1000)
+                  localStorage.setItem('token_expires_at', expiresAt.toString())
+                }
+                
+                setIsAuthenticated(true)
+                startTokenRefresh()
+              } catch (refreshError) {
+                // Refresh failed, clear storage
+                localStorage.removeItem('access_token')
+                localStorage.removeItem('refresh_token')
+                localStorage.removeItem('user')
+                localStorage.removeItem('token_expires_at')
+                setUser(null)
+                setIsAuthenticated(false)
+                stopTokenRefresh()
+              }
+            } else {
+              // No refresh token, clear storage
+              localStorage.removeItem('access_token')
+              localStorage.removeItem('refresh_token')
+              localStorage.removeItem('user')
+              localStorage.removeItem('token_expires_at')
+              setUser(null)
+              setIsAuthenticated(false)
+            }
+          } else {
+            // Token is still valid, verify with API
+            try {
+              const userData = await authAPI.getCurrentUser()
+              setUser(userData)
+              setIsAuthenticated(true)
+              startTokenRefresh()
+            } catch (error) {
+              // Token verification failed, clear storage
+              localStorage.removeItem('access_token')
+              localStorage.removeItem('refresh_token')
+              localStorage.removeItem('user')
+              localStorage.removeItem('token_expires_at')
+              setUser(null)
+              setIsAuthenticated(false)
+              stopTokenRefresh()
+            }
+          }
         } catch (error) {
-          // Token is invalid, clear storage
+          // Error during initialization, clear storage
           localStorage.removeItem('access_token')
           localStorage.removeItem('refresh_token')
           localStorage.removeItem('user')
+          localStorage.removeItem('token_expires_at')
           setUser(null)
           setIsAuthenticated(false)
+          stopTokenRefresh()
         }
       } else {
         setUser(null)
         setIsAuthenticated(false)
+        stopTokenRefresh()
       }
       setLoading(false)
     }
 
     initAuth()
+    
+    // Cleanup on unmount
+    return () => {
+      stopTokenRefresh()
+    }
   }, [])
 
   const signin = async (email, password) => {
     try {
       const response = await authAPI.signin(email, password)
-      const { access_token, refresh_token, user: userData } = response
+      const { access_token, refresh_token, user: userData, expires_in } = response
 
       localStorage.setItem('access_token', access_token)
       if (refresh_token) {
@@ -58,8 +130,22 @@ export const AuthProvider = ({ children }) => {
       }
       localStorage.setItem('user', JSON.stringify(userData))
 
+      // Calculate and store expiration time (3 hours from now)
+      if (expires_in) {
+        const expiresAt = Date.now() + (expires_in * 1000)
+        localStorage.setItem('token_expires_at', expiresAt.toString())
+      } else {
+        // Default to 3 hours if expires_in not provided
+        const expiresAt = Date.now() + (3 * 60 * 60 * 1000)
+        localStorage.setItem('token_expires_at', expiresAt.toString())
+      }
+
       setUser(userData)
       setIsAuthenticated(true)
+      
+      // Start automatic token refresh
+      startTokenRefresh()
+      
       return { success: true }
     } catch (error) {
       return {
@@ -72,7 +158,7 @@ export const AuthProvider = ({ children }) => {
   const signup = async (email, password, fullName = null) => {
     try {
       const response = await authAPI.signup(email, password, fullName)
-      const { access_token, refresh_token, user: userData } = response
+      const { access_token, refresh_token, user: userData, expires_in } = response
 
       if (access_token) {
         localStorage.setItem('access_token', access_token)
@@ -81,8 +167,21 @@ export const AuthProvider = ({ children }) => {
         }
         localStorage.setItem('user', JSON.stringify(userData))
 
+        // Calculate and store expiration time (3 hours from now)
+        if (expires_in) {
+          const expiresAt = Date.now() + (expires_in * 1000)
+          localStorage.setItem('token_expires_at', expiresAt.toString())
+        } else {
+          // Default to 3 hours if expires_in not provided
+          const expiresAt = Date.now() + (3 * 60 * 60 * 1000)
+          localStorage.setItem('token_expires_at', expiresAt.toString())
+        }
+
         setUser(userData)
         setIsAuthenticated(true)
+        
+        // Start automatic token refresh
+        startTokenRefresh()
       }
 
       return { success: true, requiresEmailConfirmation: !access_token }
@@ -102,6 +201,7 @@ export const AuthProvider = ({ children }) => {
     } finally {
       setUser(null)
       setIsAuthenticated(false)
+      stopTokenRefresh()
     }
   }
 

@@ -65,7 +65,7 @@ export default function KeywordsDashboard({ clientId }) {
   const [sortBy, setSortBy] = useState("volume");
   const [sortOrder, setSortOrder] = useState("desc");
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(25);
   const [selectedKeywords, setSelectedKeywords] = useState(new Set());
   const [favoriteKeywords, setFavoriteKeywords] = useState(new Set());
   

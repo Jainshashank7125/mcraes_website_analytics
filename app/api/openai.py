@@ -5,7 +5,7 @@ import logging
 from sqlalchemy.orm import Session
 from app.services.openai_client import OpenAIClient
 from app.core.error_utils import handle_api_errors
-from app.api.auth import get_current_user
+from app.api.auth_v2 import get_current_user_v2
 from app.db.database import get_db
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ class EmbeddingRequest(BaseModel):
 @handle_api_errors(context="creating chat completion")
 async def create_chat_completion(
     request: ChatCompletionRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_v2)
 ):
     """
     Create a chat completion using OpenAI API
@@ -69,7 +69,7 @@ async def create_chat_completion(
 @handle_api_errors(context="creating text completion")
 async def create_completion(
     request: TextCompletionRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_v2)
 ):
     """
     Create a text completion using OpenAI API (legacy endpoint)
@@ -95,7 +95,7 @@ async def create_completion(
 @handle_api_errors(context="creating embeddings")
 async def create_embedding(
     request: EmbeddingRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_v2)
 ):
     """
     Create embeddings using OpenAI API
@@ -119,7 +119,7 @@ async def create_embedding(
 @router.get("/openai/models")
 @handle_api_errors(context="listing OpenAI models")
 async def list_models(
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_v2)
 ):
     """
     List all available OpenAI models
@@ -139,7 +139,7 @@ async def list_models(
 @handle_api_errors(context="getting model information")
 async def get_model(
     model_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_v2)
 ):
     """
     Get information about a specific OpenAI model
@@ -171,7 +171,7 @@ class OverallOverviewRequest(BaseModel):
 @handle_api_errors(context="generating metric review")
 async def generate_metric_review(
     request: MetricReviewRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_v2)
 ):
     """
     Generate an AI-powered review of metrics for a specific data source
@@ -351,6 +351,13 @@ async def generate_overall_overview(
                 request.end_date,
                 client_id=None,
                 db=db
+            )
+        
+        # Handle case where dashboard_data might be None or empty
+        if not dashboard_data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No data found for {'client' if client_id else 'brand'} {client_id or brand_id}"
             )
         
         if not dashboard_data.get("kpis"):

@@ -522,10 +522,31 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
           }
           // Fallback to brand lookup for backward compatibility
           const brand = await reportingAPI.getBrandBySlug(publicSlug);
-          setSelectedBrandId(brand.id);
+          
+          // Check if brand has no_data flag (graceful degradation from backend)
+          if (brand && brand.no_data) {
+            // Still allow UI to render, but mark as no data
+            if (brand.id) {
+              setSelectedBrandId(brand.id);
+            }
+            // Don't set error - let the dashboard show "no data" message
+          } else if (brand && brand.id) {
+            setSelectedBrandId(brand.id);
+          } else {
+            // Only set error if it's a real error, not a graceful "no data" response
+            setError("No data available for this slug");
+            setIsLoadingReport(false);
+          }
         } catch (err) {
-          setError(err.response?.data?.detail || "Failed to load client or brand");
-          setIsLoadingReport(false);
+          // Only set error for actual errors (non-200 status)
+          if (err.response?.status !== 200) {
+            setError(err.response?.data?.detail || "Failed to load client or brand");
+            setIsLoadingReport(false);
+          } else {
+            // If we get a 200 with no_data, handle it gracefully
+            setError(null);
+            setIsLoadingReport(false);
+          }
         }
       };
       fetchPublicEntity();
@@ -757,8 +778,17 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
         );
       }
 
-      // Check if data is valid and has content
-      if (data && (data.kpis || data.chart_data || data.diagnostics)) {
+      // Check if data has no_data flag (graceful degradation from backend)
+      if (data && data.no_data) {
+        // Set data with no_data flag so UI can show appropriate message
+        console.log(`No data available for slug/brand (graceful response)`);
+        setDashboardData({
+          ...data,
+          kpis: data.kpis || {},
+          chart_data: data.chart_data || {},
+          no_data: true
+        });
+      } else if (data && (data.kpis || data.chart_data || data.diagnostics)) {
         const scrunchKPIs = data.kpis ? Object.keys(data.kpis).filter(k => data.kpis[k]?.source === "Scrunch") : [];
         console.log(`Dashboard data loaded for brand ${selectedBrandId}:`, {
           hasKPIs: !!data.kpis,
@@ -792,7 +822,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
       } else {
         // No data available for this brand
         console.warn(`No data available for brand ${selectedBrandId}`);
-        setDashboardData(null);
+        setDashboardData({ no_data: true, kpis: {}, chart_data: {} });
       }
     } catch (err) {
       console.error("Error loading dashboard data:", err);
@@ -828,8 +858,17 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
         );
       }
 
-      // Set scrunchData if we have KPIs or chart data, regardless of 'available' flag
-      if (data && (data.kpis || data.chart_data)) {
+      // Check if data has no_data flag (graceful degradation from backend)
+      if (data && data.no_data) {
+        // Set data with no_data flag so UI can show appropriate message
+        console.log(`No Scrunch data available (graceful response)`);
+        setScrunchData({
+          ...data,
+          kpis: data.kpis || {},
+          chart_data: data.chart_data || {},
+          no_data: true
+        });
+      } else if (data && (data.kpis || data.chart_data)) {
         const hasKPIs = data.kpis && Object.keys(data.kpis).length > 0;
         const hasChartData =
           data.chart_data &&
@@ -847,10 +886,10 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
         if (hasKPIs || hasChartData) {
           setScrunchData(data);
         } else {
-          setScrunchData(null);
+          setScrunchData({ no_data: true, kpis: {}, chart_data: {} });
         }
       } else {
-        setScrunchData(null);
+        setScrunchData({ no_data: true, kpis: {}, chart_data: {} });
       }
     } catch (err) {
       console.error("Error loading Scrunch data:", err);
@@ -1502,11 +1541,10 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                 (key) => allKPIs[key] && publicKPISelections.has(key)
               ).map((key) => [key, allKPIs[key]])
           )
-        : // In authenticated mode, use user's current selection
+        : // In authenticated mode, show ALL available KPIs (no filtering by selections)
           KPI_ORDER.filter(
             (key) =>
               allKPIs[key] &&
-              selectedKPIs.has(key) &&
               key !== "competitive_benchmarking"
           ).map((key) => [key, allKPIs[key]])
       : [];
@@ -1795,8 +1833,23 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
         </Alert>
       )}
 
+      {/* No Data Available Message */}
+      {dashboardData?.no_data && (
+        <Alert
+          severity="info"
+          sx={{ mb: 3, borderRadius: 2 }}
+        >
+          <Typography variant="h6" gutterBottom>
+            No Data Available
+          </Typography>
+          <Typography variant="body2">
+            {dashboardData.message || "No data is currently available for this dashboard. Please check back later or contact support if you believe this is an error."}
+          </Typography>
+        </Alert>
+      )}
+
       {/* Diagnostic Information */}
-      {dashboardData?.diagnostics && (
+      {dashboardData?.diagnostics && !dashboardData?.no_data && (
         <Box mb={3}>
           {(!dashboardData.diagnostics.ga4_configured ||
             !dashboardData.diagnostics.agency_analytics_configured) && (
@@ -1848,7 +1901,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
         >
           <CircularProgress size={40} thickness={4} />
         </Box>
-      ) : dashboardData ? (
+      ) : dashboardData && !dashboardData.no_data ? (
         <>
           {/* Google Analytics 4 Section */}
           {isSectionVisible("ga4") && 
@@ -3735,6 +3788,22 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                         console.warn("No dashboardData.kpis available");
                       }
 
+                      // Check if scrunchData has no_data flag
+                      if (scrunchData?.no_data) {
+                        return (
+                          <Box sx={{ p: 3, textAlign: 'center' }}>
+                            <Alert severity="info" sx={{ borderRadius: 2 }}>
+                              <Typography variant="h6" gutterBottom>
+                                No Data Available
+                              </Typography>
+                              <Typography variant="body2">
+                                {scrunchData.message || "No Scrunch AI data is currently available. Please check back later."}
+                              </Typography>
+                            </Alert>
+                          </Box>
+                        );
+                      }
+
                       // Only render if we have actual data
                       const hasData =
                         Object.keys(scrunchKPIs).length > 0 ||
@@ -4890,7 +4959,25 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
            
           </Box>
         </>
-      ) : !loading && selectedBrandId ? (
+      ) : !loading && (selectedBrandId || (isPublic && publicSlug)) && dashboardData?.no_data ? (
+        <Alert severity="info" sx={{ borderRadius: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            No Data Available
+          </Typography>
+          <Typography variant="body2">
+            {dashboardData.message || "No data is currently available for this dashboard. Please check back later or contact support if you believe this is an error."}
+          </Typography>
+          {!isPublic && (
+            <Box component="ul" sx={{ mt: 1, mb: 0, pl: 2 }}>
+              <li>GA4: Configure GA4 property ID in brand settings</li>
+              <li>
+                Agency Analytics: Sync campaigns and link them to this brand
+              </li>
+              <li>Scrunch: Ensure brand is synced from Scrunch API</li>
+            </Box>
+          )}
+        </Alert>
+      ) : !loading && selectedBrandId && !dashboardData?.no_data ? (
         <Alert severity="info" sx={{ borderRadius: 2 }}>
           No data available for this brand. Please ensure the brand has data
           sources configured:

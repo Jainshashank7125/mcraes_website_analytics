@@ -11,7 +11,7 @@ from app.services.agency_analytics_client import AgencyAnalyticsClient
 from app.services.scrunch_client import ScrunchAPIClient
 from app.core.exceptions import NotFoundException, handle_exception
 from app.core.error_utils import handle_api_errors
-from app.api.auth import get_current_user
+from app.api.auth_v2 import get_current_user_v2
 from app.core.config import settings
 from app.db.database import get_db
 from sqlalchemy.orm import Session
@@ -720,7 +720,7 @@ async def get_agency_analytics_campaigns(
     page: Optional[int] = Query(1, description="Page number (1-indexed)"),
     page_size: Optional[int] = Query(50, description="Number of records per page"),
     search: Optional[str] = Query(None, description="Search by company name or URL"),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Get Agency Analytics campaigns with pagination and search"""
@@ -3063,21 +3063,45 @@ async def get_brand_by_slug(slug: str, db: Session = Depends(get_db)):
                     logger.info(f"Found client by url_slug '{slug}', returning associated brand")
                     return brand
                 else:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Client found but associated brand (id: {brand_id}) not found"
-                    )
+                    # Return client info as brand info for public view (graceful degradation)
+                    logger.warning(f"Client found but associated brand (id: {brand_id}) not found, returning client info")
+                    return {
+                        "id": client.get("id"),
+                        "name": client.get("company_name", "Unknown"),
+                        "slug": slug,
+                        "theme_color": client.get("theme_color"),
+                        "logo_url": client.get("logo_url"),
+                        "no_data": True,
+                        "message": "No brand data available"
+                    }
             else:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Client found but no brand mapping configured (scrunch_brand_id is null)"
-                )
+                # Return client info as brand info for public view (graceful degradation)
+                logger.warning(f"Client found but no brand mapping configured (scrunch_brand_id is null), returning client info")
+                return {
+                    "id": client.get("id"),
+                    "name": client.get("company_name", "Unknown"),
+                    "slug": slug,
+                    "theme_color": client.get("theme_color"),
+                    "logo_url": client.get("logo_url"),
+                    "no_data": True,
+                    "message": "No brand mapping configured"
+                }
         
         # Fall back to finding a brand by slug (for backward compatibility)
         brand = supabase.get_brand_by_slug(slug)
         
         if not brand:
-            raise HTTPException(status_code=404, detail="Brand or client not found")
+            # Return empty brand info instead of 404 for public view (graceful degradation)
+            logger.warning(f"Neither client nor brand found for slug '{slug}', returning empty brand info")
+            return {
+                "id": None,
+                "name": "Unknown",
+                "slug": slug,
+                "theme_color": None,
+                "logo_url": None,
+                "no_data": True,
+                "message": "No data available for this slug."
+            }
         
         return brand
     except HTTPException:
@@ -3132,6 +3156,7 @@ async def get_reporting_dashboard_by_client(
         error_trace = traceback.format_exc()
         logger.error(f"Error fetching reporting dashboard for client {client_id}: {str(e)}\n{error_trace}")
         raise HTTPException(status_code=500, detail=f"Error fetching reporting dashboard: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching reporting dashboard: {str(e)}")
 
 @router.get("/data/reporting-dashboard/slug/{slug}")
 async def get_reporting_dashboard_by_slug(
@@ -3160,22 +3185,67 @@ async def get_reporting_dashboard_by_slug(
                 client_id_for_dashboard = client.get("id")  # Pass client_id to dashboard
                 logger.info(f"Found client by url_slug '{slug}', using scrunch_brand_id: {brand_id}, client_id: {client_id_for_dashboard}")
             else:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Client found but no brand mapping configured (scrunch_brand_id is null)"
-                )
+                # Return empty dashboard data instead of 404 for public view (graceful degradation)
+                logger.warning(f"Client found but no brand mapping configured (scrunch_brand_id is null), returning empty dashboard")
+                return {
+                    "brand_id": None,
+                    "brand_name": client.get("company_name", "Unknown"),
+                    "brand_slug": slug,
+                    "client_id": client.get("id"),
+                    "kpis": {},
+                    "chart_data": {},
+                    "diagnostics": {
+                        "ga4_configured": bool(client.get("ga4_property_id")),
+                        "scrunch_configured": False,
+                        "agency_analytics_configured": False,
+                        "message": "No brand mapping configured. Please configure scrunch_brand_id to view data."
+                    },
+                    "no_data": True
+                }
         else:
             # Fall back to finding a brand by slug (for backward compatibility)
             brand = supabase.get_brand_by_slug(slug)
             
             if not brand:
-                raise HTTPException(status_code=404, detail="Brand or client not found")
+                # Return empty dashboard data instead of 404 for public view (graceful degradation)
+                logger.warning(f"Neither client nor brand found for slug '{slug}', returning empty dashboard")
+                return {
+                    "brand_id": None,
+                    "brand_name": "Unknown",
+                    "brand_slug": slug,
+                    "client_id": None,
+                    "kpis": {},
+                    "chart_data": {},
+                    "diagnostics": {
+                        "ga4_configured": False,
+                        "scrunch_configured": False,
+                        "agency_analytics_configured": False,
+                        "message": "No data available for this slug."
+                    },
+                    "no_data": True
+                }
             
             brand_id = brand["id"]
             logger.info(f"Found brand by slug '{slug}', using brand_id: {brand_id}")
         
         if not brand_id:
-            raise HTTPException(status_code=404, detail="Brand ID not found")
+            # Return empty dashboard data instead of 404 for public view (graceful degradation)
+            logger.warning(f"Brand ID not found for slug '{slug}', returning empty dashboard")
+            return {
+                "brand_id": None,
+                "brand_name": "Unknown",
+                "brand_slug": slug,
+                "client_id": None,
+                "kpis": {},
+                "chart_data": {},
+                "diagnostics": {
+                    "ga4_configured": False,
+                    "scrunch_configured": False,
+                    "agency_analytics_configured": False,
+                    "message": "No data available."
+                },
+                "no_data": True
+            }
         
         # Call the existing get_reporting_dashboard function directly instead of making HTTP request
         result = await get_reporting_dashboard(brand_id, start_date, end_date, client_id=client_id_for_dashboard, db=db)
@@ -3216,22 +3286,40 @@ async def get_scrunch_dashboard_data_by_slug(
                 brand_id = client["scrunch_brand_id"]
                 logger.info(f"Found client by url_slug '{slug}', using scrunch_brand_id: {brand_id}")
             else:
-                raise HTTPException(
-                    status_code=404, 
-                    detail=f"Client found but no Scrunch brand mapping configured (scrunch_brand_id is null)"
-                )
+                # Return empty Scrunch data instead of 404 for public view (graceful degradation)
+                logger.warning(f"Client found but no Scrunch brand mapping configured (scrunch_brand_id is null), returning empty data")
+                return {
+                    "kpis": {},
+                    "chart_data": {},
+                    "no_data": True,
+                    "message": "No Scrunch brand mapping configured"
+                }
         else:
             # Fall back to finding a brand by slug (for backward compatibility)
             brand = supabase.get_brand_by_slug(slug)
             
             if not brand:
-                raise HTTPException(status_code=404, detail="Brand or client not found")
+                # Return empty Scrunch data instead of 404 for public view (graceful degradation)
+                logger.warning(f"Neither client nor brand found for slug '{slug}', returning empty Scrunch data")
+                return {
+                    "kpis": {},
+                    "chart_data": {},
+                    "no_data": True,
+                    "message": "No data available for this slug."
+                }
             
             brand_id = brand["id"]
             logger.info(f"Found brand by slug '{slug}', using brand_id: {brand_id}")
         
         if not brand_id:
-            raise HTTPException(status_code=404, detail="Brand ID not found")
+            # Return empty Scrunch data instead of 404 for public view (graceful degradation)
+            logger.warning(f"Brand ID not found for slug '{slug}', returning empty Scrunch data")
+            return {
+                "kpis": {},
+                "chart_data": {},
+                "no_data": True,
+                "message": "No data available."
+            }
         
         # Get client_id if we found a client
         client_id_for_scrunch = client.get("id") if client else None
@@ -3944,7 +4032,7 @@ async def get_brand_kpi_selections(brand_id: int, db: Session = Depends(get_db))
 async def save_brand_kpi_selections(
     brand_id: int,
     request: KPISelectionRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Save KPI selections for a brand (used by managers/admins to control public view visibility)"""
@@ -4052,7 +4140,7 @@ class GA4PropertyUpdateRequest(BaseModel):
 async def update_brand_ga4_property_id(
     brand_id: int,
     request: GA4PropertyUpdateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Update GA4 Property ID for a brand"""
@@ -4132,7 +4220,7 @@ async def update_brand_ga4_property_id(
 async def link_agency_analytics_campaign(
     brand_id: int,
     campaign_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Link an Agency Analytics campaign to a brand"""
@@ -4199,7 +4287,7 @@ async def link_agency_analytics_campaign(
 async def unlink_agency_analytics_campaign(
     brand_id: int,
     campaign_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Unlink an Agency Analytics campaign from a brand"""
@@ -4246,7 +4334,7 @@ async def unlink_agency_analytics_campaign(
 @handle_api_errors(context="fetching linked campaigns")
 async def get_brand_linked_campaigns(
     brand_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Get all Agency Analytics campaigns linked to a brand"""
@@ -4297,7 +4385,7 @@ class ThemeUpdateRequest(BaseModel):
 async def upload_brand_logo(
     brand_id: int,
     file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Upload brand logo to Supabase Storage"""
@@ -4403,7 +4491,7 @@ async def upload_brand_logo(
 @handle_api_errors(context="deleting brand logo")
 async def delete_brand_logo(
     brand_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Delete brand logo"""
@@ -4467,7 +4555,7 @@ async def delete_brand_logo(
 async def update_brand_theme(
     brand_id: int,
     request: ThemeUpdateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Update brand theme configuration"""
@@ -4572,7 +4660,7 @@ async def get_clients(
     ga4_assigned: Optional[bool] = Query(None, description="Filter by GA4 assignment (true=assigned, false=not assigned)"),
     scrunch_assigned: Optional[bool] = Query(None, description="Filter by Scrunch assignment (true=assigned, false=not assigned)"),
     active: Optional[str] = Query("active", description="Filter by active status: 'active' (default), 'inactive', or 'all'"),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Get all clients from database with pagination, search, and filters"""
@@ -4679,7 +4767,7 @@ async def get_clients(
 @handle_api_errors(context="soft deleting client")
 async def delete_client(
     client_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Soft delete a client by setting is_active to false"""
@@ -4724,7 +4812,7 @@ async def delete_client(
 @handle_api_errors(context="fetching client")
 async def get_client(
     client_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Get a specific client by ID"""
@@ -4777,7 +4865,7 @@ class ClientMappingUpdateRequest(BaseModel):
 async def update_client_mappings(
     client_id: int,
     request: ClientMappingUpdateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Update client mappings (GA4 property ID and/or Scrunch brand ID)"""
@@ -4881,7 +4969,7 @@ class ClientThemeUpdateRequest(BaseModel):
 async def update_client_theme(
     client_id: int,
     request: ClientThemeUpdateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Update client theme and branding"""
@@ -4976,7 +5064,7 @@ async def update_client_theme(
 async def upload_client_logo(
     client_id: int,
     file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Upload client logo to Supabase Storage"""
@@ -5079,7 +5167,7 @@ async def upload_client_logo(
 @handle_api_errors(context="deleting client logo")
 async def delete_client_logo(
     client_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Delete client logo"""
@@ -5140,7 +5228,7 @@ async def delete_client_logo(
 @handle_api_errors(context="fetching client campaigns")
 async def get_client_campaigns(
     client_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Get all campaigns linked to a client"""
@@ -5171,7 +5259,7 @@ async def link_client_campaign(
     client_id: int,
     campaign_id: int,
     is_primary: Optional[bool] = Query(False, description="Mark as primary campaign"),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Link a campaign to a client"""
@@ -5214,7 +5302,7 @@ async def link_client_campaign(
 async def unlink_client_campaign(
     client_id: int,
     campaign_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Unlink a campaign from a client"""
@@ -5287,10 +5375,9 @@ async def get_client_keywords(
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     page: Optional[int] = Query(1, description="Page number (1-indexed)"),
     page_size: Optional[int] = Query(50, description="Items per page"),
-    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get keywords for a client with filtering, sorting, and pagination"""
+    """Get keywords for a client with filtering, sorting, and pagination (public access)"""
     try:
         supabase = SupabaseService(db=db)
         
@@ -5301,7 +5388,7 @@ async def get_client_keywords(
         
         # Get campaign IDs for this client
         client_campaigns = supabase.get_client_campaigns(client_id)
-        campaign_ids = [c.get("campaign_id") for c in client_campaigns if c.get("campaign_id")]
+        campaign_ids = [c.get("id") for c in client_campaigns if c.get("id")]
         
         if not campaign_ids:
             return {
@@ -5540,10 +5627,9 @@ async def get_client_keyword_rankings_over_time(
     location_country: Optional[str] = Query(None, description="Filter by country code"),
     group_by: Optional[str] = Query("day", description="Group by: day, week, month"),
     engine: Optional[str] = Query("both", description="Engine: google, bing, both"),
-    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get keyword rankings distribution over time by position buckets"""
+    """Get keyword rankings distribution over time by position buckets (public access)"""
     try:
         supabase = SupabaseService(db=db)
         
@@ -5560,7 +5646,7 @@ async def get_client_keyword_rankings_over_time(
         
         # Get campaign IDs for this client using SQLAlchemy
         client_campaigns = supabase.get_client_campaigns(client_id)
-        campaign_ids = [c.get("campaign_id") for c in client_campaigns if c.get("campaign_id")]
+        campaign_ids = [c.get("id") for c in client_campaigns if c.get("id")]
         
         if not campaign_ids:
             return {"data": []}
@@ -5692,10 +5778,9 @@ async def get_client_keyword_summary(
     date_range: Optional[str] = Query("last_30_days", description="Date range: last_7_days, last_30_days, last_90_days, custom"),
     start_date: Optional[str] = Query(None, description="Custom start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="Custom end date (YYYY-MM-DD)"),
-    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get keyword summary KPIs for a client"""
+    """Get keyword summary KPIs for a client (public access)"""
     try:
         supabase = SupabaseService(db=db)
         
@@ -5706,7 +5791,7 @@ async def get_client_keyword_summary(
         
         # Get campaign IDs for this client
         client_campaigns = supabase.get_client_campaigns(client_id)
-        campaign_ids = [c.get("campaign_id") for c in client_campaigns if c.get("campaign_id")]
+        campaign_ids = [c.get("id") for c in client_campaigns if c.get("id")]
         
         if not campaign_ids:
             return {

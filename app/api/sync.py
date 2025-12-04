@@ -16,7 +16,7 @@ from app.services.background_sync import (
 )
 from app.core.config import settings
 from app.core.error_utils import handle_api_errors
-from app.api.auth import get_current_user
+from app.api.auth_v2 import get_current_user_v2
 from app.db.database import get_db
 from app.db.models import Brand, Prompt, Response
 
@@ -29,7 +29,7 @@ ga4_client = GA4APIClient()
 @handle_api_errors(context="syncing brands")
 async def sync_brands(
     request: Request,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Sync brands from Scrunch AI to local PostgreSQL database"""
@@ -78,7 +78,7 @@ async def sync_prompts(
     stage: Optional[str] = Query(None, description="Filter by funnel stage"),
     persona_id: Optional[int] = Query(None, description="Filter by persona ID"),
     request: Request = None,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Sync prompts from Scrunch AI to local PostgreSQL database for all brands or a specific brand"""
@@ -175,7 +175,7 @@ async def sync_responses(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     request: Request = None,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Sync responses from Scrunch AI to local PostgreSQL database for all brands or a specific brand"""
@@ -274,7 +274,7 @@ async def sync_responses(
 @handle_api_errors(context="syncing all data")
 async def sync_all(
     request: Request,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Start async sync of all Scrunch AI data. Returns immediately with job ID."""
@@ -316,7 +316,7 @@ async def sync_agency_analytics(
     campaign_id: Optional[int] = Query(None, description="Sync specific campaign (if not provided, syncs all campaigns)"),
     auto_match_brands: bool = Query(True, description="Automatically match campaigns to brands by URL"),
     request: Request = None,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Start async sync of Agency Analytics data. Returns immediately with job ID."""
@@ -355,7 +355,7 @@ async def sync_ga4(
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD), defaults to today"),
     sync_realtime: bool = Query(True, description="Whether to sync realtime data"),
     request: Request = None,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Start async sync of GA4 data. Returns immediately with job ID. Now uses client_id instead of brand_id."""

@@ -3,12 +3,13 @@ WebSocket API endpoint for real-time notifications
 """
 import json
 import logging
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from typing import Optional
+from sqlalchemy.orm import Session
 from app.services.websocket_manager import websocket_manager
-from app.core.database import get_supabase_client
 from app.core.exceptions import AuthenticationException
-from supabase import Client
+from app.core.jwt_utils import verify_token
+from app.services.user_service import get_user_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +18,10 @@ router = APIRouter()
 
 async def authenticate_websocket(
     websocket: WebSocket,
-    token: Optional[str] = Query(None)
+    token: Optional[str] = Query(None),
+    db: Optional[Session] = None
 ) -> dict:
-    """Authenticate WebSocket connection using JWT token"""
+    """Authenticate WebSocket connection using JWT token (v2 - local PostgreSQL)"""
     if not token:
         await websocket.close(code=1008, reason="Authentication required")
         raise AuthenticationException(
@@ -28,22 +30,31 @@ async def authenticate_websocket(
         )
     
     try:
-        client = get_supabase_client()
-        user_response = client.auth.get_user(token)
+        # Verify JWT token
+        payload = verify_token(token)
         
-        if not user_response.user:
+        # Extract user info from token
+        user_id = int(payload.get("sub"))
+        email = payload.get("email")
+        
+        # Verify user still exists in database
+        user = get_user_by_id(user_id, db)
+        if not user:
             await websocket.close(code=1008, reason="Invalid token")
             raise AuthenticationException(
                 user_message="Invalid authentication token",
-                technical_message="Token validation failed"
+                technical_message=f"User {user_id} not found in database"
             )
         
         return {
-            "id": user_response.user.id,
-            "email": user_response.user.email,
-            "user_metadata": user_response.user.user_metadata or {}
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name
         }
+    except AuthenticationException:
+        raise
     except Exception as e:
+        logger.error(f"WebSocket authentication error: {str(e)}")
         await websocket.close(code=1008, reason="Authentication failed")
         raise AuthenticationException(
             user_message="Authentication failed",
@@ -60,10 +71,16 @@ async def websocket_endpoint(
     user = None
     
     try:
-        # Authenticate connection
-        user = await authenticate_websocket(websocket, token)
-        user_id = user["id"]
-        user_email = user["email"]
+        # Get database session for authentication
+        from app.db.database import SessionLocal
+        db = SessionLocal()
+        try:
+            # Authenticate connection
+            user = await authenticate_websocket(websocket, token, db)
+            user_id = user["id"]
+            user_email = user["email"]
+        finally:
+            db.close()
         
         # Connect
         await websocket_manager.connect(websocket, user_id, user_email)

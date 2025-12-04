@@ -4,7 +4,7 @@ API endpoints for checking sync job status
 from fastapi import APIRouter, Query, Depends
 from typing import Optional
 from app.services.sync_job_service import sync_job_service
-from app.api.auth import get_current_user
+from app.api.auth_v2 import get_current_user_v2
 from app.core.error_utils import handle_api_errors
 
 router = APIRouter()
@@ -14,7 +14,7 @@ router = APIRouter()
 @handle_api_errors(context="fetching sync job status")
 async def get_sync_job_status(
     job_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_v2)
 ):
     """Get status of a specific sync job"""
     job = await sync_job_service.get_job(job_id)
@@ -43,7 +43,7 @@ async def get_sync_jobs(
     status: Optional[str] = Query(None, description="Filter by status (pending, running, completed, failed)"),
     sync_type: Optional[str] = Query(None, description="Filter by sync type"),
     limit: Optional[int] = Query(50, description="Number of records to return"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_v2)
 ):
     """Get sync jobs for the current user"""
     jobs = await sync_job_service.get_user_jobs(
@@ -66,7 +66,7 @@ async def get_sync_jobs(
 @handle_api_errors(context="cancelling sync job")
 async def cancel_sync_job(
     job_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_v2)
 ):
     """Cancel a running sync job"""
     job = await sync_job_service.get_job(job_id)

@@ -6,7 +6,7 @@ from typing import Optional
 from datetime import datetime, timedelta
 from app.services.supabase_service import SupabaseService
 from app.services.audit_logger import audit_logger
-from app.api.auth import get_current_user
+from app.api.auth_v2 import get_current_user_v2
 from app.core.error_utils import handle_api_errors
 from app.db.models import AuditLogAction, AuditLog
 from app.db.database import get_db
@@ -26,7 +26,7 @@ async def get_audit_logs(
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     limit: Optional[int] = Query(100, description="Number of records to return"),
     offset: Optional[int] = Query(0, description="Offset for pagination"),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """
@@ -113,7 +113,7 @@ async def get_audit_logs(
 async def get_audit_stats(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """
@@ -196,7 +196,7 @@ async def get_audit_stats(
 async def get_user_activity(
     user_email: Optional[str] = Query(None, description="Filter by user email (defaults to current user)"),
     limit: Optional[int] = Query(50, description="Number of records to return"),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """

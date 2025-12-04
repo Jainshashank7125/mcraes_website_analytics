@@ -23,28 +23,119 @@ api.interceptors.request.use(
   }
 )
 
-// Add response interceptor to handle auth errors
+// Token refresh state management
+let isRefreshing = false
+let failedQueue = []
+
+const processQueue = (error, token = null) => {
+  failedQueue.forEach(prom => {
+    if (error) {
+      prom.reject(error)
+    } else {
+      prom.resolve(token)
+    }
+  })
+  failedQueue = []
+}
+
+// Add response interceptor to handle auth errors and token refresh
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      const currentPath = window.location.pathname
-      // Don't redirect if on public routes (login, signup, or public reporting)
-      const isPublicRoute = 
-        currentPath === '/login' || 
-        currentPath === '/signup' || 
-        currentPath.startsWith('/reporting/')
+  async (error) => {
+    const originalRequest = error.config
+
+    // If error is 401 and we haven't tried to refresh yet
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      if (isRefreshing) {
+        // If already refreshing, queue this request
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject })
+        })
+          .then(token => {
+            originalRequest.headers.Authorization = `Bearer ${token}`
+            return api(originalRequest)
+          })
+          .catch(err => {
+            return Promise.reject(err)
+          })
+      }
+
+      originalRequest._retry = true
+      isRefreshing = true
+
+      const refreshToken = localStorage.getItem('refresh_token')
       
-      // Clear tokens
-      localStorage.removeItem('access_token')
-      localStorage.removeItem('refresh_token')
-      localStorage.removeItem('user')
-      
-      // Only redirect if not on a public route
-      if (!isPublicRoute) {
-        window.location.href = '/login'
+      if (!refreshToken) {
+        // No refresh token, clear everything and redirect
+        const currentPath = window.location.pathname
+        const isPublicRoute = 
+          currentPath === '/login' || 
+          currentPath === '/signup' || 
+          currentPath.startsWith('/reporting/')
+        
+        localStorage.removeItem('access_token')
+        localStorage.removeItem('refresh_token')
+        localStorage.removeItem('user')
+        
+        isRefreshing = false
+        processQueue(new Error('No refresh token'), null)
+        
+        if (!isPublicRoute) {
+          window.location.href = '/login'
+        }
+        return Promise.reject(error)
+      }
+
+      try {
+        // Try to refresh the token
+        const response = await api.post(
+          '/api/v1/auth/v2/refresh',
+          {},
+          {
+            headers: {
+              'refresh-token': refreshToken,
+            },
+          }
+        )
+
+        const { access_token, refresh_token: newRefreshToken } = response.data
+
+        // Update tokens in localStorage
+        localStorage.setItem('access_token', access_token)
+        if (newRefreshToken) {
+          localStorage.setItem('refresh_token', newRefreshToken)
+        }
+
+        // Update the original request with new token
+        originalRequest.headers.Authorization = `Bearer ${access_token}`
+
+        isRefreshing = false
+        processQueue(null, access_token)
+
+        // Retry the original request
+        return api(originalRequest)
+      } catch (refreshError) {
+        // Refresh failed, clear tokens and redirect
+        const currentPath = window.location.pathname
+        const isPublicRoute = 
+          currentPath === '/login' || 
+          currentPath === '/signup' || 
+          currentPath.startsWith('/reporting/')
+        
+        localStorage.removeItem('access_token')
+        localStorage.removeItem('refresh_token')
+        localStorage.removeItem('user')
+        
+        isRefreshing = false
+        processQueue(refreshError, null)
+        
+        if (!isPublicRoute) {
+          window.location.href = '/login'
+        }
+        return Promise.reject(refreshError)
       }
     }
+
     return Promise.reject(error)
   }
 )
@@ -793,11 +884,11 @@ export const dataAPI = {
   },
 }
 
-// Authentication API endpoints
+// Authentication API endpoints (v2 - using local PostgreSQL)
 export const authAPI = {
   // Sign up
   signup: async (email, password, fullName = null) => {
-    const response = await api.post('/api/v1/auth/signup', {
+    const response = await api.post('/api/v1/auth/v2/signup', {
       email,
       password,
       full_name: fullName,
@@ -807,7 +898,7 @@ export const authAPI = {
 
   // Sign in
   signin: async (email, password) => {
-    const response = await api.post('/api/v1/auth/signin', {
+    const response = await api.post('/api/v1/auth/v2/signin', {
       email,
       password,
     })
@@ -817,7 +908,7 @@ export const authAPI = {
   // Sign out
   signout: async () => {
     try {
-      await api.post('/api/v1/auth/signout')
+      await api.post('/api/v1/auth/v2/signout')
     } catch (error) {
       // Even if API call fails, clear local storage
       console.error('Signout error:', error)
@@ -825,19 +916,20 @@ export const authAPI = {
       localStorage.removeItem('access_token')
       localStorage.removeItem('refresh_token')
       localStorage.removeItem('user')
+      localStorage.removeItem('token_expires_at')
     }
   },
 
   // Get current user
   getCurrentUser: async () => {
-    const response = await api.get('/api/v1/auth/me')
+    const response = await api.get('/api/v1/auth/v2/me')
     return response.data
   },
 
   // Refresh token
   refreshToken: async (refreshToken) => {
     const response = await api.post(
-      '/api/v1/auth/refresh',
+      '/api/v1/auth/v2/refresh',
       {},
       {
         headers: {

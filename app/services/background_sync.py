@@ -287,25 +287,46 @@ async def sync_ga4_background(
         client_results = []
         total_clients = len(clients)
         
-        for idx, client in enumerate(clients):
-            # Check for cancellation before each client
+        # Group clients by property_id to avoid duplicate API calls
+        # and ensure data is stored for all clients sharing the same property
+        property_to_clients = {}
+        for client in clients:
+            property_id = client.get("ga4_property_id")
+            if property_id:
+                if property_id not in property_to_clients:
+                    property_to_clients[property_id] = []
+                property_to_clients[property_id].append(client)
+        
+        # Process each unique property_id
+        processed_properties = set()
+        property_index = 0
+        total_properties = len(property_to_clients)
+        
+        for property_id, clients_with_property in property_to_clients.items():
+            # Check for cancellation before each property
             if sync_job_service.is_cancelled(job_id):
                 logger.info(f"[Job {job_id}] Job cancelled during GA4 sync")
                 return
             
-            client_id_val = client.get("id")
-            property_id = client.get("ga4_property_id")
-            client_name = client.get("company_name", f"Client {client_id_val}")
-            scrunch_brand_id = client.get("scrunch_brand_id")  # For backward compatibility
-            
-            if not property_id:
+            # Skip if we've already processed this property (avoid duplicate API calls)
+            if property_id in processed_properties:
                 continue
+            processed_properties.add(property_id)
+            
+            # Use the first client as the primary one for API calls and logging
+            primary_client = clients_with_property[0]
+            client_id_val = primary_client.get("id")
+            client_name = primary_client.get("company_name", f"Client {client_id_val}")
+            scrunch_brand_id = primary_client.get("scrunch_brand_id")
+            
+            property_index += 1
+            logger.info(f"[Job {job_id}] Processing property {property_id} for {len(clients_with_property)} client(s): {[c.get('company_name') for c in clients_with_property]}")
             
             try:
-                progress = int((idx / total_clients) * 80)
+                progress = int((property_index / total_properties) * 80)
                 await sync_job_service.update_job_status(
                     job_id, "running", progress=progress,
-                    current_step=f"Syncing GA4 for {client_name} ({idx + 1}/{total_clients})..."
+                    current_step=f"Syncing GA4 property {property_id} for {len(clients_with_property)} client(s) ({property_index}/{total_properties})..."
                 )
                 
                 # Check for cancellation after status update
@@ -469,18 +490,22 @@ async def sync_ga4_background(
                     current_step=f"Storing KPI snapshot for {client_name}..."
                 )
                 
-                supabase.upsert_ga4_kpi_snapshot(
-                    property_id=property_id,
-                    period_end_date=period_end_date,
-                    period_start_date=period_start_date,
-                    prev_period_start_date=prev_period_start_date,
-                    prev_period_end_date=prev_period_end_date,
-                    current_values=current_values,
-                    previous_values=previous_values,
-                    changes=changes,
-                    client_id=client_id_val,
-                    brand_id=scrunch_brand_id  # For backward compatibility
-                )
+                # Store KPI snapshot for all clients sharing this property_id
+                for client in clients_with_property:
+                    client_id_for_storage = client.get("id")
+                    brand_id_for_storage = client.get("scrunch_brand_id")
+                    supabase.upsert_ga4_kpi_snapshot(
+                        property_id=property_id,
+                        period_end_date=period_end_date,
+                        period_start_date=period_start_date,
+                        prev_period_start_date=prev_period_start_date,
+                        prev_period_end_date=prev_period_end_date,
+                        current_values=current_values,
+                        previous_values=previous_values,
+                        changes=changes,
+                        client_id=client_id_for_storage,
+                        brand_id=brand_id_for_storage  # For backward compatibility
+                    )
                 
                 # Store all GA4 data types for the current period
                 await sync_job_service.update_job_status(
@@ -532,7 +557,7 @@ async def sync_ga4_background(
                     except Exception as e:
                         logger.warning(f"Could not fetch daily conversions/revenue breakdown: {str(e)}")
                     
-                    # Store each daily record
+                    # Store each daily record for ALL clients sharing this property_id
                     for daily_record in daily_records:
                         date_str = daily_record.get("date")
                         if date_str:
@@ -540,25 +565,41 @@ async def sync_ga4_background(
                             daily_record_with_extras = daily_record.copy()
                             daily_record_with_extras["conversions"] = daily_conversions_data.get(date_str, 0)
                             daily_record_with_extras["revenue"] = daily_revenue_data.get(date_str, 0)
-                            supabase.upsert_ga4_traffic_overview(property_id, date_str, daily_record_with_extras, client_id=client_id_val, brand_id=scrunch_brand_id)
-                            total_synced["traffic_overview"] += 1
+                            
+                            # Store for all clients sharing this property_id
+                            for client in clients_with_property:
+                                client_id_for_storage = client.get("id")
+                                brand_id_for_storage = client.get("scrunch_brand_id")
+                                supabase.upsert_ga4_traffic_overview(property_id, date_str, daily_record_with_extras, client_id=client_id_for_storage, brand_id=brand_id_for_storage)
+                                total_synced["traffic_overview"] += 1
                     
-                    logger.info(f"[Job {job_id}] Stored {total_synced['traffic_overview']} daily traffic overview records for {client_name}")
+                    logger.info(f"[Job {job_id}] Stored {len(daily_records)} daily traffic overview records for {len(clients_with_property)} client(s) with property {property_id}")
                 elif current_traffic_overview:
                     # Fallback: Store aggregated record if daily data not available
                     traffic_overview_with_extras = current_traffic_overview.copy()
                     traffic_overview_with_extras["conversions"] = current_conversions
                     traffic_overview_with_extras["revenue"] = current_revenue
-                    supabase.upsert_ga4_traffic_overview(property_id, period_end_date, traffic_overview_with_extras, client_id=client_id_val, brand_id=scrunch_brand_id)
-                    total_synced["traffic_overview"] += 1
+                    
+                    # Store for all clients sharing this property_id
+                    for client in clients_with_property:
+                        client_id_for_storage = client.get("id")
+                        brand_id_for_storage = client.get("scrunch_brand_id")
+                        supabase.upsert_ga4_traffic_overview(property_id, period_end_date, traffic_overview_with_extras, client_id=client_id_for_storage, brand_id=brand_id_for_storage)
+                        total_synced["traffic_overview"] += 1
                 
-                # Store revenue separately for historical tracking
+                # Store revenue separately for historical tracking (for all clients)
                 if current_revenue > 0:
-                    supabase.upsert_ga4_revenue(property_id, period_end_date, current_revenue, client_id=client_id_val, brand_id=scrunch_brand_id)
+                    for client in clients_with_property:
+                        client_id_for_storage = client.get("id")
+                        brand_id_for_storage = client.get("scrunch_brand_id")
+                        supabase.upsert_ga4_revenue(property_id, period_end_date, current_revenue, client_id=client_id_for_storage, brand_id=brand_id_for_storage)
                 
-                # Store daily conversions summary
+                # Store daily conversions summary (for all clients)
                 if current_conversions > 0:
-                    supabase.upsert_ga4_daily_conversions(property_id, period_end_date, current_conversions, client_id=client_id_val, brand_id=scrunch_brand_id)
+                    for client in clients_with_property:
+                        client_id_for_storage = client.get("id")
+                        brand_id_for_storage = client.get("scrunch_brand_id")
+                        supabase.upsert_ga4_daily_conversions(property_id, period_end_date, current_conversions, client_id=client_id_for_storage, brand_id=brand_id_for_storage)
                 
                 # Fetch and store additional GA4 data
                 try:
@@ -571,20 +612,32 @@ async def sync_ga4_background(
                         logger.info(f"[Job {job_id}] Job cancelled after fetching top pages for {brand_name}")
                         return
                     if top_pages:
-                        count = supabase.upsert_ga4_top_pages(property_id, period_end_date, top_pages, client_id=client_id_val, brand_id=scrunch_brand_id)
-                        total_synced["top_pages"] += count
+                        # Store for all clients sharing this property_id
+                        total_count = 0
+                        for client in clients_with_property:
+                            client_id_for_storage = client.get("id")
+                            brand_id_for_storage = client.get("scrunch_brand_id")
+                            count = supabase.upsert_ga4_top_pages(property_id, period_end_date, top_pages, client_id=client_id_for_storage, brand_id=brand_id_for_storage)
+                            total_count += count
+                        total_synced["top_pages"] += total_count
                     
                     # Traffic sources
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled before fetching traffic sources for {client_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled before fetching traffic sources for property {property_id}")
                         return
                     traffic_sources = await ga4_client.get_traffic_sources(property_id, period_start_date, period_end_date)
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled after fetching traffic sources for {client_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled after fetching traffic sources for property {property_id}")
                         return
                     if traffic_sources:
-                        count = supabase.upsert_ga4_traffic_sources(property_id, period_end_date, traffic_sources, client_id=client_id_val, brand_id=scrunch_brand_id)
-                        total_synced["traffic_sources"] += count
+                        # Store for all clients sharing this property_id
+                        total_count = 0
+                        for client in clients_with_property:
+                            client_id_for_storage = client.get("id")
+                            brand_id_for_storage = client.get("scrunch_brand_id")
+                            count = supabase.upsert_ga4_traffic_sources(property_id, period_end_date, traffic_sources, client_id=client_id_for_storage, brand_id=brand_id_for_storage)
+                            total_count += count
+                        total_synced["traffic_sources"] += total_count
                     
                     # Geographic breakdown
                     if sync_job_service.is_cancelled(job_id):
@@ -595,8 +648,14 @@ async def sync_ga4_background(
                         logger.info(f"[Job {job_id}] Job cancelled after fetching geographic data for {client_name}")
                         return
                     if geographic:
-                        count = supabase.upsert_ga4_geographic(property_id, period_end_date, geographic, client_id=client_id_val, brand_id=scrunch_brand_id)
-                        total_synced["geographic"] += count
+                        # Store for all clients sharing this property_id
+                        total_count = 0
+                        for client in clients_with_property:
+                            client_id_for_storage = client.get("id")
+                            brand_id_for_storage = client.get("scrunch_brand_id")
+                            count = supabase.upsert_ga4_geographic(property_id, period_end_date, geographic, client_id=client_id_for_storage, brand_id=brand_id_for_storage)
+                            total_count += count
+                        total_synced["geographic"] += total_count
                     
                     # Device breakdown
                     if sync_job_service.is_cancelled(job_id):
@@ -607,75 +666,104 @@ async def sync_ga4_background(
                         logger.info(f"[Job {job_id}] Job cancelled after fetching device data for {client_name}")
                         return
                     if devices:
-                        count = supabase.upsert_ga4_devices(property_id, period_end_date, devices, client_id=client_id_val, brand_id=scrunch_brand_id)
-                        total_synced["devices"] += count
+                        # Store for all clients sharing this property_id
+                        total_count = 0
+                        for client in clients_with_property:
+                            client_id_for_storage = client.get("id")
+                            brand_id_for_storage = client.get("scrunch_brand_id")
+                            count = supabase.upsert_ga4_devices(property_id, period_end_date, devices, client_id=client_id_for_storage, brand_id=brand_id_for_storage)
+                            total_count += count
+                        total_synced["devices"] += total_count
                     
                     # Conversions (individual events)
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled before fetching conversions for {client_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled before fetching conversions for property {property_id}")
                         return
                     conversions = await ga4_client.get_conversions(property_id, period_start_date, period_end_date)
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled after fetching conversions for {client_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled after fetching conversions for property {property_id}")
                         return
                     if conversions:
-                        count = supabase.upsert_ga4_conversions(property_id, period_end_date, conversions, client_id=client_id_val, brand_id=scrunch_brand_id)
-                        total_synced["conversions"] += count
+                        # Store for all clients sharing this property_id
+                        total_count = 0
+                        for client in clients_with_property:
+                            client_id_for_storage = client.get("id")
+                            brand_id_for_storage = client.get("scrunch_brand_id")
+                            count = supabase.upsert_ga4_conversions(property_id, period_end_date, conversions, client_id=client_id_for_storage, brand_id=brand_id_for_storage)
+                            total_count += count
+                        total_synced["conversions"] += total_count
                     
                     # Realtime snapshot (if enabled)
                     if sync_realtime:
                         if sync_job_service.is_cancelled(job_id):
-                            logger.info(f"[Job {job_id}] Job cancelled before fetching realtime data for {client_name}")
+                            logger.info(f"[Job {job_id}] Job cancelled before fetching realtime data for property {property_id}")
                             return
                         realtime = await ga4_client.get_realtime_snapshot(property_id)
                         if sync_job_service.is_cancelled(job_id):
-                            logger.info(f"[Job {job_id}] Job cancelled after fetching realtime data for {client_name}")
+                            logger.info(f"[Job {job_id}] Job cancelled after fetching realtime data for property {property_id}")
                             return
                         if realtime:
-                            supabase.upsert_ga4_realtime(property_id, realtime, client_id=client_id_val, brand_id=scrunch_brand_id)
-                            total_synced["realtime"] += 1
+                            # Store for all clients sharing this property_id
+                            for client in clients_with_property:
+                                client_id_for_storage = client.get("id")
+                                brand_id_for_storage = client.get("scrunch_brand_id")
+                                supabase.upsert_ga4_realtime(property_id, realtime, client_id=client_id_for_storage, brand_id=brand_id_for_storage)
+                            total_synced["realtime"] += len(clients_with_property)
                     
                     # Property details (static, only fetch once or periodically)
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled before fetching property details for {client_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled before fetching property details for property {property_id}")
                         return
                     property_details = await ga4_client.get_property_details(property_id)
                     if sync_job_service.is_cancelled(job_id):
-                        logger.info(f"[Job {job_id}] Job cancelled after fetching property details for {client_name}")
+                        logger.info(f"[Job {job_id}] Job cancelled after fetching property details for property {property_id}")
                         return
                     if property_details:
-                        supabase.upsert_ga4_property_details(property_id, property_details, client_id=client_id_val, brand_id=scrunch_brand_id)
+                        # Store for all clients sharing this property_id
+                        for client in clients_with_property:
+                            client_id_for_storage = client.get("id")
+                            brand_id_for_storage = client.get("scrunch_brand_id")
+                            supabase.upsert_ga4_property_details(property_id, property_details, client_id=client_id_for_storage, brand_id=brand_id_for_storage)
                     
                 except Exception as e:
-                    logger.warning(f"[Job {job_id}] Error storing additional GA4 data for client {client_id_val}: {str(e)}")
+                    logger.warning(f"[Job {job_id}] Error storing additional GA4 data for property {property_id}: {str(e)}")
                     # Continue even if some data fails to store
                 
-                client_results.append({
-                    "client_id": client_id_val,
-                    "client_name": client_name,
-                    "property_id": property_id,
-                    "status": "success",
-                    "kpi_snapshot_stored": True,
-                    "data_stored": {
-                        "traffic_overview": total_synced.get("traffic_overview", 0),
-                        "top_pages": total_synced.get("top_pages", 0),
-                        "traffic_sources": total_synced.get("traffic_sources", 0),
-                        "geographic": total_synced.get("geographic", 0),
-                        "devices": total_synced.get("devices", 0),
-                        "conversions": total_synced.get("conversions", 0),
-                        "realtime": total_synced.get("realtime", 0)
-                    }
-                })
-                total_synced["clients"] += 1
+                # Add result entry for each client that was processed together
+                for client in clients_with_property:
+                    client_id_for_result = client.get("id")
+                    client_name_for_result = client.get("company_name", f"Client {client_id_for_result}")
+                    client_results.append({
+                        "client_id": client_id_for_result,
+                        "client_name": client_name_for_result,
+                        "property_id": property_id,
+                        "status": "success",
+                        "kpi_snapshot_stored": True,
+                        "data_stored": {
+                            "traffic_overview": total_synced.get("traffic_overview", 0),
+                            "top_pages": total_synced.get("top_pages", 0),
+                            "traffic_sources": total_synced.get("traffic_sources", 0),
+                            "geographic": total_synced.get("geographic", 0),
+                            "devices": total_synced.get("devices", 0),
+                            "conversions": total_synced.get("conversions", 0),
+                            "realtime": total_synced.get("realtime", 0)
+                        }
+                    })
+                    total_synced["clients"] += 1
                 
             except Exception as e:
-                logger.error(f"[Job {job_id}] Error syncing GA4 for client {client_id_val}: {str(e)}")
-                client_results.append({
-                    "client_id": client_id_val,
-                    "client_name": client_name,
-                    "status": "error",
-                    "error": str(e)
-                })
+                logger.error(f"[Job {job_id}] Error syncing GA4 for property {property_id}: {str(e)}")
+                # Add error result for all clients that were supposed to be processed
+                for client in clients_with_property:
+                    client_id_for_result = client.get("id")
+                    client_name_for_result = client.get("company_name", f"Client {client_id_for_result}")
+                    client_results.append({
+                        "client_id": client_id_for_result,
+                        "client_name": client_name_for_result,
+                        "property_id": property_id,
+                        "status": "error",
+                        "error": str(e)
+                    })
         
         # Check for cancellation before completing
         if sync_job_service.is_cancelled(job_id):

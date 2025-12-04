@@ -82,10 +82,23 @@ function PublicReportingDashboard() {
 
         // Fetch brand info first
         const brand = await reportingAPI.getBrandBySlug(slug)
-        setBrandInfo(brand)
+        
+        // Check if brand has no_data flag (graceful degradation from backend)
+        if (brand && brand.no_data) {
+          // Still set brandInfo so UI can render, but mark it as no data
+          setBrandInfo({ ...brand, no_data: true })
+        } else {
+          setBrandInfo(brand)
+        }
       } catch (err) {
         console.error('Error fetching brand:', err)
-        setError(err.response?.data?.detail || err.message || 'Failed to load brand')
+        // Only set error for actual errors, not for graceful "no data" responses
+        if (err.response?.status !== 200) {
+          setError(err.response?.data?.detail || err.message || 'Failed to load brand')
+        } else {
+          // If we get a 200 with no_data, handle it gracefully
+          setBrandInfo({ no_data: true, message: 'No data available' })
+        }
       } finally {
         setLoading(false)
       }
@@ -133,6 +146,30 @@ function PublicReportingDashboard() {
 
   if (!brandInfo) {
     return null
+  }
+
+  // Handle no_data case gracefully
+  if (brandInfo.no_data) {
+    return (
+      <ThemeProvider theme={brandTheme}>
+        <CssBaseline />
+        <Container maxWidth="lg" sx={{ py: 8 }}>
+          <Card sx={{ borderRadius: 2, boxShadow: 3 }}>
+            <CardContent sx={{ textAlign: 'center', py: 6 }}>
+              <Typography variant="h5" gutterBottom color="text.secondary">
+                Reporting Dashboard
+              </Typography>
+              <Typography variant="body1" color="text.secondary" sx={{ mt: 2 }}>
+                No data available at this time.
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Please check back later or contact support if you believe this is an error.
+              </Typography>
+            </CardContent>
+          </Card>
+        </Container>
+      </ThemeProvider>
+    )
   }
 
   // Render the ReportingDashboard component but override it to use slug-based data fetching
