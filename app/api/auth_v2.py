@@ -46,6 +46,12 @@ class AuthResponseV2(BaseModel):
     user: dict
     expires_in: int  # Seconds until access token expires
 
+class SignUpResponseV2(BaseModel):
+    success: bool
+    message: str
+    user_id: Optional[int] = None
+    email: Optional[str] = None
+
 class RefreshRequestV2(BaseModel):
     refresh_token: Optional[str] = None  # Can be in body or header
 
@@ -106,7 +112,7 @@ async def get_current_user_v2(
         )
 
 
-@router.post("/auth/v2/signup", response_model=AuthResponseV2)
+@router.post("/auth/v2/signup", response_model=SignUpResponseV2)
 @handle_api_errors(context="creating user account (v2)")
 async def signup_v2(
     request: SignUpRequestV2,
@@ -118,6 +124,9 @@ async def signup_v2(
     
     NOTE: This endpoint ONLY uses local PostgreSQL database.
     No Supabase validation or checks are performed.
+    
+    Returns a simple success response - does NOT return tokens.
+    User must sign in separately after account creation.
     """
     try:
         # Validate password (basic validation)
@@ -143,12 +152,6 @@ async def signup_v2(
                 technical_message=f"User creation failed in local database: {str(e)}"
             )
         
-        # Generate access token (3 hours)
-        access_token = create_access_token(user_id=user.id, email=user.email)
-        
-        # Generate refresh token (15 hours, max 4 uses)
-        refresh_token_record, plain_refresh_token = create_refresh_token_record(user.id, db)
-        
         # Log user creation
         try:
             await audit_logger.log(
@@ -163,18 +166,12 @@ async def signup_v2(
         except Exception as log_error:
             logger.warning(f"Failed to log user creation: {str(log_error)}")
         
-        # Calculate expires_in (3 hours in seconds)
-        expires_in = settings.JWT_ACCESS_TOKEN_EXPIRE_HOURS * 3600
-        
+        # Return simple success response - NO tokens
         return {
-            "access_token": access_token,
-            "refresh_token": plain_refresh_token,
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "full_name": user.full_name
-            },
-            "expires_in": expires_in
+            "success": True,
+            "message": "Account created successfully. Please sign in to continue.",
+            "user_id": user.id,
+            "email": user.email
         }
     except ValidationException:
         raise

@@ -42,19 +42,16 @@ function CreateUser() {
     const result = await signup(email, password, fullName || null)
 
     if (result.success) {
-      if (result.requiresEmailConfirmation) {
-        showSuccess('User created successfully. Please check email for confirmation.')
-      } else {
-        showSuccess('User created successfully!')
-        // Reset form
-        setEmail('')
-        setPassword('')
-        setFullName('')
-        // Optionally navigate back or stay on page
-        setTimeout(() => {
-          navigate('/brands')
-        }, 1500)
-      }
+      // Show success message
+      showSuccess(result.message || 'User created successfully!')
+      // Reset form
+      setEmail('')
+      setPassword('')
+      setFullName('')
+      // Redirect to clients page (not brands)
+      setTimeout(() => {
+        navigate('/clients')
+      }, 1500)
     } else {
       showError(result.error || 'Failed to create user')
     }
