@@ -747,8 +747,8 @@ async def get_agency_analytics_campaigns(
         
         # Order by id descending
         query = query.order_by(table.c.id.desc())
-        
-        # Apply pagination
+            
+            # Apply pagination
         offset = (page - 1) * page_size if page > 0 else 0
         query = query.offset(offset).limit(page_size)
         
@@ -1922,14 +1922,14 @@ async def get_reporting_dashboard(
                 traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
                 if traffic_overview:
                     # Calculate previous period for change comparison based on selected date range duration
-                    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-                    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-                    period_duration = (end_dt - start_dt).days + 1
-                    prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-                    prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
-                    prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, prev_start, prev_end, client_id=client_id)
-                    
                     if traffic_overview:
+                        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                        period_duration = (end_dt - start_dt).days + 1
+                        prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                        prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                        prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, prev_start, prev_end, client_id=client_id)
+                        
                         # Calculate changes
                         sessions_change = traffic_overview.get("sessionsChange", 0)
                         engaged_sessions_change = 0
@@ -2014,10 +2014,16 @@ async def get_reporting_dashboard(
                     
                     for record in daily_traffic_records:
                         date = record.get("date")
-                        if date and date in daily_metrics:
-                            daily_metrics[date]["users"] = record.get("users", 0)
-                            daily_metrics[date]["sessions"] = record.get("sessions", 0)
-                            daily_metrics[date]["new_users"] = record.get("new_users", 0)
+                        if date:
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str in daily_metrics:
+                                daily_metrics[date_str]["users"] = record.get("users", 0)
+                                daily_metrics[date_str]["sessions"] = record.get("sessions", 0)
+                                daily_metrics[date_str]["new_users"] = record.get("new_users", 0)
                     
                     # Get daily conversions - match to existing dates or create new entries
                     conversions_table = supabase._get_table("ga4_daily_conversions")
@@ -2037,10 +2043,15 @@ async def get_reporting_dashboard(
                     for record in daily_conversions_records:
                         date = record.get("date")
                         if date:
-                            if date not in daily_metrics:
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str not in daily_metrics:
                                 # Create entry if it doesn't exist (shouldn't happen, but just in case)
-                                date_formatted = date.replace("-", "") if "-" in date else date
-                                daily_metrics[date] = {
+                                date_formatted = date_str.replace("-", "") if "-" in date_str else date_str
+                                daily_metrics[date_str] = {
                                     "date": date_formatted,
                                     "users": 0,
                                     "sessions": 0,
@@ -2048,7 +2059,7 @@ async def get_reporting_dashboard(
                                     "conversions": 0,
                                     "revenue": 0
                                 }
-                            daily_metrics[date]["conversions"] = record.get("total_conversions", 0)
+                            daily_metrics[date_str]["conversions"] = record.get("total_conversions", 0)
                     
                     # Get daily revenue
                     revenue_table = supabase._get_table("ga4_revenue")
@@ -2068,9 +2079,14 @@ async def get_reporting_dashboard(
                     for record in daily_revenue_records:
                         date = record.get("date")
                         if date:
-                            if date not in daily_metrics:
-                                date_formatted = date.replace("-", "") if "-" in date else date
-                                daily_metrics[date] = {
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str not in daily_metrics:
+                                date_formatted = date_str.replace("-", "") if "-" in date_str else date_str
+                                daily_metrics[date_str] = {
                                     "date": date_formatted,
                                     "users": 0,
                                     "sessions": 0,
@@ -2078,7 +2094,7 @@ async def get_reporting_dashboard(
                                     "conversions": 0,
                                     "revenue": 0
                                 }
-                            daily_metrics[date]["revenue"] = float(record.get("total_revenue", 0))
+                            daily_metrics[date_str]["revenue"] = float(record.get("total_revenue", 0))
                     
                     # Generate all dates for previous period first
                     prev_all_dates_map = {}
@@ -2116,10 +2132,16 @@ async def get_reporting_dashboard(
                     
                     for record in prev_daily_traffic_records:
                         date = record.get("date")
-                        if date and date in prev_daily_metrics:
-                            prev_daily_metrics[date]["users"] = record.get("users", 0)
-                            prev_daily_metrics[date]["sessions"] = record.get("sessions", 0)
-                            prev_daily_metrics[date]["new_users"] = record.get("new_users", 0)
+                        if date:
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str in prev_daily_metrics:
+                                prev_daily_metrics[date_str]["users"] = record.get("users", 0)
+                                prev_daily_metrics[date_str]["sessions"] = record.get("sessions", 0)
+                                prev_daily_metrics[date_str]["new_users"] = record.get("new_users", 0)
                     
                     # Get previous period conversions and revenue
                     prev_conv_query_conditions = [
@@ -2137,9 +2159,14 @@ async def get_reporting_dashboard(
                     for record in prev_daily_conversions_records:
                         date = record.get("date")
                         if date:
-                            if date not in prev_daily_metrics:
-                                date_formatted = date.replace("-", "") if "-" in date else date
-                                prev_daily_metrics[date] = {
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str not in prev_daily_metrics:
+                                date_formatted = date_str.replace("-", "") if "-" in date_str else date_str
+                                prev_daily_metrics[date_str] = {
                                     "date": date_formatted,
                                     "users": 0,
                                     "sessions": 0,
@@ -2147,7 +2174,7 @@ async def get_reporting_dashboard(
                                     "conversions": 0,
                                     "revenue": 0
                                 }
-                            prev_daily_metrics[date]["conversions"] = record.get("total_conversions", 0)
+                            prev_daily_metrics[date_str]["conversions"] = record.get("total_conversions", 0)
                     
                     prev_rev_query_conditions = [
                         revenue_table.c.property_id == property_id,
@@ -2164,9 +2191,14 @@ async def get_reporting_dashboard(
                     for record in prev_daily_revenue_records:
                         date = record.get("date")
                         if date:
-                            if date not in prev_daily_metrics:
-                                date_formatted = date.replace("-", "") if "-" in date else date
-                                prev_daily_metrics[date] = {
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str not in prev_daily_metrics:
+                                date_formatted = date_str.replace("-", "") if "-" in date_str else date_str
+                                prev_daily_metrics[date_str] = {
                                     "date": date_formatted,
                                     "users": 0,
                                     "sessions": 0,
@@ -2174,7 +2206,7 @@ async def get_reporting_dashboard(
                                     "conversions": 0,
                                     "revenue": 0
                                 }
-                            prev_daily_metrics[date]["revenue"] = float(record.get("total_revenue", 0))
+                            prev_daily_metrics[date_str]["revenue"] = float(record.get("total_revenue", 0))
                     
                     logger.info(f"[GA4 STORED DATA] Loaded {len(daily_metrics)} daily metrics records for current period, {len(prev_daily_metrics)} for previous period")
                     
@@ -2235,168 +2267,9 @@ async def get_reporting_dashboard(
         except:
             campaign_links = []
         
-        if campaign_links:
-            # try:
-                    #     "brand_present_count": 0,
-                    #     "brand_presence_rate": 0,
-                    #     "sentiment_score": 0,
-                    #     "prompt_search_volume": 0,
-                    #     "top10_prompt_percentage": 0,
-                    #     "competitive_benchmarking": {
-                    #         "brand_visibility_percent": 0,
-                    #         "competitor_avg_visibility_percent": 0
-                    #     },
-                    #     "citations_by_prompt": {},
-                    #     "prompt_reach": {
-                    #         "total_prompts_tracked": 0,
-                    #         "prompts_with_brand": 0,
-                    #         "display": "Tracked prompts: 0; brand appeared in 0 of them"
-                    #     }
-                    # }
-                
-                # Initialize all tracking variables
-                total_citations = 0
-                brand_present_count = 0
-                sentiment_scores = {"positive": 0, "neutral": 0, "negative": 0}
-                prompt_counts = {}
-                prompt_platform_map = {}
-                unique_prompts_tracked = set()
-                unique_prompts_with_brand = set()
-                competitor_visibility_count = {}
-                total_responses_with_competitors = 0
-                citations_by_prompt = {}
-                valid_responses_count = 0
-                
-                # Single pass through responses - calculate everything at once
-                # Optimized: Pre-compile regex and use faster string operations
-                import json
-                import re
-                
-                # Pre-compile regex for faster sentiment matching
-                positive_pattern = re.compile(r'positive', re.IGNORECASE)
-                negative_pattern = re.compile(r'negative', re.IGNORECASE)
-                
-                # Cache for parsed JSON to avoid re-parsing
-                json_cache = {}
-                
-                for r in responses_list:
-                    # Filter by brand_id if provided (should already be filtered, but double-check)
-                    if brand_id_filter is not None:
-                        if r.get("brand_id") != brand_id_filter:
-                            continue
-                    valid_responses_count += 1
-                    
-                    prompt_id = r.get("prompt_id")
-                    brand_present = r.get("brand_present", False)
-                    
-                    # Track prompt counts and platforms (for top 10 calculation)
-                    if prompt_id:
-                        prompt_counts[prompt_id] = prompt_counts.get(prompt_id, 0) + 1
-                        unique_prompts_tracked.add(prompt_id)
-                        
-                        platform = r.get("platform")
-                        if platform:
-                            if prompt_id not in prompt_platform_map:
-                                prompt_platform_map[prompt_id] = set()
-                            prompt_platform_map[prompt_id].add(platform)
-                        
-                        if brand_present:
-                            unique_prompts_with_brand.add(prompt_id)
-                    
-                    # Count citations (highly optimized - avoid JSON parsing when possible)
-                    citations = r.get("citations")
-                    citation_count = 0
-                    if citations:
-                        if isinstance(citations, list):
-                            citation_count = len(citations)
-                        elif isinstance(citations, str):
-                            # Check cache first
-                            if citations in json_cache:
-                                citation_count = json_cache[citations]
-                            else:
-                                try:
-                                    parsed = json.loads(citations)
-                                    if isinstance(parsed, list):
-                                        citation_count = len(parsed)
-                                        json_cache[citations] = citation_count  # Cache result
-                                except:
-                                    pass
-                    
-                    total_citations += citation_count
-                    if prompt_id:
-                        citations_by_prompt[prompt_id] = citations_by_prompt.get(prompt_id, 0) + citation_count
-                    
-                    # Track brand presence
-                    if brand_present:
-                        brand_present_count += 1
-                    
-                    # Track competitors (optimized - use list comprehension for speed)
-                    competitors_present = r.get("competitors_present")
-                    if isinstance(competitors_present, list) and len(competitors_present) > 0:
-                        total_responses_with_competitors += 1
-                        # Use dict comprehension for faster updates
-                        for comp in competitors_present:
-                            if comp:
-                                competitor_visibility_count[comp] = competitor_visibility_count.get(comp, 0) + 1
-                    
-                    # Track sentiment (optimized - use pre-compiled regex)
-                    sentiment = r.get("brand_sentiment")
-                    if sentiment:
-                        if positive_pattern.search(sentiment):
-                            sentiment_scores["positive"] += 1
-                        elif negative_pattern.search(sentiment):
-                            sentiment_scores["negative"] += 1
-                        else:
-                            sentiment_scores["neutral"] += 1
-                
-                # Calculate Top 10 Prompt Percentage (optimized - use sorted once)
-                sorted_prompts = sorted(prompt_counts.items(), key=lambda x: x[1], reverse=True)[:10]
-                top10_count = sum(count for _, count in sorted_prompts)
-                top10_prompt_percentage = (top10_count / valid_responses_count * 100) if valid_responses_count > 0 else 0
-                
-                # Calculate metrics (100% from source data only)
-                brand_presence_rate = (brand_present_count / valid_responses_count * 100) if valid_responses_count > 0 else 0
-                
-                total_sentiment_responses = sum(sentiment_scores.values())
-                if total_sentiment_responses > 0:
-                    sentiment_score = (
-                        (sentiment_scores["positive"] * 1.0 + 
-                         sentiment_scores["neutral"] * 0.0 + 
-                         sentiment_scores["negative"] * -1.0) / total_sentiment_responses * 100
-                    )
-                else:
-                    sentiment_score = 0
-                
-                # Competitive Benchmarking Metrics
-                brand_visibility_percent = brand_presence_rate
-                competitor_avg_visibility_percent = 0
-                if total_responses_with_competitors > 0:
-                    total_competitor_appearances = sum(competitor_visibility_count.values())
-                    if total_competitor_appearances > 0:
-                        competitor_avg_visibility_percent = (total_competitor_appearances / total_responses_with_competitors) * 100
-                
-                # Calculate Prompt Reach Metric
-                prompt_reach = {
-                    "total_prompts_tracked": len(unique_prompts_tracked),
-                    "prompts_with_brand": len(unique_prompts_with_brand),
-                    "display": f"Tracked prompts: {len(unique_prompts_tracked)}; brand appeared in {len(unique_prompts_with_brand)} of them"
-                }
-                
-                return {
-                    "total_citations": total_citations,
-                    "brand_present_count": brand_present_count,
-                    "brand_presence_rate": brand_presence_rate,
-                    "sentiment_score": sentiment_score,
-                    "prompt_search_volume": valid_responses_count,
-                    "top10_prompt_percentage": top10_prompt_percentage,
-                    "competitive_benchmarking": {
-                        "brand_visibility_percent": brand_visibility_percent,
-                        "competitor_avg_visibility_percent": competitor_avg_visibility_percent
-                    },
-                    "prompt_reach": prompt_reach,
-                    "citations_by_prompt": citations_by_prompt,
-                }
-            
+        # Note: campaign_links is checked but not used here
+        # The actual Scrunch metrics calculation happens later in the function
+        
             # # Calculate Scrunch KPIs if brand has any Scrunch data (prompts or responses)
             # # This ensures all brands with Scrunch data show the section (with zero values if no data in date range)
             # logger.info(f"Brand {brand_id} Scrunch KPI calculation: has_any_scrunch_data={has_any_scrunch_data}")
@@ -2908,10 +2781,16 @@ async def get_reporting_dashboard(
                     
                     for record in prev_daily_traffic_records:
                         date = record.get("date")
-                        if date and date in prev_daily_metrics:
-                            prev_daily_metrics[date]["users"] = record.get("users", 0)
-                            prev_daily_metrics[date]["sessions"] = record.get("sessions", 0)
-                            prev_daily_metrics[date]["new_users"] = record.get("new_users", 0)
+                        if date:
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str in prev_daily_metrics:
+                                prev_daily_metrics[date_str]["users"] = record.get("users", 0)
+                                prev_daily_metrics[date_str]["sessions"] = record.get("sessions", 0)
+                                prev_daily_metrics[date_str]["new_users"] = record.get("new_users", 0)
                     
                     # Get previous period conversions and revenue
                     prev_conv_query_conditions = [
@@ -2929,9 +2808,14 @@ async def get_reporting_dashboard(
                     for record in prev_daily_conversions_records:
                         date = record.get("date")
                         if date:
-                            if date not in prev_daily_metrics:
-                                date_formatted = date.replace("-", "") if "-" in date else date
-                                prev_daily_metrics[date] = {
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str not in prev_daily_metrics:
+                                date_formatted = date_str.replace("-", "") if "-" in date_str else date_str
+                                prev_daily_metrics[date_str] = {
                                     "date": date_formatted,
                                     "users": 0,
                                     "sessions": 0,
@@ -2939,7 +2823,7 @@ async def get_reporting_dashboard(
                                     "conversions": 0,
                                     "revenue": 0
                                 }
-                            prev_daily_metrics[date]["conversions"] = record.get("total_conversions", 0)
+                            prev_daily_metrics[date_str]["conversions"] = record.get("total_conversions", 0)
                     
                     prev_rev_query_conditions = [
                         revenue_table.c.property_id == property_id,
@@ -2956,9 +2840,14 @@ async def get_reporting_dashboard(
                     for record in prev_daily_revenue_records:
                         date = record.get("date")
                         if date:
-                            if date not in prev_daily_metrics:
-                                date_formatted = date.replace("-", "") if "-" in date else date
-                                prev_daily_metrics[date] = {
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str not in prev_daily_metrics:
+                                date_formatted = date_str.replace("-", "") if "-" in date_str else date_str
+                                prev_daily_metrics[date_str] = {
                                     "date": date_formatted,
                                     "users": 0,
                                     "sessions": 0,
@@ -2966,7 +2855,7 @@ async def get_reporting_dashboard(
                                     "conversions": 0,
                                     "revenue": 0
                                 }
-                            prev_daily_metrics[date]["revenue"] = float(record.get("total_revenue", 0))
+                            prev_daily_metrics[date_str]["revenue"] = float(record.get("total_revenue", 0))
                     
                     logger.info(f"[GA4 STORED DATA] Loaded {len(daily_metrics)} daily metrics records for current period, {len(prev_daily_metrics)} for previous period")
                     
@@ -4121,7 +4010,7 @@ async def save_brand_kpi_selections(
         
         updated_version = result.get("version", 1)
         
-        logger.info(f"Saved KPI selections for brand {brand_id}: {len(request.selected_kpis)} KPIs, {len(selection_data.get('visible_sections', []))} sections, {len(selection_data.get('selected_charts', []))} charts, version={updated_version}")
+        logger.info(f"Saved KPI selections for brand {brand_id}: {len(request.selected_kpis)} KPIs, {len(visible_sections)} sections, {len(selected_charts)} charts, version={updated_version}")
         
         # Broadcast WebSocket notification
         try:
@@ -4139,8 +4028,8 @@ async def save_brand_kpi_selections(
         return {
             "brand_id": brand_id,
             "selected_kpis": request.selected_kpis,
-            "visible_sections": selection_data.get("visible_sections", []),
-            "selected_charts": selection_data.get("selected_charts", []),
+            "visible_sections": visible_sections,
+            "selected_charts": selected_charts,
             "version": updated_version,
             "message": "KPI, section, and chart selections saved successfully"
         }
@@ -4682,7 +4571,7 @@ async def get_clients(
     search: Optional[str] = Query(None, description="Search by company name"),
     ga4_assigned: Optional[bool] = Query(None, description="Filter by GA4 assignment (true=assigned, false=not assigned)"),
     scrunch_assigned: Optional[bool] = Query(None, description="Filter by Scrunch assignment (true=assigned, false=not assigned)"),
-    active: Optional[bool] = Query(None, description="Filter by active status (true=active, false=inactive)"),
+    active: Optional[str] = Query("active", description="Filter by active status: 'active' (default), 'inactive', or 'all'"),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -4722,7 +4611,18 @@ async def get_clients(
             else:
                 query = query.where(clients_table.c.scrunch_brand_id.is_(None))
         
-        # Get total count before applying active filter (since active depends on campaigns)
+        # Apply is_active filter
+        # active can be: "active" (default), "inactive", or "all"
+        if active == "inactive":
+            query = query.where(clients_table.c.is_active == False)
+        elif active == "all":
+            # Don't filter by is_active - show all clients
+            pass
+        else:
+            # Default to "active" - show only active clients
+            query = query.where(clients_table.c.is_active == True)
+        
+        # Get total count
         count_query = select(func.count()).select_from(query.alias())
         total_count = supabase.db.execute(count_query).scalar()
         
@@ -4758,52 +4658,6 @@ async def get_clients(
             
             item["keywords_count"] = keywords_count
         
-        # Apply active filter after fetching campaigns (since active = has campaigns)
-        if active is not None:
-            if active:
-                items = [item for item in items if len(item.get("client_campaigns", [])) > 0]
-            else:
-                items = [item for item in items if len(item.get("client_campaigns", [])) == 0]
-            
-            # Recalculate total count for active filter
-            # We need to get all clients matching other filters, then filter by active
-            base_query = select(clients_table)
-            if search and search.strip():
-                search_term = f"%{search.strip()}%"
-                base_query = base_query.where(clients_table.c.company_name.ilike(search_term))
-            if ga4_assigned is not None:
-                if ga4_assigned:
-                    base_query = base_query.where(clients_table.c.ga4_property_id.isnot(None))
-                    base_query = base_query.where(clients_table.c.ga4_property_id != '')
-                else:
-                    base_query = base_query.where(
-                        or_(
-                            clients_table.c.ga4_property_id.is_(None),
-                            clients_table.c.ga4_property_id == ''
-                        )
-                    )
-            if scrunch_assigned is not None:
-                if scrunch_assigned:
-                    base_query = base_query.where(clients_table.c.scrunch_brand_id.isnot(None))
-                else:
-                    base_query = base_query.where(clients_table.c.scrunch_brand_id.is_(None))
-            
-            all_matching = supabase.db.execute(base_query).fetchall()
-            all_matching_dicts = [dict(row._mapping) for row in all_matching]
-            
-            # Get campaigns for all matching clients to determine active status
-            active_count = 0
-            for client_dict in all_matching_dicts:
-                client_id = client_dict.get("id")
-                campaigns = supabase.get_client_campaigns(client_id)
-                has_campaigns = len(campaigns) > 0
-                if active and has_campaigns:
-                    active_count += 1
-                elif not active and not has_campaigns:
-                    active_count += 1
-            
-            total_count = active_count
-        
         # Calculate pagination metadata
         total_pages = (total_count + page_size - 1) // page_size if page_size > 0 else 1
         
@@ -4819,6 +4673,51 @@ async def get_clients(
         }
     except Exception as e:
         logger.error(f"Error fetching clients: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/data/clients/{client_id}")
+@handle_api_errors(context="soft deleting client")
+async def delete_client(
+    client_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Soft delete a client by setting is_active to false"""
+    try:
+        supabase = SupabaseService(db=db)
+        
+        # Get client to verify it exists
+        client = supabase.get_client_by_id(client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Check if already deleted
+        if not client.get("is_active", True):
+            raise HTTPException(status_code=400, detail="Client is already deleted")
+        
+        # Soft delete by setting is_active to false
+        clients_table = supabase._get_table("clients")
+        update_stmt = update(clients_table).where(
+            clients_table.c.id == client_id
+        ).values(
+            is_active=False,
+            updated_at=datetime.now(),
+            updated_by=current_user.get("email")
+        )
+        supabase.db.execute(update_stmt)
+        supabase.db.commit()
+        
+        logger.info(f"Soft deleted client {client_id} by user {current_user.get('email')}")
+        
+        return {
+            "client_id": client_id,
+            "message": "Client deleted successfully",
+            "is_active": False
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error soft deleting client {client_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/data/clients/{client_id}")

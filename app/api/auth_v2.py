@@ -157,7 +157,8 @@ async def signup_v2(
                 user_email=user.email,
                 status="success",
                 details={"self_registration": True, "auth_version": "v2"},
-                request=http_request
+                request=http_request,
+                db=db
             )
         except Exception as log_error:
             logger.warning(f"Failed to log user creation: {str(log_error)}")
@@ -207,7 +208,8 @@ async def signin_v2(
                     user_email=request.email,
                     status="error",
                     error_message="Invalid credentials",
-                    request=http_request
+                    request=http_request,
+                    db=db
                 )
             except:
                 pass
@@ -229,7 +231,8 @@ async def signin_v2(
                 user_id=str(user.id),
                 user_email=user.email,
                 status="success",
-                request=http_request
+                request=http_request,
+                db=db
             )
         except Exception as log_error:
             logger.warning(f"Failed to log login: {str(log_error)}")
@@ -257,7 +260,8 @@ async def signin_v2(
                 user_email=request.email,
                 status="error",
                 error_message=str(e),
-                request=http_request
+                request=http_request,
+                db=db
             )
         except:
             pass
@@ -372,7 +376,8 @@ async def signout_v2(
             await audit_logger.log_logout(
                 user_id=str(current_user["id"]),
                 user_email=current_user["email"],
-                request=http_request
+                request=http_request,
+                db=db
             )
         except Exception as log_error:
             logger.warning(f"Failed to log logout: {str(log_error)}")

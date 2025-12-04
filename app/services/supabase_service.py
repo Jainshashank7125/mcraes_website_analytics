@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional, Any
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session
 from sqlalchemy import text, Table, MetaData, select, update, insert, delete, and_, or_, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.db.database import get_db
@@ -687,11 +687,11 @@ class SupabaseService:
         limit: Optional[int] = None,
         offset: Optional[int] = None
     ) -> Dict:
-        """Get responses with optional filters and pagination - Optimized with eager loading"""
+        """Get responses with optional filters and pagination"""
         try:
             from datetime import datetime as dt
-            # Use selectinload to eagerly load citations to avoid N+1 queries
-            query = self.db.query(Response).options(selectinload(Response.citations))
+            # Query responses (citations is a JSON column, not a relationship)
+            query = self.db.query(Response)
             
             # Apply filters
             if brand_id:
@@ -716,10 +716,10 @@ class SupabaseService:
             if limit:
                 query = query.limit(limit)
             
-            # Execute query with eager loading
+            # Execute query
             items = query.all()
             
-            # Convert to dict format (citations already loaded)
+            # Convert to dict format (citations is a JSON column)
             items_dict = [
                 {
                     "id": item.id,
@@ -741,17 +741,7 @@ class SupabaseService:
                     "competitors_present": item.competitors_present,
                     "competitors": item.competitors,
                     "created_at": item.created_at.isoformat() if item.created_at else None,
-                    "citations": [
-                        {
-                            "id": cit.id,
-                            "url": cit.url,
-                            "domain": cit.domain,
-                            "source_type": cit.source_type,
-                            "title": cit.title,
-                            "snippet": cit.snippet
-                        }
-                        for cit in item.citations
-                    ] if item.citations else []
+                    "citations": item.citations if item.citations else []  # citations is a JSON column
                 }
                 for item in items
             ]
@@ -3110,8 +3100,20 @@ class SupabaseService:
                 batch = valid_rankings[i:i + batch_size]
                 
                 # Prepare all records in batch
+                # IMPORTANT: All records must have the same keys for SQLAlchemy bulk insert
                 records = []
                 for record in batch:
+                    # Handle results separately - ensure it's an integer or None
+                    results_val = record.get("results")
+                    results_int = None
+                    if results_val is not None and results_val != "":
+                        try:
+                            results_int = int(results_val)
+                        except (ValueError, TypeError):
+                            # If conversion fails, set to None
+                            results_int = None
+                    
+                    # Build record with all fields - SQLAlchemy needs consistent structure
                     clean_record = {
                         "keyword_id": record.get("keyword_id"),
                         "campaign_id": record.get("campaign_id"),
@@ -3124,24 +3126,51 @@ class SupabaseService:
                         "google_local_ranking": record.get("google_local_ranking"),
                         "bing_ranking": record.get("bing_ranking"),
                         "bing_ranking_url": record.get("bing_ranking_url"),
-                        "results": record.get("results"),
+                        "results": results_int,  # Always include, even if None (column is nullable)
                         "volume": record.get("volume"),
                         "competition": record.get("competition"),
                         "field_status": record.get("field_status"),  # JSONB
                         "updated_at": now
                     }
-                    # Remove None values
-                    clean_record = {k: v for k, v in clean_record.items() if v is not None}
+                    
+                    # For SQLAlchemy bulk insert, we need all records to have the same keys
+                    # Only remove None values for optional fields (but keep results since column is nullable)
+                    # Actually, it's safer to include all fields and let SQLAlchemy handle None values
                     records.append(clean_record)
                 
                 # Bulk insert all records at once (no unique constraint, so just insert)
                 if records:
-                    insert_stmt = insert(table).values(records)
-                    self.db.execute(insert_stmt)
-                    self.db.commit()
+                    try:
+                        # Ensure all records have the same keys by explicitly setting None for missing keys
+                        # This is critical for SQLAlchemy bulk inserts
+                        all_keys = set()
+                        for rec in records:
+                            all_keys.update(rec.keys())
+                        
+                        # Make sure all records have all keys
+                        normalized_records = []
+                        for rec in records:
+                            normalized_rec = {}
+                            for key in all_keys:
+                                normalized_rec[key] = rec.get(key)  # Will be None if key doesn't exist
+                            normalized_records.append(normalized_rec)
+                        
+                        insert_stmt = insert(table).values(normalized_records)
+                        result = self.db.execute(insert_stmt)
+                        self.db.commit()
+                        logger.debug(f"Upserted batch {i//batch_size + 1}: {len(batch)} keyword ranking records")
+                    except Exception as batch_error:
+                        self.db.rollback()
+                        logger.error(f"Error inserting batch {i//batch_size + 1} of keyword rankings: {str(batch_error)}")
+                        # Log first record for debugging
+                        if records:
+                            logger.debug(f"First record in failed batch: {records[0]}")
+                            logger.debug(f"First record keys: {list(records[0].keys())}")
+                        raise
+                else:
+                    logger.warning(f"Batch {i//batch_size + 1} has no valid records to insert")
                 
                 total_upserted += len(batch)
-                logger.debug(f"Upserted batch {i//batch_size + 1}: {len(batch)} records")
             
             logger.info(f"Total upserted {total_upserted} keyword rankings")
             return total_upserted
@@ -3248,6 +3277,7 @@ class SupabaseService:
                 batch = summaries[i:i + batch_size]
                 
                 # Prepare all records in batch
+                # IMPORTANT: All records must have the same keys for SQLAlchemy bulk insert
                 records = []
                 for summary in batch:
                     clean_record = {
@@ -3265,7 +3295,7 @@ class SupabaseService:
                         "bing_ranking_url": summary.get("bing_ranking_url"),
                         "search_volume": summary.get("search_volume"),
                         "competition": summary.get("competition"),
-                        "results": summary.get("results"),
+                        "results": summary.get("results"),  # Always include, even if None (column is nullable)
                         "field_status": summary.get("field_status"),  # JSONB
                         "start_date": summary.get("start_date"),
                         "end_date": summary.get("end_date"),
@@ -3274,13 +3304,27 @@ class SupabaseService:
                         "ranking_change": summary.get("ranking_change"),
                         "updated_at": now
                     }
-                    # Remove None values
-                    clean_record = {k: v for k, v in clean_record.items() if v is not None}
+                    # For SQLAlchemy bulk insert, we need all records to have the same keys
+                    # Include all fields and let SQLAlchemy handle None values
                     records.append(clean_record)
                 
                 # Bulk insert with ON CONFLICT - execute all at once
                 if records:
-                    insert_stmt = pg_insert(table).values(records)
+                    # Ensure all records have the same keys by explicitly setting None for missing keys
+                    # This is critical for SQLAlchemy bulk inserts
+                    all_keys = set()
+                    for rec in records:
+                        all_keys.update(rec.keys())
+                    
+                    # Make sure all records have all keys
+                    normalized_records = []
+                    for rec in records:
+                        normalized_rec = {}
+                        for key in all_keys:
+                            normalized_rec[key] = rec.get(key)  # Will be None if key doesn't exist
+                        normalized_records.append(normalized_rec)
+                    
+                    insert_stmt = pg_insert(table).values(normalized_records)
                     insert_stmt = insert_stmt.on_conflict_do_update(
                         index_elements=['keyword_id'],
                         set_={

@@ -2,9 +2,11 @@ from fastapi import APIRouter, HTTPException, Depends, Body, Query
 from typing import Optional, List, Dict
 from pydantic import BaseModel, Field
 import logging
+from sqlalchemy.orm import Session
 from app.services.openai_client import OpenAIClient
 from app.core.error_utils import handle_api_errors
 from app.api.auth import get_current_user
+from app.db.database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +299,8 @@ Provide a clear, professional review (4-5 bullet points) that highlights what's 
 @router.post("/openai/metrics/overview")
 @handle_api_errors(context="generating overall metrics overview")
 async def generate_overall_overview(
-    request: OverallOverviewRequest
+    request: OverallOverviewRequest,
+    db: Session = Depends(get_db)
 ):
     """
     Generate an AI-powered overall overview of all metrics from all data sources
@@ -308,35 +311,52 @@ async def generate_overall_overview(
     This endpoint is accessible without authentication to support public reporting views.
     """
     try:
-        if not request.client_id and not request.brand_id:
+        # Validate that at least one identifier is provided
+        client_id = request.client_id if request.client_id is not None else None
+        brand_id = request.brand_id if request.brand_id is not None else None
+        
+        # Try to derive missing identifier if possible
+        if client_id and not brand_id:
+            # Try to get brand_id from client
+            from app.services.supabase_service import SupabaseService
+            supabase = SupabaseService(db=db)
+            client = supabase.get_client_by_id(client_id)
+            if client and client.get("scrunch_brand_id"):
+                brand_id = client.get("scrunch_brand_id")
+                logger.debug(f"Derived brand_id={brand_id} from client_id={client_id}")
+        
+        if not client_id and not brand_id:
             raise HTTPException(
                 status_code=400,
-                detail="Either client_id or brand_id must be provided"
+                detail="Either client_id or brand_id must be provided. Received: client_id=None, brand_id=None"
             )
         
         # Import the dashboard function to fetch KPIs
         from app.api.data import get_reporting_dashboard, get_reporting_dashboard_by_client
         
         # Fetch dashboard data to get all KPIs
-        if request.client_id:
+        if client_id:
             # Use client-based endpoint
             dashboard_data = await get_reporting_dashboard_by_client(
-                request.client_id,
+                client_id,
                 request.start_date,
-                request.end_date
+                request.end_date,
+                db=db
             )
         else:
             # Use brand-based endpoint
             dashboard_data = await get_reporting_dashboard(
-                request.brand_id,
+                brand_id,
                 request.start_date,
-                request.end_date
+                request.end_date,
+                client_id=None,
+                db=db
             )
         
         if not dashboard_data.get("kpis"):
             raise HTTPException(
                 status_code=404,
-                detail=f"No KPIs found for {'client' if request.client_id else 'brand'} {request.client_id or request.brand_id}"
+                detail=f"No KPIs found for {'client' if client_id else 'brand'} {client_id or brand_id}"
             )
         
         # Get all KPIs grouped by source
@@ -427,8 +447,8 @@ Provide a comprehensive, professional overview (6-8 bullet points) that synthesi
             overview_text = result["choices"][0].get("message", {}).get("content", "")
         
         return {
-            "client_id": request.client_id,
-            "brand_id": request.brand_id,
+            "client_id": client_id,
+            "brand_id": brand_id,
             "brand_name": dashboard_data.get("brand_name"),
             "date_range": date_range,
             "total_metrics_analyzed": len(all_metrics),

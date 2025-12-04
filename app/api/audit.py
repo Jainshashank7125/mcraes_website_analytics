@@ -33,59 +33,69 @@ async def get_audit_logs(
     Get audit logs with optional filtering.
     Only accessible to authenticated users.
     """
-    # Build query using SQLAlchemy ORM
-    query = select(AuditLog)
-    count_query = select(func.count(AuditLog.id))
+    # Use raw SQL to avoid ORM enum conversion issues
+    from sqlalchemy import text
     
-    # Apply filters
-    conditions = []
+    # Build WHERE clause conditions
+    where_clauses = []
+    params = {}
+    
     if action:
-        conditions.append(AuditLog.action == action)
+        where_clauses.append("action = :action")
+        params["action"] = action
     if user_email:
-        conditions.append(AuditLog.user_email == user_email)
+        where_clauses.append("user_email = :user_email")
+        params["user_email"] = user_email
     if status:
-        conditions.append(AuditLog.status == status)
+        where_clauses.append("status = :status")
+        params["status"] = status
     if start_date:
         start_datetime = datetime.fromisoformat(f"{start_date}T00:00:00+00:00")
-        conditions.append(AuditLog.created_at >= start_datetime)
+        where_clauses.append("created_at >= :start_date")
+        params["start_date"] = start_datetime
     if end_date:
         end_datetime = datetime.fromisoformat(f"{end_date}T23:59:59+00:00")
-        conditions.append(AuditLog.created_at <= end_datetime)
+        where_clauses.append("created_at <= :end_date")
+        params["end_date"] = end_datetime
     
-    if conditions:
-        query = query.where(and_(*conditions))
-        count_query = count_query.where(and_(*conditions))
+    where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
     
     # Get total count
-    total_count = db.execute(count_query).scalar() or 0
+    count_query = text(f"SELECT COUNT(*) FROM audit_logs WHERE {where_clause}")
+    total_count = db.execute(count_query, params).scalar() or 0
     
-    # Order by created_at descending (most recent first)
-    query = query.order_by(AuditLog.created_at.desc())
+    # Build main query
+    query_str = f"""
+        SELECT id, action, user_id, user_email, ip_address, user_agent, 
+               details, status, error_message, created_at
+        FROM audit_logs
+        WHERE {where_clause}
+        ORDER BY created_at DESC
+        LIMIT :limit OFFSET :offset
+    """
     
-    # Apply pagination
-    if limit:
-        query = query.limit(limit)
-    if offset:
-        query = query.offset(offset)
+    params["limit"] = limit or 100
+    params["offset"] = offset or 0
     
     # Execute query
-    result = db.execute(query)
-    logs = result.scalars().all()
+    query = text(query_str)
+    result = db.execute(query, params)
+    rows = result.fetchall()
     
     # Convert to dict format
     logs_data = []
-    for log in logs:
+    for row in rows:
         log_dict = {
-            "id": log.id,
-            "action": log.action.value if hasattr(log.action, 'value') else str(log.action),
-            "user_id": log.user_id,
-            "user_email": log.user_email,
-            "ip_address": log.ip_address,
-            "user_agent": log.user_agent,
-            "details": log.details,
-            "status": log.status,
-            "error_message": log.error_message,
-            "created_at": log.created_at.isoformat() if log.created_at else None
+            "id": row[0],
+            "action": row[1],  # Already a string from database
+            "user_id": row[2],
+            "user_email": row[3],
+            "ip_address": row[4],
+            "user_agent": row[5],
+            "details": row[6],
+            "status": row[7],
+            "error_message": row[8],
+            "created_at": row[9].isoformat() if row[9] else None
         }
         logs_data.append(log_dict)
     
@@ -110,23 +120,36 @@ async def get_audit_stats(
     Get audit log statistics.
     Returns counts by action type, status, and user.
     """
-    # Build query with date filters
-    query = select(AuditLog)
-    conditions = []
+    # Use raw SQL to avoid ORM enum conversion issues
+    from sqlalchemy import text
+    
+    # Build WHERE clause conditions
+    where_clauses = []
+    params = {}
     
     if start_date:
         start_datetime = datetime.fromisoformat(f"{start_date}T00:00:00+00:00")
-        conditions.append(AuditLog.created_at >= start_datetime)
+        where_clauses.append("created_at >= :start_date")
+        params["start_date"] = start_datetime
     if end_date:
         end_datetime = datetime.fromisoformat(f"{end_date}T23:59:59+00:00")
-        conditions.append(AuditLog.created_at <= end_datetime)
+        where_clauses.append("created_at <= :end_date")
+        params["end_date"] = end_datetime
     
-    if conditions:
-        query = query.where(and_(*conditions))
+    where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
     
     # Get all logs in date range (for aggregation)
-    result = db.execute(query)
-    logs = result.scalars().all()
+    query_str = f"""
+        SELECT action, status, user_email
+        FROM audit_logs
+        WHERE {where_clause}
+    """
+    query = text(query_str)
+    result = db.execute(query, params)
+    rows = result.fetchall()
+    
+    # Convert rows to list of dicts for processing
+    logs = [{"action": row[0], "status": row[1], "user_email": row[2]} for row in rows]
     
     # Aggregate statistics
     stats = {
@@ -141,9 +164,9 @@ async def get_audit_stats(
     
     # Calculate stats
     for log in logs:
-        action = log.action.value if hasattr(log.action, 'value') else str(log.action)
-        status = log.status
-        user_email = log.user_email
+        action = log["action"]  # Already a string from database
+        status = log["status"]
+        user_email = log["user_email"]
         
         # Count by action
         if action:
@@ -183,28 +206,40 @@ async def get_user_activity(
     # Use current user if no email provided
     target_email = user_email or current_user["email"]
     
-    # Build query using SQLAlchemy ORM
-    query = select(AuditLog).where(AuditLog.user_email == target_email)
-    query = query.order_by(AuditLog.created_at.desc()).limit(limit or 50)
+    # Use raw SQL to avoid ORM enum conversion issues
+    from sqlalchemy import text
     
-    # Execute query
-    result = db.execute(query)
-    logs = result.scalars().all()
+    # Build query
+    query_str = """
+        SELECT id, action, user_id, user_email, ip_address, user_agent, 
+               details, status, error_message, created_at
+        FROM audit_logs
+        WHERE user_email = :user_email
+        ORDER BY created_at DESC
+        LIMIT :limit
+    """
+    
+    query = text(query_str)
+    result = db.execute(query, {
+        "user_email": target_email,
+        "limit": limit or 50
+    })
+    rows = result.fetchall()
     
     # Convert to dict format
     logs_data = []
-    for log in logs:
+    for row in rows:
         log_dict = {
-            "id": log.id,
-            "action": log.action.value if hasattr(log.action, 'value') else str(log.action),
-            "user_id": log.user_id,
-            "user_email": log.user_email,
-            "ip_address": log.ip_address,
-            "user_agent": log.user_agent,
-            "details": log.details,
-            "status": log.status,
-            "error_message": log.error_message,
-            "created_at": log.created_at.isoformat() if log.created_at else None
+            "id": row[0],
+            "action": row[1],  # Already a string from database
+            "user_id": row[2],
+            "user_email": row[3],
+            "ip_address": row[4],
+            "user_agent": row[5],
+            "details": row[6],
+            "status": row[7],
+            "error_message": row[8],
+            "created_at": row[9].isoformat() if row[9] else None
         }
         logs_data.append(log_dict)
     

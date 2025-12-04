@@ -200,9 +200,10 @@ class Client(Base):
     updated_by = Column(String, nullable=True)
     version = Column(Integer, nullable=False, default=1, index=True)
     last_modified_by = Column(String, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
     
     def __repr__(self):
-        return f"<Client(id={self.id}, company_name='{self.company_name}', version={self.version})>"
+        return f"<Client(id={self.id}, company_name='{self.company_name}', version={self.version}, is_active={self.is_active})>"
 
 
 class ClientCampaign(Base):

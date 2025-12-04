@@ -441,8 +441,16 @@ export const clientAPI = {
     if (filters.scrunch !== null && filters.scrunch !== undefined) {
       params.append('scrunch_assigned', filters.scrunch.toString())
     }
-    if (filters.active !== null && filters.active !== undefined) {
-      params.append('active', filters.active.toString())
+    // Send active filter as string: "active", "inactive", or "all"
+    if (filters.active === true) {
+      params.append('active', 'active')
+    } else if (filters.active === false) {
+      params.append('active', 'inactive')
+    } else if (filters.active === null) {
+      params.append('active', 'all')
+    } else {
+      // Default to active
+      params.append('active', 'active')
     }
     
     const response = await api.get(`/api/v1/data/clients?${params.toString()}`)
@@ -525,6 +533,16 @@ export const clientAPI = {
   // Delete client logo
   deleteClientLogo: async (clientId) => {
     const response = await api.delete(`/api/v1/data/clients/${clientId}/logo`)
+    return response.data
+  },
+
+  // Soft delete client
+  softDeleteClient: async (clientId) => {
+    const response = await api.delete(`/api/v1/data/clients/${clientId}/soft-delete`)
+    return response.data
+  },
+  deleteClient: async (clientId) => {
+    const response = await api.delete(`/api/v1/data/clients/${clientId}`)
     return response.data
   },
 }

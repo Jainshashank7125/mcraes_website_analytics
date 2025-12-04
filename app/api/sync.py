@@ -49,7 +49,8 @@ async def sync_brands(
             user_email=current_user["email"],
             status="success",
             details={"count": count},
-            request=request
+            request=request,
+            db=db
         )
         
         return {
@@ -65,7 +66,8 @@ async def sync_brands(
             user_email=current_user["email"],
             status="error",
             error_message=str(e),
-            request=request
+            request=request,
+            db=db
         )
         raise
 
@@ -140,7 +142,8 @@ async def sync_prompts(
                 "brand_id": brand_id,
                 "brand_results": brand_results
             },
-            request=request
+            request=request,
+            db=db
         )
         
         return {
@@ -158,7 +161,8 @@ async def sync_prompts(
             status="error",
             error_message=str(e),
             details={"brand_id": brand_id},
-            request=request
+            request=request,
+            db=db
         )
         raise
 
@@ -242,7 +246,8 @@ async def sync_responses(
                 "end_date": end_date,
                 "brand_results": brand_results
             },
-            request=request
+            request=request,
+            db=db
         )
         
         return {
@@ -260,7 +265,8 @@ async def sync_responses(
             status="error",
             error_message=str(e),
             details={"brand_id": brand_id},
-            request=request
+            request=request,
+            db=db
         )
         raise
 

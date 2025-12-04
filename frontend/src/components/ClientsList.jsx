@@ -24,6 +24,11 @@ import {
   TablePagination,
   Alert,
   LinearProgress,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
 } from '@mui/material'
 import {
   Business as BusinessIcon,
@@ -36,6 +41,7 @@ import {
   Search as SearchIcon,
   OpenInNew as OpenInNewIcon,
   Tag as TagIcon,
+  Delete as DeleteIcon,
 } from '@mui/icons-material'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { clientAPI } from '../services/api'
@@ -45,6 +51,9 @@ import ClientManagement from './ClientManagement'
 function ClientsList() {
   const [managementOpen, setManagementOpen] = useState(false)
   const [selectedClient, setSelectedClient] = useState(null)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [clientToDelete, setClientToDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(25)
   const [searchTerm, setSearchTerm] = useState('')
@@ -53,7 +62,7 @@ function ClientsList() {
   const [filters, setFilters] = useState({
     ga4: null, // null = all, true = has GA4, false = no GA4
     scrunch: null, // null = all, true = has Scrunch, false = no Scrunch
-    active: null, // null = all, true = active, false = inactive
+    active: true, // Default to true (active clients only), null = all, true = active, false = inactive
   })
   const navigate = useNavigate()
   const theme = useTheme()
@@ -161,6 +170,34 @@ function ClientsList() {
       }
     })
     setPage(0) // Reset to first page when filter changes
+  }
+
+  const handleDeleteClick = (e, client) => {
+    e.stopPropagation()
+    setClientToDelete(client)
+    setDeleteDialogOpen(true)
+  }
+
+  const handleDeleteCancel = () => {
+    setDeleteDialogOpen(false)
+    setClientToDelete(null)
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!clientToDelete) return
+    
+    setDeleting(true)
+    try {
+      await clientAPI.softDeleteClient(clientToDelete.id)
+      queryClient.invalidateQueries({ queryKey: queryKeys.clients.all })
+      setDeleteDialogOpen(false)
+      setClientToDelete(null)
+    } catch (error) {
+      console.error('Failed to delete client:', error)
+      // You might want to show an error toast here
+    } finally {
+      setDeleting(false)
+    }
   }
 
   if (loading && page === 0) {
@@ -675,6 +712,21 @@ function ClientsList() {
                               </IconButton>
                             </Tooltip>
                           )}
+                          <Tooltip title="Delete Client" arrow>
+                            <IconButton
+                              size="small"
+                              onClick={(e) => handleDeleteClick(e, client)}
+                              sx={{
+                                color: theme.palette.error.main,
+                                transition: 'all 0.2s',
+                                '&:hover': {
+                                  bgcolor: alpha(theme.palette.error.main, 0.1),
+                                },
+                              }}
+                            >
+                              <DeleteIcon sx={{ fontSize: 18 }} />
+                            </IconButton>
+                          </Tooltip>
                         </Box>
                       </TableCell>
                     </TableRow>
@@ -705,6 +757,38 @@ function ClientsList() {
         onClose={handleManagementClose}
         client={selectedClient}
       />
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={deleteDialogOpen}
+        onClose={handleDeleteCancel}
+        aria-labelledby="delete-dialog-title"
+        aria-describedby="delete-dialog-description"
+      >
+        <DialogTitle id="delete-dialog-title">
+          Delete Client
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText id="delete-dialog-description">
+            Are you sure you want to delete <strong>{clientToDelete?.company_name}</strong>? 
+            This will perform a soft delete and the client will be hidden from the list. 
+            This action can be reversed by changing the filter to show inactive clients.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleDeleteCancel} disabled={deleting}>
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleDeleteConfirm} 
+            color="error" 
+            variant="contained"
+            disabled={deleting}
+          >
+            {deleting ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

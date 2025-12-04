@@ -85,6 +85,7 @@ function AgencyAnalytics() {
       loadRankings(selectedCampaign, rankingsPage + 1, rankingsRowsPerPage)
       loadKeywordRankings(selectedCampaign, keywordRankingsPage + 1, keywordRankingsRowsPerPage, keywordSearchTerm)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCampaign, rankingsPage, rankingsRowsPerPage, keywordRankingsPage, keywordRankingsRowsPerPage, keywordSearchTerm])
 
   const loadCampaigns = async (searchTerm = '', page = 1, autoSelectFirst = false) => {
@@ -96,8 +97,13 @@ function AgencyAnalytics() {
       setCampaigns(campaignsList)
       setCampaignTotalCount(response.total_count || 0)
       
+      // Only auto-select if we don't already have a selected campaign and we have campaigns
       if (autoSelectFirst && campaignsList.length > 0 && !selectedCampaign) {
-        setSelectedCampaign(campaignsList[0].id)
+        const firstCampaignId = campaignsList[0].id
+        // Use a ref or check to prevent infinite loops
+        if (firstCampaignId !== selectedCampaign) {
+          setSelectedCampaign(firstCampaignId)
+        }
       }
     } catch (err) {
       console.error('Error loading campaigns:', err)
@@ -110,6 +116,11 @@ function AgencyAnalytics() {
 
   // Debounced campaign search
   const handleCampaignSearch = (searchValue) => {
+    // Only update if the value actually changed
+    if (searchValue === campaignSearchTerm) {
+      return
+    }
+    
     setCampaignSearchTerm(searchValue)
     
     // Clear existing timeout
@@ -156,6 +167,11 @@ function AgencyAnalytics() {
 
   // Debounced keyword search
   const handleKeywordSearch = (searchValue) => {
+    // Only update if the value actually changed
+    if (searchValue === keywordSearchTerm) {
+      return
+    }
+    
     setKeywordSearchTerm(searchValue)
     
     // Clear existing timeout
@@ -287,8 +303,11 @@ function AgencyAnalytics() {
                 setSelectedCampaign(null)
               }
             }}
-            onInputChange={(event, newInputValue) => {
-              handleCampaignSearch(newInputValue)
+            onInputChange={(event, newInputValue, reason) => {
+              // Only handle user input, not programmatic changes
+              if (reason === 'input') {
+                handleCampaignSearch(newInputValue)
+              }
             }}
             loading={loadingCampaigns}
             loadingText="Loading campaigns..."

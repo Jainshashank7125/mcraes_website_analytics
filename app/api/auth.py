@@ -2,11 +2,13 @@ from fastapi import APIRouter, Depends, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from typing import Optional
+from sqlalchemy.orm import Session
 from app.core.database import get_supabase_client
 from app.core.exceptions import AuthenticationException, ValidationException, handle_exception
 from app.core.error_utils import handle_api_errors
 from app.services.audit_logger import audit_logger
 from app.db.models import AuditLogAction
+from app.db.database import get_db
 from supabase import Client
 import logging
 
@@ -72,7 +74,8 @@ async def get_current_user(
 async def signup(
     request: SignUpRequest,
     http_request: Request,
-    client: Client = Depends(get_auth_client)
+    client: Client = Depends(get_auth_client),
+    db: Session = Depends(get_db)
 ):
     """Sign up a new user"""
     try:
@@ -101,7 +104,8 @@ async def signup(
                 user_email=response.user.email,
                 status="success",
                 details={"self_registration": True},
-                request=http_request
+                request=http_request,
+                db=db
             )
         except Exception as log_error:
             logger.warning(f"Failed to log user creation: {str(log_error)}")
@@ -147,7 +151,8 @@ async def signup(
 async def signin(
     request: SignInRequest,
     http_request: Request,
-    client: Client = Depends(get_auth_client)
+    client: Client = Depends(get_auth_client),
+    db: Session = Depends(get_db)
 ):
     """Sign in an existing user"""
     try:
@@ -163,7 +168,8 @@ async def signin(
                 user_email=request.email,
                 status="error",
                 error_message="Invalid credentials",
-                request=http_request
+                request=http_request,
+                db=db
             )
             raise AuthenticationException(
                 user_message="The email or password you entered is incorrect.",
@@ -175,7 +181,8 @@ async def signin(
             user_id=response.user.id,
             user_email=response.user.email,
             status="success",
-            request=http_request
+            request=http_request,
+            db=db
         )
         
         return {
@@ -198,7 +205,8 @@ async def signin(
                 user_email=request.email,
                 status="error",
                 error_message=str(e),
-                request=http_request
+                request=http_request,
+                db=db
             )
         except:
             pass
@@ -230,7 +238,8 @@ async def signout(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     http_request: Request = None,
     current_user: dict = Depends(get_current_user),
-    client: Client = Depends(get_auth_client)
+    client: Client = Depends(get_auth_client),
+    db: Session = Depends(get_db)
 ):
     """Sign out the current user"""
     try:
@@ -241,7 +250,8 @@ async def signout(
         await audit_logger.log_logout(
             user_id=current_user["id"],
             user_email=current_user["email"],
-            request=http_request
+            request=http_request,
+            db=db
         )
         
         return {"message": "Successfully signed out"}

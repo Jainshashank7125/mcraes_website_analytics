@@ -271,7 +271,7 @@ class AgencyAnalyticsClient:
                 "filters": [
                     {"campaign_id": {"$equals_comparison": campaign_id}}
                 ],
-                "sort": {"id": "desc"},
+                "sort": [{"id": "desc"}],  # Use array format to match API playground
                 "offset": offset,
                 "limit": limit
             }
@@ -318,15 +318,28 @@ class AgencyAnalyticsClient:
             
             if location_obj and isinstance(location_obj, dict):
                 parts = []
-                if location_obj.get("formatted_name"):
-                    parts.append(location_obj["formatted_name"])
-                if location_obj.get("region_name") and location_obj["region_name"] != location_obj.get("formatted_name"):
-                    parts.append(location_obj["region_name"])
-                if location_obj.get("country_code"):
-                    parts.append(f"({location_obj['country_code']})")
-                if location_obj.get("latitude") and location_obj.get("longitude"):
-                    parts.append(f"lat: {location_obj['latitude']}, long: {location_obj['longitude']}")
-                location_text = " ".join(parts) if parts else "N/A"
+                try:
+                    formatted_name = location_obj.get("formatted_name")
+                    if formatted_name:
+                        parts.append(str(formatted_name))
+                    
+                    region_name = location_obj.get("region_name")
+                    if region_name and str(region_name) != str(formatted_name):
+                        parts.append(str(region_name))
+                    
+                    country_code = location_obj.get("country_code")
+                    if country_code:
+                        parts.append(f"({str(country_code)})")
+                    
+                    latitude = location_obj.get("latitude")
+                    longitude = location_obj.get("longitude")
+                    if latitude and longitude:
+                        parts.append(f"lat: {str(latitude)}, long: {str(longitude)}")
+                    
+                    location_text = " ".join(parts) if parts else "N/A"
+                except Exception as location_error:
+                    logger.error(f"Error formatting location for keyword {row.get('id')}: {str(location_error)}. Location value: {location_obj}")
+                    location_text = str(location_obj) if location_obj else "N/A"
             
             # Create unique identifier
             campaign_id = row.get("campaign_id", "N/A")
@@ -335,9 +348,25 @@ class AgencyAnalyticsClient:
             
             # Format tags
             tags = row.get("tags", [])
-            if isinstance(tags, list):
-                tags_str = ", ".join(tags) if tags else "N/A"
-            else:
+            try:
+                if isinstance(tags, list):
+                    # Handle case where tags might be a list of dicts or strings
+                    tag_strings = []
+                    for tag in tags:
+                        if isinstance(tag, str):
+                            tag_strings.append(tag)
+                        elif isinstance(tag, dict):
+                            # If tag is a dict, try to extract a meaningful string
+                            # Common fields might be "name", "value", "tag", etc.
+                            tag_str = tag.get("name") or tag.get("value") or tag.get("tag") or str(tag)
+                            tag_strings.append(str(tag_str))
+                        else:
+                            tag_strings.append(str(tag))
+                    tags_str = ", ".join(tag_strings) if tag_strings else "N/A"
+                else:
+                    tags_str = str(tags) if tags else "N/A"
+            except Exception as tag_error:
+                logger.error(f"Error formatting tags for keyword {row.get('id')}: {str(tag_error)}. Tags value: {tags}")
                 tags_str = str(tags) if tags else "N/A"
             
             formatted_rows.append({
@@ -352,13 +381,42 @@ class AgencyAnalyticsClient:
                 "search_location_country_code": location_obj.get("country_code") if isinstance(location_obj, dict) else None,
                 "search_location_latitude": float(location_obj.get("latitude")) if isinstance(location_obj, dict) and location_obj.get("latitude") else None,
                 "search_location_longitude": float(location_obj.get("longitude")) if isinstance(location_obj, dict) and location_obj.get("longitude") else None,
-                "search_language": row.get("search_language", "N/A"),
+                "search_language": self._format_search_language(row.get("search_language")),
                 "tags": tags_str,
                 "date_created": row.get("date_created"),
                 "date_modified": row.get("date_modified")
             })
         
         return formatted_rows
+    
+    def _format_search_language(self, search_language) -> str:
+        """Format search_language to a string (handles list, dict, or string)"""
+        if not search_language:
+            return "N/A"
+        
+        if isinstance(search_language, str):
+            return search_language
+        elif isinstance(search_language, list):
+            if not search_language:
+                return "N/A"
+            # If list contains dicts, extract meaningful values
+            lang_strings = []
+            for lang in search_language:
+                if isinstance(lang, dict):
+                    # Extract name or code from dict
+                    lang_str = lang.get("name") or lang.get("google_code") or lang.get("bing_code") or str(lang)
+                    lang_strings.append(str(lang_str))
+                elif isinstance(lang, str):
+                    lang_strings.append(lang)
+                else:
+                    lang_strings.append(str(lang))
+            return ", ".join(lang_strings) if lang_strings else "N/A"
+        elif isinstance(search_language, dict):
+            # Extract meaningful value from dict
+            lang_str = search_language.get("name") or search_language.get("google_code") or search_language.get("bing_code") or str(search_language)
+            return str(lang_str)
+        else:
+            return str(search_language)
     
     def format_rankings_data(self, rankings: List[Dict], campaign_data: Dict) -> List[Dict]:
         """Format rankings data for database storage"""
@@ -446,13 +504,18 @@ class AgencyAnalyticsClient:
                     {"keyword_id": {"$equals_comparison": keyword_id}}
                 ],
                 "group_by": ["date"],
-                "sort": {"date": "asc"},
+                "sort": [{"date": "asc"}],  # Use array format to match API playground
                 "offset": 0,
                 "limit": 9999
             }
             
             response = await self._request(body)
-            return response.get("results", {}).get("rows", [])
+            rows = response.get("results", {}).get("rows", [])
+            if not rows:
+                logger.debug(f"No ranking data returned from API for keyword {keyword_id} (response keys: {list(response.keys())})")
+            else:
+                logger.debug(f"API returned {len(rows)} ranking records for keyword {keyword_id}")
+            return rows
         except Exception as e:
             logger.error(f"Error fetching keyword rankings for {keyword_id}: {str(e)}")
             raise
@@ -469,6 +532,7 @@ class AgencyAnalyticsClient:
         Returns: (daily_records, summary_record)
         """
         if not rankings:
+            logger.debug(f"No rankings to format for keyword {keyword_id} ({keyword_phrase})")
             return [], None
         
         # Sort by date
@@ -483,13 +547,16 @@ class AgencyAnalyticsClient:
                 date = f"{date}-01"
             elif date and date != "N/A":
                 try:
+                    # If already in YYYY-MM-DD format, validate it
                     if len(date) == 10 and date.count("-") == 2:
                         datetime.strptime(date, "%Y-%m-%d")
+                        # Date is already in correct format, use as-is
                     else:
+                        # Try to parse other formats
                         parsed_date = datetime.strptime(date, "%Y-%m-%d")
                         date = parsed_date.strftime("%Y-%m-%d")
                 except ValueError:
-                    logger.warning(f"Invalid date format: {date}, using first day of month")
+                    logger.warning(f"Invalid date format for keyword {keyword_id}: {date}, using current date")
                     date = datetime.now().strftime("%Y-%m-%d")
             
             keyword_id_date = f"{keyword_id}-{date}"

@@ -176,7 +176,8 @@ async def sync_all_background(
                 "responses_by_brand": responses_by_brand,
                 "job_id": job_id
             },
-            request=request
+            request=request,
+            db=db
         )
         
         logger.info(f"[Job {job_id}] Completed successfully")
@@ -193,7 +194,8 @@ async def sync_all_background(
             status="error",
             error_message=str(e),
             details={"job_id": job_id},
-            request=request
+            request=request,
+            db=db
         )
         raise
     finally:
@@ -706,7 +708,8 @@ async def sync_ga4_background(
                 "client_results": client_results,
                 "job_id": job_id
             },
-            request=request
+            request=request,
+            db=db
         )
         
     except Exception as e:
@@ -720,7 +723,8 @@ async def sync_ga4_background(
             status="error",
             error_message=str(e),
             details={"client_id": client_id, "job_id": job_id},
-            request=request
+            request=request,
+            db=db
         )
         raise
     finally:
@@ -879,8 +883,15 @@ async def sync_agency_analytics_background(
                     logger.info(f"[Job {job_id}] Job cancelled after fetching rankings for {company_name}")
                     return
                 if rankings:
-                    formatted_rankings = client.format_rankings_data(rankings, campaign)
-                    campaign_data_batch["rankings"] = formatted_rankings
+                    try:
+                        formatted_rankings = client.format_rankings_data(rankings, campaign)
+                        campaign_data_batch["rankings"] = formatted_rankings
+                    except Exception as rankings_format_error:
+                        import traceback
+                        error_trace = traceback.format_exc()
+                        logger.error(f"[Job {job_id}] Error formatting rankings for campaign {campaign_id_val} ({company_name}): {str(rankings_format_error)}")
+                        logger.error(f"[Job {job_id}] Stack trace:\n{error_trace}")
+                        raise
                 
                 # Step 3b: Fetch keywords
                 current_step_num += 1
@@ -901,8 +912,16 @@ async def sync_agency_analytics_background(
                     return
                 
                 if keywords:
-                    formatted_keywords = client.format_keywords_data(keywords)
-                    campaign_data_batch["keywords"] = formatted_keywords
+                    try:
+                        formatted_keywords = client.format_keywords_data(keywords)
+                        campaign_data_batch["keywords"] = formatted_keywords
+                    except Exception as keywords_format_error:
+                        import traceback
+                        error_trace = traceback.format_exc()
+                        logger.error(f"[Job {job_id}] Error formatting keywords for campaign {campaign_id_val} ({company_name}): {str(keywords_format_error)}")
+                        logger.error(f"[Job {job_id}] Stack trace:\n{error_trace}")
+                        logger.error(f"[Job {job_id}] Sample keyword data (first item): {keywords[0] if keywords else 'No keywords'}")
+                        raise
                     
                     # Step 3c: Fetch keyword rankings
                     current_step_num += 1
@@ -927,18 +946,38 @@ async def sync_agency_analytics_background(
                             if sync_job_service.is_cancelled(job_id):
                                 logger.info(f"[Job {job_id}] Job cancelled after fetching rankings for keyword {keyword_id}")
                                 return
+                            
                             if keyword_rankings:
-                                daily_records, summary = client.format_keyword_rankings_data(
-                                    keyword_rankings, keyword_id, campaign_id_val, keyword_phrase
-                                )
+                                logger.debug(f"[Job {job_id}] Fetched {len(keyword_rankings)} ranking records for keyword {keyword_id} ({keyword_phrase})")
+                                try:
+                                    daily_records, summary = client.format_keyword_rankings_data(
+                                        keyword_rankings, keyword_id, campaign_id_val, keyword_phrase
+                                    )
+                                except Exception as ranking_format_error:
+                                    import traceback
+                                    error_trace = traceback.format_exc()
+                                    logger.error(f"[Job {job_id}] Error formatting keyword rankings for keyword {keyword_id} ({keyword_phrase}) in campaign {campaign_id_val}: {str(ranking_format_error)}")
+                                    logger.error(f"[Job {job_id}] Stack trace:\n{error_trace}")
+                                    logger.error(f"[Job {job_id}] Sample ranking data (first item): {keyword_rankings[0] if keyword_rankings else 'No rankings'}")
+                                    raise
                                 
                                 if daily_records:
+                                    logger.debug(f"[Job {job_id}] Formatted {len(daily_records)} daily records for keyword {keyword_id}")
                                     campaign_data_batch["keyword_rankings"].extend(daily_records)
+                                else:
+                                    logger.warning(f"[Job {job_id}] No daily records formatted for keyword {keyword_id} despite {len(keyword_rankings)} API results")
                                 
                                 if summary:
+                                    logger.debug(f"[Job {job_id}] Created summary for keyword {keyword_id}")
                                     campaign_data_batch["keyword_summaries"].append(summary)
+                                else:
+                                    logger.warning(f"[Job {job_id}] No summary created for keyword {keyword_id} despite {len(keyword_rankings)} API results")
+                            else:
+                                logger.debug(f"[Job {job_id}] No ranking data returned from API for keyword {keyword_id} ({keyword_phrase})")
                         except Exception as keyword_error:
-                            logger.warning(f"Error syncing keyword rankings for keyword {keyword_id}: {str(keyword_error)}")
+                            logger.warning(f"[Job {job_id}] Error syncing keyword rankings for keyword {keyword_id} ({keyword_phrase}): {str(keyword_error)}")
+                            import traceback
+                            logger.debug(f"[Job {job_id}] Traceback: {traceback.format_exc()}")
                             continue
                 else:
                     # No keywords, but still count as a step
@@ -960,12 +999,20 @@ async def sync_agency_analytics_background(
                     total_synced["keywords"] += count
                 
                 if campaign_data_batch["keyword_rankings"]:
+                    logger.info(f"[Job {job_id}] Upserting {len(campaign_data_batch['keyword_rankings'])} keyword ranking records for campaign {campaign_id_val}")
                     count = supabase.upsert_agency_analytics_keyword_rankings(campaign_data_batch["keyword_rankings"])
                     total_synced["keyword_rankings"] += count
+                    logger.info(f"[Job {job_id}] Successfully upserted {count} keyword ranking records")
+                else:
+                    logger.warning(f"[Job {job_id}] No keyword rankings to upsert for campaign {campaign_id_val}")
                 
                 if campaign_data_batch["keyword_summaries"]:
+                    logger.info(f"[Job {job_id}] Upserting {len(campaign_data_batch['keyword_summaries'])} keyword ranking summaries for campaign {campaign_id_val}")
                     count = supabase.upsert_agency_analytics_keyword_ranking_summaries_batch(campaign_data_batch["keyword_summaries"])
                     total_synced["keyword_ranking_summaries"] += count
+                    logger.info(f"[Job {job_id}] Successfully upserted {count} keyword ranking summaries")
+                else:
+                    logger.warning(f"[Job {job_id}] No keyword ranking summaries to upsert for campaign {campaign_id_val}")
                 
                 campaign_results.append({
                     "campaign_id": campaign_id_val,
@@ -974,7 +1021,10 @@ async def sync_agency_analytics_background(
                 })
                 
             except Exception as campaign_error:
-                logger.error(f"Error syncing campaign {campaign_id_val}: {str(campaign_error)}")
+                import traceback
+                error_trace = traceback.format_exc()
+                logger.error(f"[Job {job_id}] Error syncing campaign {campaign_id_val} ({company_name}): {str(campaign_error)}")
+                logger.error(f"[Job {job_id}] Full stack trace:\n{error_trace}")
                 campaign_results.append({
                     "campaign_id": campaign_id_val,
                     "company": company_name,
@@ -1056,7 +1106,8 @@ async def sync_agency_analytics_background(
                 "campaign_results": campaign_results,
                 "job_id": job_id
             },
-            request=request
+            request=request,
+            db=db
         )
         
     except Exception as e:
@@ -1070,7 +1121,8 @@ async def sync_agency_analytics_background(
             status="error",
             error_message=str(e),
             details={"campaign_id": campaign_id, "job_id": job_id},
-            request=request
+            request=request,
+            db=db
         )
         raise
     finally:
