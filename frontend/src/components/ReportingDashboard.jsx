@@ -327,25 +327,27 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
     return loadingCaptions[Math.floor(Math.random() * loadingCaptions.length)];
   };
 
-  // Load KPI selections from database when brand changes (for authenticated users)
+  // Load KPI selections from database when client changes (for authenticated users) - client-centric
   useEffect(() => {
-    if (selectedBrandId && !isPublic) {
+    if (selectedClientId && !isPublic) {
       loadKPISelections();
     }
-  }, [selectedBrandId, isPublic]);
+  }, [selectedClientId, isPublic]);
 
-  // Load public KPI selections when in public mode
+  // Load public KPI selections when in public mode - client-centric
   useEffect(() => {
-    if (selectedBrandId && isPublic) {
+    if ((selectedClientId || (isPublic && publicSlug)) && isPublic) {
       loadPublicKPISelections();
     }
-  }, [selectedBrandId, isPublic]);
+  }, [selectedClientId, isPublic, publicSlug]);
 
   const loadKPISelections = async () => {
-    if (!selectedBrandId) return;
+    // Use client_id (client-centric approach)
+    const clientIdToUse = selectedClientId;
+    if (!clientIdToUse) return;
     
     try {
-      const data = await reportingAPI.getKPISelections(selectedBrandId);
+      const data = await reportingAPI.getKPISelectionsByClient(clientIdToUse);
       if (data) {
         // Load KPI selections
         if (data.selected_kpis && data.selected_kpis.length > 0) {
@@ -407,10 +409,26 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   };
 
   const loadPublicKPISelections = async () => {
-    if (!selectedBrandId) return;
+    // Use client_id from slug (client-centric approach)
+    let clientIdToUse = selectedClientId;
+    
+    // If no selectedClientId but we have a publicSlug, try to get client_id from slug
+    if (!clientIdToUse && isPublic && publicSlug) {
+      try {
+        const client = await clientAPI.getClientBySlug(publicSlug);
+        if (client && client.id) {
+          clientIdToUse = client.id;
+        }
+      } catch (err) {
+        console.error("Error fetching client by slug for KPI selections:", err);
+        return; // Can't load without client_id
+      }
+    }
+    
+    if (!clientIdToUse) return;
     
     try {
-      const data = await reportingAPI.getKPISelections(selectedBrandId);
+      const data = await reportingAPI.getKPISelectionsByClient(clientIdToUse);
       console.log("Loaded public KPI selections:", data);
       if (data) {
         // Check if a selection was explicitly saved (updated_at exists means record exists in DB)
@@ -488,7 +506,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
       await Promise.all([
         loadDashboardData(),
         loadScrunchData(),
-        !isPublic ? loadBrandAnalytics() : Promise.resolve(),
+        // Load brand analytics for both public and authenticated views (needed for brand_analytics section)
+        loadBrandAnalytics(),
         !isPublic ? loadKPISelections() : loadPublicKPISelections(),
       ]);
     } finally {
@@ -511,9 +530,13 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
           // Try client first (new client-centric approach)
           try {
             const client = await clientAPI.getClientBySlug(publicSlug);
-            if (client && client.scrunch_brand_id) {
+            if (client && client.id) {
+              // Always set selectedClientId (client-centric approach)
               setSelectedClientId(client.id);
-              setSelectedBrandId(client.scrunch_brand_id);
+              // Set selectedBrandId only if client has scrunch_brand_id (for backward compatibility)
+              if (client.scrunch_brand_id) {
+                setSelectedBrandId(client.scrunch_brand_id);
+              }
               return;
             }
           } catch (clientErr) {
@@ -1346,15 +1369,39 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   };
 
   const handleSaveKPISelection = async () => {
-    if (!selectedBrandId) return;
+    // Use client_id directly (client-centric approach)
+    let clientIdToUse = selectedClientId;
+    
+    // If no selectedClientId but we have a publicSlug, try to get client_id from slug
+    if (!clientIdToUse && isPublic && publicSlug) {
+      try {
+        const client = await clientAPI.getClientBySlug(publicSlug);
+        if (client && client.id) {
+          clientIdToUse = client.id;
+        }
+      } catch (err) {
+        console.error("Error fetching client by slug:", err);
+      }
+    }
+    
+    if (!clientIdToUse) {
+      const errorMsg = "Cannot save KPI selections: No client selected. Please select a client first.";
+      setError(errorMsg);
+      console.error("Cannot save KPI selections: No client_id available", {
+        selectedClientId,
+        isPublic,
+        publicSlug
+      });
+      return;
+    }
     
     try {
-      // Save to database (KPIs, sections, and charts)
+      // Save to database using client_id (client-centric)
       // Note: Empty arrays are valid - they mean "show no KPIs/sections/charts" in public view
       // The backend will set updated_at when saving, which allows us to distinguish
       // between "no selection saved" (show all) vs "empty selection saved" (show none)
-      await reportingAPI.saveKPISelections(
-        selectedBrandId, 
+      await reportingAPI.saveKPISelectionsByClient(
+        clientIdToUse, 
         Array.from(tempSelectedKPIs), // Convert Set to Array (empty Set becomes [])
         Array.from(tempVisibleSections), // Convert Set to Array (empty Set becomes [])
         Array.from(tempSelectedCharts) // Convert Set to Array (empty Set becomes [])
@@ -1363,14 +1410,17 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
       setVisibleSections(new Set(tempVisibleSections));
       setSelectedCharts(new Set(tempSelectedCharts));
       setShowKPISelector(false);
+      setError(null); // Clear any previous errors
       console.log("KPI, section, and chart selections saved successfully", {
+        clientId: clientIdToUse,
         kpiCount: tempSelectedKPIs.size,
         sectionCount: tempVisibleSections.size,
         chartCount: tempSelectedCharts.size
       });
     } catch (err) {
       console.error("Error saving KPI selections:", err);
-      setError("Failed to save KPI and section selections. Please try again.");
+      const errorMessage = err.response?.data?.detail || err.message || "Failed to save KPI and section selections. Please try again.";
+      setError(errorMessage);
     }
   };
 
@@ -4938,7 +4988,9 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
             )}
 
             {/* General KPI Grid - All Other KPIs */}
-            {isSectionVisible("performance_metrics") && displayedKPIs.length > 0 && (
+            {/* "All Performance Metrics" section should always show if there are KPIs to display */}
+            {/* It's a summary section, not a data source section, so it doesn't need to be in visible_sections */}
+            {displayedKPIs.length > 0 && (
               <SectionContainer title="All Performance Metrics">
                 <Grid container spacing={2} sx={{ mb: 4 }}>
                   {displayedKPIs.map(([key, kpi], index) => (

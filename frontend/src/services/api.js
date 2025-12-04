@@ -777,13 +777,18 @@ export const reportingAPI = {
     return response.data
   },
   
-  // Get KPI selections for a brand (used to control public view visibility)
+  // Get KPI selections for a brand (used to control public view visibility) - backward compatibility
   getKPISelections: async (brandId) => {
     const response = await api.get(`/api/v1/data/reporting-dashboard/${brandId}/kpi-selections`)
     return response.data
   },
+  // Get KPI selections for a client (client-centric)
+  getKPISelectionsByClient: async (clientId) => {
+    const response = await api.get(`/api/v1/data/reporting-dashboard/client/${clientId}/kpi-selections`)
+    return response.data
+  },
   
-  // Save KPI selections for a brand (used by managers/admins)
+  // Save KPI selections for a brand (used by managers/admins) - backward compatibility
   saveKPISelections: async (brandId, selectedKPIs, visibleSections = null, selectedCharts = null) => {
     const payload = {
       selected_kpis: Array.isArray(selectedKPIs) ? selectedKPIs : Array.from(selectedKPIs)
@@ -799,6 +804,24 @@ export const reportingAPI = {
       payload.selected_charts = Array.isArray(selectedCharts) ? selectedCharts : Array.from(selectedCharts)
     }
     const response = await api.put(`/api/v1/data/reporting-dashboard/${brandId}/kpi-selections`, payload)
+    return response.data
+  },
+  // Save KPI selections for a client (client-centric)
+  saveKPISelectionsByClient: async (clientId, selectedKPIs, visibleSections = null, selectedCharts = null) => {
+    const payload = {
+      selected_kpis: Array.isArray(selectedKPIs) ? selectedKPIs : Array.from(selectedKPIs)
+    }
+    // Always include visible_sections if provided (even if empty array)
+    // Empty array means "show no sections" in public view
+    if (visibleSections !== null && visibleSections !== undefined) {
+      payload.visible_sections = Array.isArray(visibleSections) ? visibleSections : Array.from(visibleSections)
+    }
+    // Always include selected_charts if provided (even if empty array)
+    // Empty array means "show no charts" in public view
+    if (selectedCharts !== null && selectedCharts !== undefined) {
+      payload.selected_charts = Array.isArray(selectedCharts) ? selectedCharts : Array.from(selectedCharts)
+    }
+    const response = await api.put(`/api/v1/data/reporting-dashboard/client/${clientId}/kpi-selections`, payload)
     return response.data
   },
   

@@ -811,10 +811,13 @@ class SupabaseService:
         """Get aggregated GA4 traffic overview data from stored daily records for a date range
         
         Supports querying by brand_id or client_id. If client_id is provided, it will be used as the primary filter.
+        If no data is found for the specific client_id, falls back to querying by property_id only
+        (since multiple clients can share the same GA4 property).
         """
         try:
+            records = []
             # Get all daily records for the date range
-            # If client_id is provided, query by client_id; otherwise use brand_id
+            # If client_id is provided, query by client_id first; otherwise use brand_id
             if client_id is not None:
                 query = text("""
                     SELECT * FROM ga4_traffic_overview
@@ -830,6 +833,25 @@ class SupabaseService:
                     "start_date": start_date,
                     "end_date": end_date
                 })
+                records = [dict(row._mapping) for row in result]
+                
+                # If no records found for this specific client_id, fall back to property_id only
+                # (data is shared across clients with the same property)
+                if not records:
+                    logger.info(f"No GA4 traffic overview data found for client_id={client_id}, falling back to property_id={property_id} query")
+                    query = text("""
+                        SELECT * FROM ga4_traffic_overview
+                        WHERE property_id = :property_id
+                          AND date >= :start_date
+                          AND date <= :end_date
+                        ORDER BY date ASC
+                    """)
+                    result = self.db.execute(query, {
+                        "property_id": property_id,
+                        "start_date": start_date,
+                        "end_date": end_date
+                    })
+                    records = [dict(row._mapping) for row in result]
             else:
                 query = text("""
                     SELECT * FROM ga4_traffic_overview
@@ -845,7 +867,7 @@ class SupabaseService:
                     "start_date": start_date,
                     "end_date": end_date
                 })
-            records = [dict(row._mapping) for row in result]
+                records = [dict(row._mapping) for row in result]
             
             if not records:
                 return None
@@ -1677,7 +1699,11 @@ class SupabaseService:
             raise
     
     def get_latest_ga4_kpi_snapshot(self, brand_id: int, client_id: Optional[int] = None) -> Optional[Dict]:
-        """Get the latest GA4 KPI snapshot for a brand or client"""
+        """Get the latest GA4 KPI snapshot for a brand or client
+        
+        If client_id is provided but no data is found, falls back to querying by brand_id only
+        (since multiple clients can share the same GA4 property and brand).
+        """
         try:
             query = text("""
                 SELECT * FROM ga4_kpi_snapshots
@@ -1687,6 +1713,19 @@ class SupabaseService:
             """)
             result = self.db.execute(query, {"brand_id": brand_id, "client_id": client_id})
             row = result.first()
+            
+            # If no data found for specific client_id, fall back to brand_id only
+            if not row and client_id is not None:
+                logger.info(f"No GA4 KPI snapshot found for client_id={client_id}, falling back to brand_id={brand_id} query")
+                query = text("""
+                    SELECT * FROM ga4_kpi_snapshots
+                    WHERE brand_id = :brand_id
+                    ORDER BY period_end_date DESC
+                    LIMIT 1
+                """)
+                result = self.db.execute(query, {"brand_id": brand_id})
+                row = result.first()
+            
             if row:
                 return dict(row._mapping)
             return None
@@ -1695,7 +1734,11 @@ class SupabaseService:
             return None
     
     def get_ga4_kpi_snapshot_by_period(self, brand_id: int, period_end_date: str, client_id: Optional[int] = None) -> Optional[Dict]:
-        """Get GA4 KPI snapshot for a specific period end date"""
+        """Get GA4 KPI snapshot for a specific period end date
+        
+        If client_id is provided but no data is found, falls back to querying by brand_id only
+        (since multiple clients can share the same GA4 property and brand).
+        """
         try:
             query = text("""
                 SELECT * FROM ga4_kpi_snapshots
@@ -1709,6 +1752,22 @@ class SupabaseService:
                 "period_end_date": period_end_date
             })
             row = result.first()
+            
+            # If no data found for specific client_id, fall back to brand_id only
+            if not row and client_id is not None:
+                logger.info(f"No GA4 KPI snapshot found for client_id={client_id}, falling back to brand_id={brand_id} query")
+                query = text("""
+                    SELECT * FROM ga4_kpi_snapshots
+                    WHERE period_end_date = :period_end_date
+                    AND brand_id = :brand_id
+                    LIMIT 1
+                """)
+                result = self.db.execute(query, {
+                    "brand_id": brand_id,
+                    "period_end_date": period_end_date
+                })
+                row = result.first()
+            
             if row:
                 return dict(row._mapping)
             return None
@@ -1717,7 +1776,11 @@ class SupabaseService:
             return None
     
     def get_ga4_kpi_snapshot_by_date_range(self, brand_id: int, start_date: str, end_date: str, client_id: Optional[int] = None) -> Optional[Dict]:
-        """Get GA4 KPI snapshot that matches the requested date range (within 1 day tolerance)"""
+        """Get GA4 KPI snapshot that matches the requested date range (within 1 day tolerance)
+        
+        If client_id is provided but no data is found, falls back to querying by brand_id only
+        (since multiple clients can share the same GA4 property and brand).
+        """
         try:
             # Convert dates to datetime for comparison
             end_dt = datetime.strptime(end_date, "%Y-%m-%d")
@@ -1738,6 +1801,23 @@ class SupabaseService:
                 "max_date": (end_dt + timedelta(days=1)).strftime("%Y-%m-%d")
             })
             row = result.first()
+            
+            # If no data found for specific client_id, fall back to brand_id only
+            if not row and client_id is not None:
+                logger.info(f"No GA4 KPI snapshot found for client_id={client_id}, falling back to brand_id={brand_id} query")
+                query = text("""
+                    SELECT * FROM ga4_kpi_snapshots
+                    WHERE period_end_date >= :min_date AND period_end_date <= :max_date
+                    AND brand_id = :brand_id
+                    ORDER BY period_end_date DESC
+                    LIMIT 1
+                """)
+                result = self.db.execute(query, {
+                    "brand_id": brand_id,
+                    "min_date": (end_dt - timedelta(days=1)).strftime("%Y-%m-%d"),
+                    "max_date": (end_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+                })
+                row = result.first()
             
             if row:
                 snapshot = dict(row._mapping)
@@ -1763,9 +1843,12 @@ class SupabaseService:
         """Get aggregated GA4 top pages data from stored daily records for a date range using SQLAlchemy Core
         
         Supports querying by brand_id or client_id. If client_id is provided, it will be used as the primary filter.
+        If no data is found for the specific client_id, falls back to querying by property_id only
+        (since multiple clients can share the same GA4 property).
         """
         try:
             table = self._get_table("ga4_top_pages")
+            records = []
             if client_id is not None:
                 query = select(table).where(
                     and_(
@@ -1775,6 +1858,21 @@ class SupabaseService:
                         table.c.date <= end_date
                     )
                 )
+                result = self.db.execute(query)
+                records = [dict(row._mapping) for row in result]
+                
+                # If no records found for this specific client_id, fall back to property_id only
+                if not records:
+                    logger.info(f"No GA4 top pages data found for client_id={client_id}, falling back to property_id={property_id} query")
+                    query = select(table).where(
+                        and_(
+                            table.c.property_id == property_id,
+                            table.c.date >= start_date,
+                            table.c.date <= end_date
+                        )
+                    )
+                    result = self.db.execute(query)
+                    records = [dict(row._mapping) for row in result]
             else:
                 query = select(table).where(
                     and_(
@@ -1784,8 +1882,8 @@ class SupabaseService:
                         table.c.date <= end_date
                     )
                 )
-            result = self.db.execute(query)
-            records = [dict(row._mapping) for row in result]
+                result = self.db.execute(query)
+                records = [dict(row._mapping) for row in result]
             
             if not records:
                 return []
@@ -1830,9 +1928,12 @@ class SupabaseService:
         """Get aggregated GA4 traffic sources data from stored daily records for a date range using SQLAlchemy Core
         
         Supports querying by brand_id or client_id. If client_id is provided, it will be used as the primary filter.
+        If no data is found for the specific client_id, falls back to querying by property_id only
+        (since multiple clients can share the same GA4 property).
         """
         try:
             table = self._get_table("ga4_traffic_sources")
+            records = []
             if client_id is not None:
                 query = select(table).where(
                     and_(
@@ -1842,6 +1943,21 @@ class SupabaseService:
                         table.c.date <= end_date
                     )
                 )
+                result = self.db.execute(query)
+                records = [dict(row._mapping) for row in result]
+                
+                # If no records found for this specific client_id, fall back to property_id only
+                if not records:
+                    logger.info(f"No GA4 traffic sources data found for client_id={client_id}, falling back to property_id={property_id} query")
+                    query = select(table).where(
+                        and_(
+                            table.c.property_id == property_id,
+                            table.c.date >= start_date,
+                            table.c.date <= end_date
+                        )
+                    )
+                    result = self.db.execute(query)
+                    records = [dict(row._mapping) for row in result]
             else:
                 query = select(table).where(
                     and_(
@@ -1851,8 +1967,8 @@ class SupabaseService:
                         table.c.date <= end_date
                     )
                 )
-            result = self.db.execute(query)
-            records = [dict(row._mapping) for row in result]
+                result = self.db.execute(query)
+                records = [dict(row._mapping) for row in result]
             
             if not records:
                 return []
@@ -1903,9 +2019,12 @@ class SupabaseService:
         """Get aggregated GA4 geographic data from stored daily records for a date range using SQLAlchemy Core
         
         Supports querying by brand_id or client_id. If client_id is provided, it will be used as the primary filter.
+        If no data is found for the specific client_id, falls back to querying by property_id only
+        (since multiple clients can share the same GA4 property).
         """
         try:
             table = self._get_table("ga4_geographic")
+            records = []
             if client_id is not None:
                 query = select(table).where(
                     and_(
@@ -1915,6 +2034,21 @@ class SupabaseService:
                         table.c.date <= end_date
                     )
                 )
+                result = self.db.execute(query)
+                records = [dict(row._mapping) for row in result]
+                
+                # If no records found for this specific client_id, fall back to property_id only
+                if not records:
+                    logger.info(f"No GA4 geographic data found for client_id={client_id}, falling back to property_id={property_id} query")
+                    query = select(table).where(
+                        and_(
+                            table.c.property_id == property_id,
+                            table.c.date >= start_date,
+                            table.c.date <= end_date
+                        )
+                    )
+                    result = self.db.execute(query)
+                    records = [dict(row._mapping) for row in result]
             else:
                 query = select(table).where(
                     and_(
@@ -1924,8 +2058,8 @@ class SupabaseService:
                         table.c.date <= end_date
                     )
                 )
-            result = self.db.execute(query)
-            records = [dict(row._mapping) for row in result]
+                result = self.db.execute(query)
+                records = [dict(row._mapping) for row in result]
             
             if not records:
                 return []
@@ -1964,9 +2098,12 @@ class SupabaseService:
         """Get aggregated GA4 devices data from stored daily records for a date range using SQLAlchemy Core
         
         Supports querying by brand_id or client_id. If client_id is provided, it will be used as the primary filter.
+        If no data is found for the specific client_id, falls back to querying by property_id only
+        (since multiple clients can share the same GA4 property).
         """
         try:
             table = self._get_table("ga4_devices")
+            records = []
             if client_id is not None:
                 query = select(table).where(
                     and_(
@@ -1976,6 +2113,21 @@ class SupabaseService:
                         table.c.date <= end_date
                     )
                 )
+                result = self.db.execute(query)
+                records = [dict(row._mapping) for row in result]
+                
+                # If no records found for this specific client_id, fall back to property_id only
+                if not records:
+                    logger.info(f"No GA4 devices data found for client_id={client_id}, falling back to property_id={property_id} query")
+                    query = select(table).where(
+                        and_(
+                            table.c.property_id == property_id,
+                            table.c.date >= start_date,
+                            table.c.date <= end_date
+                        )
+                    )
+                    result = self.db.execute(query)
+                    records = [dict(row._mapping) for row in result]
             else:
                 query = select(table).where(
                     and_(
@@ -1985,8 +2137,8 @@ class SupabaseService:
                         table.c.date <= end_date
                     )
                 )
-            result = self.db.execute(query)
-            records = [dict(row._mapping) for row in result]
+                result = self.db.execute(query)
+                records = [dict(row._mapping) for row in result]
             
             if not records:
                 return []
@@ -2952,7 +3104,7 @@ class SupabaseService:
             raise
     
     def get_brand_kpi_selection(self, brand_id: int) -> Optional[Dict]:
-        """Get KPI selection for a brand"""
+        """Get KPI selection for a brand (backward compatibility)"""
         try:
             table = self._get_table("brand_kpi_selections")
             query = select(table).where(table.c.brand_id == brand_id).limit(1)
@@ -2962,6 +3114,7 @@ class SupabaseService:
             if row:
                 return {
                     "brand_id": brand_id,
+                    "client_id": row.client_id,
                     "selected_kpis": row.selected_kpis or [],
                     "visible_sections": row.visible_sections or [],
                     "selected_charts": row.selected_charts or [],
@@ -2973,6 +3126,115 @@ class SupabaseService:
         except Exception as e:
             logger.error(f"Error getting KPI selection: {str(e)}")
             return None
+    
+    def get_client_kpi_selection(self, client_id: int) -> Optional[Dict]:
+        """Get KPI selection for a client (client-centric)"""
+        try:
+            table = self._get_table("brand_kpi_selections")
+            query = select(table).where(table.c.client_id == client_id).limit(1)
+            result = self.db.execute(query)
+            row = result.first()
+            
+            if row:
+                return {
+                    "client_id": client_id,
+                    "brand_id": row.brand_id,
+                    "selected_kpis": row.selected_kpis or [],
+                    "visible_sections": row.visible_sections or [],
+                    "selected_charts": row.selected_charts or [],
+                    "version": row.version or 1,
+                    "last_modified_by": row.last_modified_by,
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else None
+                }
+            return None
+        except Exception as e:
+            logger.error(f"Error getting KPI selection for client {client_id}: {str(e)}")
+            return None
+    
+    def upsert_client_kpi_selection(
+        self,
+        client_id: int,
+        selected_kpis: List[str],
+        visible_sections: Optional[List[str]] = None,
+        selected_charts: Optional[List[str]] = None,
+        version: Optional[int] = None,
+        last_modified_by: Optional[str] = None
+    ) -> Dict:
+        """Upsert KPI selection for a client using SQLAlchemy Core with ON CONFLICT (client-centric)"""
+        try:
+            import json
+            from datetime import datetime
+            table = self._get_table("brand_kpi_selections")
+            
+            # Get client to derive brand_id (for backward compatibility)
+            client = self.get_client_by_id(client_id)
+            if not client:
+                raise ValueError(f"Client {client_id} not found")
+            brand_id = client.get("scrunch_brand_id")
+            
+            # Prepare data
+            selection_data = {
+                "client_id": client_id,
+                "brand_id": brand_id,  # For backward compatibility
+                "selected_kpis": selected_kpis,
+                "visible_sections": visible_sections or ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"],
+                "selected_charts": selected_charts or [],
+                "last_modified_by": last_modified_by,
+                "updated_at": datetime.utcnow()
+            }
+            
+            # If version is provided, increment it; otherwise set to 1
+            if version is not None:
+                selection_data["version"] = version + 1
+            else:
+                # Check existing version
+                existing_query = select(table.c.version).where(table.c.client_id == client_id).limit(1)
+                existing_result = self.db.execute(existing_query)
+                existing_row = existing_result.first()
+                if existing_row:
+                    selection_data["version"] = existing_row.version + 1
+                else:
+                    selection_data["version"] = 1
+            
+            # Use PostgreSQL INSERT ... ON CONFLICT for upsert (using client_id as unique key)
+            stmt = pg_insert(table).values(**selection_data)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=['client_id'],
+                set_={
+                    "brand_id": stmt.excluded.brand_id,  # Update brand_id in case it changed
+                    "selected_kpis": stmt.excluded.selected_kpis,
+                    "visible_sections": stmt.excluded.visible_sections,
+                    "selected_charts": stmt.excluded.selected_charts,
+                    "version": stmt.excluded.version,
+                    "last_modified_by": stmt.excluded.last_modified_by,
+                    "updated_at": stmt.excluded.updated_at
+                }
+            )
+            
+            self.db.execute(stmt)
+            self.db.commit()
+            
+            # Get updated record
+            query = select(table).where(table.c.client_id == client_id).limit(1)
+            result = self.db.execute(query)
+            row = result.first()
+            
+            if row:
+                return {
+                    "client_id": client_id,
+                    "brand_id": row.brand_id,
+                    "selected_kpis": row.selected_kpis or [],
+                    "visible_sections": row.visible_sections or [],
+                    "selected_charts": row.selected_charts or [],
+                    "version": row.version,
+                    "last_modified_by": row.last_modified_by,
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else None
+                }
+            return selection_data
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error upserting KPI selection for client {client_id}: {str(e)}")
+            raise
     
     def get_campaign_brand_links(self, campaign_id: Optional[int] = None, brand_id: Optional[int] = None) -> List[Dict]:
         """Get campaign-brand links using SQLAlchemy Core"""

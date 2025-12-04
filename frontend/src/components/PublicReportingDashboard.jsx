@@ -148,29 +148,9 @@ function PublicReportingDashboard() {
     return null
   }
 
-  // Handle no_data case gracefully
-  if (brandInfo.no_data) {
-    return (
-      <ThemeProvider theme={brandTheme}>
-        <CssBaseline />
-        <Container maxWidth="lg" sx={{ py: 8 }}>
-          <Card sx={{ borderRadius: 2, boxShadow: 3 }}>
-            <CardContent sx={{ textAlign: 'center', py: 6 }}>
-              <Typography variant="h5" gutterBottom color="text.secondary">
-                Reporting Dashboard
-              </Typography>
-              <Typography variant="body1" color="text.secondary" sx={{ mt: 2 }}>
-                No data available at this time.
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                Please check back later or contact support if you believe this is an error.
-              </Typography>
-            </CardContent>
-          </Card>
-        </Container>
-      </ThemeProvider>
-    )
-  }
+  // Don't block rendering if no_data is set from brand endpoint
+  // Let the dashboard endpoint check for Agency Analytics/GA4 data and show appropriate message
+  // Only show "no data" message if dashboard endpoint also returns no_data
 
   // Render the ReportingDashboard component but override it to use slug-based data fetching
   // We'll create a wrapper that passes the brand_id to ReportingDashboard

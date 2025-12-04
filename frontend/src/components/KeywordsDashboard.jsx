@@ -266,7 +266,8 @@ export default function KeywordsDashboard({ clientId }) {
   
   const keywords = keywordsData?.keywords || [];
   const pagination = keywordsData?.pagination || { total: 0, page: 1, page_size: 50, total_pages: 0 };
-  const summary = keywordsData?.summary || {};
+  // Use summaryData from the dedicated summary endpoint, fallback to keywordsData summary
+  const summary = summaryData || keywordsData?.summary || {};
   
   return (
     <Box>
@@ -301,7 +302,7 @@ export default function KeywordsDashboard({ clientId }) {
         <Grid item xs={12} sm={6} md={3}>
           <Card
             sx={{
-              border: summary.google_rankings_count ? `2px solid ${theme.palette.primary.main}` : `1px solid ${theme.palette.divider}`,
+              border: (summary.google_rankings_count || summary.google_rankings) ? `2px solid ${theme.palette.primary.main}` : `1px solid ${theme.palette.divider}`,
               borderRadius: 2,
             }}
           >
@@ -310,7 +311,7 @@ export default function KeywordsDashboard({ clientId }) {
                 Google Rankings
               </Typography>
               <Typography variant="h4" fontWeight={700}>
-                {summary.google_rankings_count || 0}
+                {summary.google_rankings_count || summary.google_rankings || 0}
               </Typography>
             </CardContent>
           </Card>
@@ -323,9 +324,9 @@ export default function KeywordsDashboard({ clientId }) {
               </Typography>
               <Box display="flex" alignItems="center" gap={1}>
                 <Typography variant="h4" fontWeight={700}>
-                  {summary.google_change_total || 0}
+                  {summary.google_change_total || summary.google_change || 0}
                 </Typography>
-                {summary.google_change_total > 0 && (
+                {(summary.google_change_total || summary.google_change || 0) > 0 && (
                   <TrendingUpIcon sx={{ color: "#34A853", fontSize: 20 }} />
                 )}
               </Box>
@@ -339,7 +340,7 @@ export default function KeywordsDashboard({ clientId }) {
                 Bing Rankings
               </Typography>
               <Typography variant="h4" fontWeight={700}>
-                {summary.bing_rankings_count || 0}
+                {summary.bing_rankings_count || summary.bing_rankings || 0}
               </Typography>
             </CardContent>
           </Card>
@@ -352,9 +353,9 @@ export default function KeywordsDashboard({ clientId }) {
               </Typography>
               <Box display="flex" alignItems="center" gap={1}>
                 <Typography variant="h4" fontWeight={700}>
-                  {summary.bing_change_total || 0}
+                  {summary.bing_change_total || summary.bing_change || 0}
                 </Typography>
-                {summary.bing_change_total > 0 && (
+                {(summary.bing_change_total || summary.bing_change || 0) > 0 && (
                   <TrendingUpIcon sx={{ color: "#34A853", fontSize: 20 }} />
                 )}
               </Box>

@@ -2012,6 +2012,18 @@ async def get_reporting_dashboard(
                     daily_traffic_result = db.execute(daily_traffic_query)
                     daily_traffic_records = [dict(row._mapping) for row in daily_traffic_result]
                     
+                    # If no records found for specific client_id, fall back to property_id only
+                    if not daily_traffic_records and client_id:
+                        logger.info(f"No GA4 daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
+                        fallback_query_conditions = [
+                            traffic_table.c.property_id == property_id,
+                            traffic_table.c.date >= start_date,
+                            traffic_table.c.date <= end_date
+                        ]
+                        fallback_query = select(traffic_table).where(and_(*fallback_query_conditions)).order_by(traffic_table.c.date.asc())
+                        fallback_result = db.execute(fallback_query)
+                        daily_traffic_records = [dict(row._mapping) for row in fallback_result]
+                    
                     for record in daily_traffic_records:
                         date = record.get("date")
                         if date:
@@ -2039,6 +2051,18 @@ async def get_reporting_dashboard(
                     daily_conversions_query = select(conversions_table).where(and_(*conv_query_conditions))
                     daily_conversions_result = db.execute(daily_conversions_query)
                     daily_conversions_records = [dict(row._mapping) for row in daily_conversions_result]
+                    
+                    # If no records found for specific client_id, fall back to property_id only
+                    if not daily_conversions_records and client_id:
+                        logger.info(f"No GA4 daily conversions records found for client_id={client_id}, falling back to property_id={property_id} query")
+                        fallback_conv_conditions = [
+                            conversions_table.c.property_id == property_id,
+                            conversions_table.c.date >= start_date,
+                            conversions_table.c.date <= end_date
+                        ]
+                        fallback_conv_query = select(conversions_table).where(and_(*fallback_conv_conditions))
+                        fallback_conv_result = db.execute(fallback_conv_query)
+                        daily_conversions_records = [dict(row._mapping) for row in fallback_conv_result]
                     
                     for record in daily_conversions_records:
                         date = record.get("date")
@@ -2075,6 +2099,18 @@ async def get_reporting_dashboard(
                     daily_revenue_query = select(revenue_table).where(and_(*rev_query_conditions))
                     daily_revenue_result = db.execute(daily_revenue_query)
                     daily_revenue_records = [dict(row._mapping) for row in daily_revenue_result]
+                    
+                    # If no records found for specific client_id, fall back to property_id only
+                    if not daily_revenue_records and client_id:
+                        logger.info(f"No GA4 daily revenue records found for client_id={client_id}, falling back to property_id={property_id} query")
+                        fallback_rev_conditions = [
+                            revenue_table.c.property_id == property_id,
+                            revenue_table.c.date >= start_date,
+                            revenue_table.c.date <= end_date
+                        ]
+                        fallback_rev_query = select(revenue_table).where(and_(*fallback_rev_conditions))
+                        fallback_rev_result = db.execute(fallback_rev_query)
+                        daily_revenue_records = [dict(row._mapping) for row in fallback_rev_result]
                     
                     for record in daily_revenue_records:
                         date = record.get("date")
@@ -2130,6 +2166,18 @@ async def get_reporting_dashboard(
                     prev_daily_traffic_result = db.execute(prev_daily_traffic_query)
                     prev_daily_traffic_records = [dict(row._mapping) for row in prev_daily_traffic_result]
                     
+                    # Fallback: If no records found for client_id, query by property_id only
+                    if not prev_daily_traffic_records and client_id:
+                        logger.info(f"No GA4 previous period daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
+                        fallback_prev_query_conditions = [
+                            traffic_table.c.property_id == property_id,
+                            traffic_table.c.date >= prev_start,
+                            traffic_table.c.date <= prev_end
+                        ]
+                        fallback_prev_daily_traffic_query = select(traffic_table).where(and_(*fallback_prev_query_conditions)).order_by(traffic_table.c.date.asc())
+                        fallback_prev_daily_traffic_result = db.execute(fallback_prev_daily_traffic_query)
+                        prev_daily_traffic_records = [dict(row._mapping) for row in fallback_prev_daily_traffic_result]
+                    
                     for record in prev_daily_traffic_records:
                         date = record.get("date")
                         if date:
@@ -2156,6 +2204,20 @@ async def get_reporting_dashboard(
                     prev_daily_conversions_query = select(conversions_table).where(and_(*prev_conv_query_conditions))
                     prev_daily_conversions_result = db.execute(prev_daily_conversions_query)
                     prev_daily_conversions_records = [dict(row._mapping) for row in prev_daily_conversions_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id and brand_id only
+                    if not prev_daily_conversions_records and client_id:
+                        logger.info(f"No GA4 previous period daily conversions records found for client_id={client_id}, falling back to property_id={property_id} and brand_id={brand_id} query")
+                        fallback_prev_conv_query_conditions = [
+                            conversions_table.c.property_id == property_id,
+                            conversions_table.c.brand_id == brand_id,
+                            conversions_table.c.date >= prev_start,
+                            conversions_table.c.date <= prev_end
+                        ]
+                        fallback_prev_daily_conversions_query = select(conversions_table).where(and_(*fallback_prev_conv_query_conditions))
+                        fallback_prev_daily_conversions_result = db.execute(fallback_prev_daily_conversions_query)
+                        prev_daily_conversions_records = [dict(row._mapping) for row in fallback_prev_daily_conversions_result]
+                    
                     for record in prev_daily_conversions_records:
                         date = record.get("date")
                         if date:
@@ -2188,6 +2250,20 @@ async def get_reporting_dashboard(
                     prev_daily_revenue_query = select(revenue_table).where(and_(*prev_rev_query_conditions))
                     prev_daily_revenue_result = db.execute(prev_daily_revenue_query)
                     prev_daily_revenue_records = [dict(row._mapping) for row in prev_daily_revenue_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id and brand_id only
+                    if not prev_daily_revenue_records and client_id:
+                        logger.info(f"No GA4 previous period daily revenue records found for client_id={client_id}, falling back to property_id={property_id} and brand_id={brand_id} query")
+                        fallback_prev_rev_query_conditions = [
+                            revenue_table.c.property_id == property_id,
+                            revenue_table.c.brand_id == brand_id,
+                            revenue_table.c.date >= prev_start,
+                            revenue_table.c.date <= prev_end
+                        ]
+                        fallback_prev_daily_revenue_query = select(revenue_table).where(and_(*fallback_prev_rev_query_conditions))
+                        fallback_prev_daily_revenue_result = db.execute(fallback_prev_daily_revenue_query)
+                        prev_daily_revenue_records = [dict(row._mapping) for row in fallback_prev_daily_revenue_result]
+                    
                     for record in prev_daily_revenue_records:
                         date = record.get("date")
                         if date:
@@ -2678,6 +2754,18 @@ async def get_reporting_dashboard(
                     daily_traffic_result = db.execute(daily_traffic_query)
                     daily_traffic_records = [dict(row._mapping) for row in daily_traffic_result]
                     
+                    # Fallback: If no records found for client_id, query by property_id only
+                    if not daily_traffic_records and client_id:
+                        logger.info(f"No GA4 daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
+                        fallback_query_conditions = [
+                            traffic_table.c.property_id == property_id,
+                            traffic_table.c.date >= start_date,
+                            traffic_table.c.date <= end_date
+                        ]
+                        fallback_daily_traffic_query = select(traffic_table).where(and_(*fallback_query_conditions)).order_by(traffic_table.c.date.asc())
+                        fallback_daily_traffic_result = db.execute(fallback_daily_traffic_query)
+                        daily_traffic_records = [dict(row._mapping) for row in fallback_daily_traffic_result]
+                    
                     for record in daily_traffic_records:
                         date = record.get("date")
                         if date and date in daily_metrics:
@@ -2699,6 +2787,20 @@ async def get_reporting_dashboard(
                     daily_conversions_query = select(conversions_table).where(and_(*conv_query_conditions))
                     daily_conversions_result = db.execute(daily_conversions_query)
                     daily_conversions_records = [dict(row._mapping) for row in daily_conversions_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id and brand_id only
+                    if not daily_conversions_records and client_id:
+                        logger.info(f"No GA4 daily conversions records found for client_id={client_id}, falling back to property_id={property_id} and brand_id={brand_id} query")
+                        fallback_conv_query_conditions = [
+                            conversions_table.c.property_id == property_id,
+                            conversions_table.c.brand_id == brand_id,
+                            conversions_table.c.date >= start_date,
+                            conversions_table.c.date <= end_date
+                        ]
+                        fallback_daily_conversions_query = select(conversions_table).where(and_(*fallback_conv_query_conditions))
+                        fallback_daily_conversions_result = db.execute(fallback_daily_conversions_query)
+                        daily_conversions_records = [dict(row._mapping) for row in fallback_daily_conversions_result]
+                    
                     for record in daily_conversions_records:
                         date = record.get("date")
                         if date:
@@ -2729,6 +2831,20 @@ async def get_reporting_dashboard(
                     daily_revenue_query = select(revenue_table).where(and_(*rev_query_conditions))
                     daily_revenue_result = db.execute(daily_revenue_query)
                     daily_revenue_records = [dict(row._mapping) for row in daily_revenue_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id and brand_id only
+                    if not daily_revenue_records and client_id:
+                        logger.info(f"No GA4 daily revenue records found for client_id={client_id}, falling back to property_id={property_id} and brand_id={brand_id} query")
+                        fallback_rev_query_conditions = [
+                            revenue_table.c.property_id == property_id,
+                            revenue_table.c.brand_id == brand_id,
+                            revenue_table.c.date >= start_date,
+                            revenue_table.c.date <= end_date
+                        ]
+                        fallback_daily_revenue_query = select(revenue_table).where(and_(*fallback_rev_query_conditions))
+                        fallback_daily_revenue_result = db.execute(fallback_daily_revenue_query)
+                        daily_revenue_records = [dict(row._mapping) for row in fallback_daily_revenue_result]
+                    
                     for record in daily_revenue_records:
                         date = record.get("date")
                         if date:
@@ -2779,6 +2895,18 @@ async def get_reporting_dashboard(
                     prev_daily_traffic_result = db.execute(prev_daily_traffic_query)
                     prev_daily_traffic_records = [dict(row._mapping) for row in prev_daily_traffic_result]
                     
+                    # Fallback: If no records found for client_id, query by property_id only
+                    if not prev_daily_traffic_records and client_id:
+                        logger.info(f"No GA4 previous period daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
+                        fallback_prev_query_conditions = [
+                            traffic_table.c.property_id == property_id,
+                            traffic_table.c.date >= prev_start,
+                            traffic_table.c.date <= prev_end
+                        ]
+                        fallback_prev_daily_traffic_query = select(traffic_table).where(and_(*fallback_prev_query_conditions)).order_by(traffic_table.c.date.asc())
+                        fallback_prev_daily_traffic_result = db.execute(fallback_prev_daily_traffic_query)
+                        prev_daily_traffic_records = [dict(row._mapping) for row in fallback_prev_daily_traffic_result]
+                    
                     for record in prev_daily_traffic_records:
                         date = record.get("date")
                         if date:
@@ -2805,6 +2933,20 @@ async def get_reporting_dashboard(
                     prev_daily_conversions_query = select(conversions_table).where(and_(*prev_conv_query_conditions))
                     prev_daily_conversions_result = db.execute(prev_daily_conversions_query)
                     prev_daily_conversions_records = [dict(row._mapping) for row in prev_daily_conversions_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id and brand_id only
+                    if not prev_daily_conversions_records and client_id:
+                        logger.info(f"No GA4 previous period daily conversions records found for client_id={client_id}, falling back to property_id={property_id} and brand_id={brand_id} query")
+                        fallback_prev_conv_query_conditions = [
+                            conversions_table.c.property_id == property_id,
+                            conversions_table.c.brand_id == brand_id,
+                            conversions_table.c.date >= prev_start,
+                            conversions_table.c.date <= prev_end
+                        ]
+                        fallback_prev_daily_conversions_query = select(conversions_table).where(and_(*fallback_prev_conv_query_conditions))
+                        fallback_prev_daily_conversions_result = db.execute(fallback_prev_daily_conversions_query)
+                        prev_daily_conversions_records = [dict(row._mapping) for row in fallback_prev_daily_conversions_result]
+                    
                     for record in prev_daily_conversions_records:
                         date = record.get("date")
                         if date:
@@ -2837,6 +2979,20 @@ async def get_reporting_dashboard(
                     prev_daily_revenue_query = select(revenue_table).where(and_(*prev_rev_query_conditions))
                     prev_daily_revenue_result = db.execute(prev_daily_revenue_query)
                     prev_daily_revenue_records = [dict(row._mapping) for row in prev_daily_revenue_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id and brand_id only
+                    if not prev_daily_revenue_records and client_id:
+                        logger.info(f"No GA4 previous period daily revenue records found for client_id={client_id}, falling back to property_id={property_id} and brand_id={brand_id} query")
+                        fallback_prev_rev_query_conditions = [
+                            revenue_table.c.property_id == property_id,
+                            revenue_table.c.brand_id == brand_id,
+                            revenue_table.c.date >= prev_start,
+                            revenue_table.c.date <= prev_end
+                        ]
+                        fallback_prev_daily_revenue_query = select(revenue_table).where(and_(*fallback_prev_rev_query_conditions))
+                        fallback_prev_daily_revenue_result = db.execute(fallback_prev_daily_revenue_query)
+                        prev_daily_revenue_records = [dict(row._mapping) for row in fallback_prev_daily_revenue_result]
+                    
                     for record in prev_daily_revenue_records:
                         date = record.get("date")
                         if date:
@@ -3063,28 +3219,28 @@ async def get_brand_by_slug(slug: str, db: Session = Depends(get_db)):
                     logger.info(f"Found client by url_slug '{slug}', returning associated brand")
                     return brand
                 else:
-                    # Return client info as brand info for public view (graceful degradation)
-                    logger.warning(f"Client found but associated brand (id: {brand_id}) not found, returning client info")
+                    # Return client info as brand info for public view
+                    # Don't set no_data: true here - let the dashboard endpoint check for Agency Analytics/GA4 data
+                    logger.info(f"Client found but associated brand (id: {brand_id}) not found, returning client info - dashboard will check for Agency Analytics/GA4 data")
                     return {
                         "id": client.get("id"),
                         "name": client.get("company_name", "Unknown"),
                         "slug": slug,
                         "theme_color": client.get("theme_color"),
                         "logo_url": client.get("logo_url"),
-                        "no_data": True,
-                        "message": "No brand data available"
+                        "client_id": client.get("id")  # Include client_id so dashboard can use it
                     }
             else:
-                # Return client info as brand info for public view (graceful degradation)
-                logger.warning(f"Client found but no brand mapping configured (scrunch_brand_id is null), returning client info")
+                # Return client info as brand info for public view
+                # Don't set no_data: true here - let the dashboard endpoint check for Agency Analytics/GA4 data
+                logger.info(f"Client found but no brand mapping configured (scrunch_brand_id is null), returning client info - dashboard will check for Agency Analytics/GA4 data")
                 return {
                     "id": client.get("id"),
                     "name": client.get("company_name", "Unknown"),
                     "slug": slug,
                     "theme_color": client.get("theme_color"),
                     "logo_url": client.get("logo_url"),
-                    "no_data": True,
-                    "message": "No brand mapping configured"
+                    "client_id": client.get("id")  # Include client_id so dashboard can use it
                 }
         
         # Fall back to finding a brand by slug (for backward compatibility)
@@ -3185,23 +3341,48 @@ async def get_reporting_dashboard_by_slug(
                 client_id_for_dashboard = client.get("id")  # Pass client_id to dashboard
                 logger.info(f"Found client by url_slug '{slug}', using scrunch_brand_id: {brand_id}, client_id: {client_id_for_dashboard}")
             else:
-                # Return empty dashboard data instead of 404 for public view (graceful degradation)
-                logger.warning(f"Client found but no brand mapping configured (scrunch_brand_id is null), returning empty dashboard")
-                return {
-                    "brand_id": None,
-                    "brand_name": client.get("company_name", "Unknown"),
-                    "brand_slug": slug,
-                    "client_id": client.get("id"),
-                    "kpis": {},
-                    "chart_data": {},
-                    "diagnostics": {
-                        "ga4_configured": bool(client.get("ga4_property_id")),
-                        "scrunch_configured": False,
-                        "agency_analytics_configured": False,
-                        "message": "No brand mapping configured. Please configure scrunch_brand_id to view data."
-                    },
-                    "no_data": True
-                }
+                # Client found but no scrunch_brand_id - still check for Agency Analytics/GA4 data
+                client_id_for_dashboard = client.get("id")
+                logger.info(f"Client found but no brand mapping configured (scrunch_brand_id is null), checking for Agency Analytics/GA4 data for client_id={client_id_for_dashboard}")
+                # Call get_reporting_dashboard_by_client to check for Agency Analytics/GA4 data
+                # Use a dummy brand_id (0) since get_reporting_dashboard requires it, but client_id will be used
+                try:
+                    result = await get_reporting_dashboard_by_client(client_id_for_dashboard, start_date, end_date, db=db)
+                    result["brand_slug"] = slug
+                    # Only set no_data if truly no data exists (no KPIs and no chart data)
+                    kpis = result.get("kpis", {})
+                    chart_data = result.get("chart_data", {})
+                    has_kpis = kpis and len(kpis) > 0
+                    has_chart_data = chart_data and any(
+                        chart_data.get(key) and (
+                            isinstance(chart_data[key], list) and len(chart_data[key]) > 0 or
+                            isinstance(chart_data[key], dict) and len(chart_data[key]) > 0
+                        )
+                        for key in chart_data.keys()
+                    )
+                    if not has_kpis and not has_chart_data:
+                        result["no_data"] = True
+                        result["diagnostics"] = result.get("diagnostics", {})
+                        result["diagnostics"]["message"] = "No data available. Please configure scrunch_brand_id for Scrunch data or ensure Agency Analytics/GA4 is configured."
+                    return result
+                except Exception as e:
+                    logger.error(f"Error fetching dashboard data for client_id={client_id_for_dashboard}: {str(e)}")
+                    # Return empty dashboard data as fallback
+                    return {
+                        "brand_id": None,
+                        "brand_name": client.get("company_name", "Unknown"),
+                        "brand_slug": slug,
+                        "client_id": client_id_for_dashboard,
+                        "kpis": {},
+                        "chart_data": {},
+                        "diagnostics": {
+                            "ga4_configured": bool(client.get("ga4_property_id")),
+                            "scrunch_configured": False,
+                            "agency_analytics_configured": False,
+                            "message": "Error loading data. Please check configuration."
+                        },
+                        "no_data": True
+                    }
         else:
             # Fall back to finding a brand by slug (for backward compatibility)
             brand = supabase.get_brand_by_slug(slug)
@@ -4027,6 +4208,158 @@ async def get_brand_kpi_selections(brand_id: int, db: Session = Depends(get_db))
         logger.error(f"Error fetching KPI selections for brand {brand_id} (took {total_time:.2f}s): {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching KPI selections: {str(e)}")
 
+@router.get("/data/reporting-dashboard/client/{client_id}/kpi-selections")
+@handle_api_errors(context="fetching KPI selections")
+async def get_client_kpi_selections(client_id: int, db: Session = Depends(get_db)):
+    """Get saved KPI selections for a client (used to control public view visibility) - client-centric"""
+    import time
+    start_time = time.time()
+    
+    try:
+        supabase = SupabaseService(db=db)
+        
+        # Get KPI selections for this client using SQLAlchemy Core
+        query_start = time.time()
+        selection = supabase.get_client_kpi_selection(client_id)
+        query_time = time.time() - query_start
+        
+        if selection:
+            result = {
+                "client_id": client_id,
+                "brand_id": selection.get("brand_id"),
+                "selected_kpis": selection.get("selected_kpis", []),
+                "visible_sections": selection.get("visible_sections", ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"]),
+                "selected_charts": selection.get("selected_charts", []),
+                "updated_at": selection.get("updated_at"),
+                "version": selection.get("version", 1),
+                "last_modified_by": selection.get("last_modified_by")
+            }
+        else:
+            # Return default values if no selection exists (means all sections and KPIs are shown)
+            result = {
+                "client_id": client_id,
+                "brand_id": None,
+                "selected_kpis": [],
+                "visible_sections": ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"],
+                "selected_charts": [],
+                "updated_at": None,
+                "version": 1,
+                "last_modified_by": None
+            }
+        
+        total_time = time.time() - start_time
+        if total_time > 1.0:
+            logger.warning(f"Slow KPI selections endpoint: {total_time:.2f}s total (query: {query_time:.2f}s) for client {client_id}")
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        total_time = time.time() - start_time
+        logger.error(f"Error fetching KPI selections for client {client_id} (took {total_time:.2f}s): {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching KPI selections: {str(e)}")
+
+@router.put("/data/reporting-dashboard/client/{client_id}/kpi-selections")
+@handle_api_errors(context="saving KPI selections")
+async def save_client_kpi_selections(
+    client_id: int,
+    request: KPISelectionRequest,
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """Save KPI selections for a client (used by managers/admins to control public view visibility) - client-centric"""
+    from app.services.websocket_manager import websocket_manager
+    from datetime import datetime
+    
+    try:
+        supabase = SupabaseService(db=db)
+        
+        # Check if client exists
+        client = supabase.get_client_by_id(client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Get current KPI selection record to check version
+        existing = supabase.get_client_kpi_selection(client_id)
+        
+        # Version conflict check (only if version is provided and record exists)
+        if request.version is not None and existing:
+            current_version = existing.get("version", 1)
+            if request.version != current_version:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "conflict",
+                        "message": "Resource was modified by another user. Please refresh and try again.",
+                        "current_version": current_version,
+                        "current_data": {
+                            "selected_kpis": existing.get("selected_kpis", []),
+                            "visible_sections": existing.get("visible_sections", []),
+                            "last_modified_by": existing.get("last_modified_by")
+                        }
+                    }
+                )
+        
+        # Prepare visible_sections
+        visible_sections = request.visible_sections
+        if visible_sections is None:
+            # If not provided, keep existing sections or use default
+            if existing and existing.get("visible_sections"):
+                visible_sections = existing["visible_sections"]
+            else:
+                visible_sections = ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"]
+        
+        # Prepare selected_charts
+        selected_charts = request.selected_charts
+        if selected_charts is None:
+            # If not provided, keep existing charts or use empty array
+            if existing and existing.get("selected_charts") is not None:
+                selected_charts = existing["selected_charts"]
+            else:
+                selected_charts = []
+        
+        # Upsert KPI selections using SQLAlchemy (client-centric)
+        result = supabase.upsert_client_kpi_selection(
+            client_id=client_id,
+            selected_kpis=request.selected_kpis,
+            visible_sections=visible_sections,
+            selected_charts=selected_charts,
+            version=request.version,
+            last_modified_by=current_user.get("email")
+        )
+        
+        updated_version = result.get("version", 1)
+        
+        logger.info(f"Saved KPI selections for client {client_id}: {len(request.selected_kpis)} KPIs, {len(visible_sections)} sections, {len(selected_charts)} charts, version={updated_version}")
+        
+        # Broadcast WebSocket notification
+        try:
+            await websocket_manager.notify_resource_updated(
+                resource_type="kpi_selection",
+                resource_id=client_id,
+                updated_by=current_user.get("email"),
+                updated_at=datetime.utcnow().isoformat() + "Z",
+                version=updated_version,
+                exclude_user_id=current_user.get("id")
+            )
+        except Exception as ws_error:
+            logger.warning(f"Failed to send WebSocket notification: {str(ws_error)}")
+        
+        return {
+            "client_id": client_id,
+            "brand_id": result.get("brand_id"),
+            "selected_kpis": request.selected_kpis,
+            "visible_sections": visible_sections,
+            "selected_charts": selected_charts,
+            "version": updated_version,
+            "message": "KPI, section, and chart selections saved successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving KPI selections for client {client_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error saving KPI selections: {str(e)}")
+
 @router.put("/data/reporting-dashboard/{brand_id}/kpi-selections")
 @handle_api_errors(context="saving KPI selections")
 async def save_brand_kpi_selections(
@@ -4035,7 +4368,7 @@ async def save_brand_kpi_selections(
     current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
-    """Save KPI selections for a brand (used by managers/admins to control public view visibility)"""
+    """Save KPI selections for a brand (used by managers/admins to control public view visibility) - backward compatibility"""
     from app.services.websocket_manager import websocket_manager
     from datetime import datetime
     

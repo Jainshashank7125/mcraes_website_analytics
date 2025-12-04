@@ -19,6 +19,9 @@ export default function KPICard({ kpi, kpiKey, index = 0, theme, getSourceLabel 
         <Card
           sx={{
             height: '100%',
+            minHeight: '160px',
+            display: 'flex',
+            flexDirection: 'column',
             background: '#FFFFFF',
             border: `1px solid ${theme.palette.divider}`,
             borderRadius: 2,
@@ -30,9 +33,18 @@ export default function KPICard({ kpi, kpiKey, index = 0, theme, getSourceLabel 
             }
           }}
         >
-          <CardContent sx={{ p: { xs: 2.5, sm: 3 }, overflow: 'visible' }}>
-            {/* Source Label */}
-            <Box display="flex" justifyContent="flex-end" mb={1}>
+          <CardContent 
+            sx={{ 
+              p: { xs: 2.5, sm: 3 }, 
+              overflow: 'visible',
+              display: 'flex',
+              flexDirection: 'column',
+              flexGrow: 1,
+              justifyContent: 'space-between'
+            }}
+          >
+            {/* Top Section: Source Label */}
+            <Box display="flex" justifyContent="flex-end" mb={1} sx={{ flexShrink: 0 }}>
               <Chip
                 label={sourceLabel}
                 size="small"
@@ -48,40 +60,45 @@ export default function KPICard({ kpi, kpiKey, index = 0, theme, getSourceLabel 
               />
             </Box>
             
-            {/* KPI Label */}
-            <Typography 
-              variant="caption" 
-              color="text.secondary"
-              sx={{ 
-                fontSize: '0.75rem', 
-                fontWeight: 500,
-                display: 'block',
-                mb: 0.5
-              }}
-            >
-              {kpi.label}
-            </Typography>
+            {/* Middle Section: KPI Label and Value */}
+            <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+              {/* KPI Label */}
+              <Typography 
+                variant="caption" 
+                color="text.secondary"
+                sx={{ 
+                  fontSize: '0.75rem', 
+                  fontWeight: 500,
+                  display: 'block',
+                  mb: 0.5
+                }}
+              >
+                {kpi.label}
+              </Typography>
+              
+              {/* KPI Value */}
+              <Typography 
+                variant="h5" 
+                fontWeight={700}
+                sx={{ 
+                  fontSize: '1.5rem',
+                  letterSpacing: '-0.02em',
+                  mb: 1,
+                  color: 'text.primary',
+                }}
+              >
+                {formatValue(kpi)}
+              </Typography>
+            </Box>
             
-            {/* KPI Value */}
-            <Typography 
-              variant="h5" 
-              fontWeight={700}
-              sx={{ 
-                fontSize: '1.5rem',
-                letterSpacing: '-0.02em',
-                mb: 1,
-                color: 'text.primary',
-              }}
-            >
-              {formatValue(kpi)}
-            </Typography>
-            
-            {/* Change Indicator - Only show when positive or zero */}
+            {/* Bottom Section: Change Indicator - Only show when positive or zero */}
             {kpi.source !== 'Scrunch' && <Box
               sx={{
                 minHeight: '24px',
                 display: 'flex',
-                alignItems: 'center'
+                alignItems: 'center',
+                flexShrink: 0,
+                mt: 'auto'
               }}
             >
               {kpi.change !== undefined && kpi.change !== null && 
@@ -105,7 +122,13 @@ export default function KPICard({ kpi, kpiKey, index = 0, theme, getSourceLabel 
             </Box>}
             {/* Handle custom format KPIs with object change values - Only show when positive or zero */}
             {kpi.format === 'custom' && kpi.change && typeof kpi.change === 'object' && (
-              <Box display="flex" flexDirection="column" gap={0.5} mt={0.5}>
+              <Box 
+                display="flex" 
+                flexDirection="column" 
+                gap={0.5} 
+                mt="auto"
+                sx={{ flexShrink: 0, minHeight: '24px' }}
+              >
                 {kpiKey === 'competitive_benchmarking' && (
                   <>
                     {kpi.change.brand_visibility !== undefined && kpi.change.brand_visibility !== null && kpi.change.brand_visibility >= 0 && (

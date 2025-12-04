@@ -649,7 +649,8 @@ class BrandKPISelection(Base):
     __tablename__ = "brand_kpi_selections"
     
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    brand_id = Column(Integer, ForeignKey("brands.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=True, unique=True, index=True)  # Primary identifier (client-centric)
+    brand_id = Column(Integer, ForeignKey("brands.id", ondelete="CASCADE"), nullable=True, index=True)  # For backward compatibility
     selected_kpis = Column(ARRAY(String), nullable=False, default=[])
     visible_sections = Column(ARRAY(String), nullable=False, default=['ga4', 'scrunch_ai', 'brand_analytics', 'advanced_analytics', 'performance_metrics'])
     selected_charts = Column(ARRAY(String), nullable=False, default=[])
