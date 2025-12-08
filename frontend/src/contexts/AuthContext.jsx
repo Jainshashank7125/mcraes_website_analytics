@@ -65,6 +65,7 @@ export const AuthProvider = ({ children }) => {
                 setUser(null)
                 setIsAuthenticated(false)
                 stopTokenRefresh()
+                // Let ProtectedRoute handle redirect
               }
             } else {
               // No refresh token, clear storage
@@ -74,6 +75,7 @@ export const AuthProvider = ({ children }) => {
               localStorage.removeItem('token_expires_at')
               setUser(null)
               setIsAuthenticated(false)
+              // Let ProtectedRoute handle redirect
             }
           } else {
             // Token is still valid, verify with API
@@ -91,6 +93,7 @@ export const AuthProvider = ({ children }) => {
               setUser(null)
               setIsAuthenticated(false)
               stopTokenRefresh()
+              // Let ProtectedRoute handle redirect
             }
           }
         } catch (error) {
@@ -102,12 +105,15 @@ export const AuthProvider = ({ children }) => {
           setUser(null)
           setIsAuthenticated(false)
           stopTokenRefresh()
+          // Let ProtectedRoute handle redirect
         }
       } else {
+        // No tokens at all - user is not logged in
         setUser(null)
         setIsAuthenticated(false)
         stopTokenRefresh()
       }
+      // Always set loading to false at the end
       setLoading(false)
     }
 

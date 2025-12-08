@@ -19,6 +19,7 @@ import {
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
 } from '@mui/icons-material'
+import { Tooltip } from '@mui/material'
 import { motion } from 'framer-motion'
 import { syncAPI } from '../services/api'
 import { useToast } from '../contexts/ToastContext'
@@ -79,16 +80,16 @@ function SyncPanel() {
     return () => clearInterval(interval)
   }, [syncing, showSuccess, showError, refreshJobs])
 
-  const handleSyncScrunch = async () => {
+  const handleSyncScrunch = async (syncMode = 'complete') => {
     try {
       setSyncing(null) // Reset
       
-      const result = await syncAPI.syncAll()
+      const result = await syncAPI.syncAll(syncMode)
       
       if (result.job_id) {
         setSyncing(result.job_id)
         addJob(result.job_id, 'sync_all')
-        showSuccess('Sync started. You can continue using the app while it runs in the background.')
+        showSuccess(`${syncMode === 'new' ? 'New' : 'Complete'} sync started. You can continue using the app while it runs in the background.`)
       } else {
         showError('Failed to start sync job')
       }
@@ -97,16 +98,16 @@ function SyncPanel() {
     }
   }
 
-  const handleSyncGA4 = async () => {
+  const handleSyncGA4 = async (syncMode = 'complete') => {
     try {
       setSyncing(null) // Reset
       
-      const result = await syncAPI.syncGA4()
+      const result = await syncAPI.syncGA4(syncMode)
       
       if (result.job_id) {
         setSyncing(result.job_id)
         addJob(result.job_id, 'sync_ga4')
-        showSuccess('GA4 sync started. You can continue using the app while it runs in the background.')
+        showSuccess(`GA4 ${syncMode === 'new' ? 'New' : 'Complete'} sync started. You can continue using the app while it runs in the background.`)
       } else {
         showError('Failed to start GA4 sync job')
       }
@@ -115,16 +116,16 @@ function SyncPanel() {
     }
   }
 
-  const handleSyncAgencyAnalytics = async () => {
+  const handleSyncAgencyAnalytics = async (syncMode = 'complete') => {
     try {
       setSyncing(null) // Reset
       
-      const result = await syncAPI.syncAgencyAnalytics()
+      const result = await syncAPI.syncAgencyAnalytics(syncMode)
       
       if (result.job_id) {
         setSyncing(result.job_id)
         addJob(result.job_id, 'sync_agency_analytics')
-        showSuccess('Agency Analytics sync started. You can continue using the app while it runs in the background.')
+        showSuccess(`Agency Analytics ${syncMode === 'new' ? 'New' : 'Complete'} sync started. You can continue using the app while it runs in the background.`)
       } else {
         showError('Failed to start Agency Analytics sync job')
       }
@@ -242,46 +243,81 @@ function SyncPanel() {
                 <Typography 
                   variant="body2" 
                   color="text.secondary" 
-                  mb={3}
+                  mb={2}
                   sx={{ 
                     fontSize: { xs: '0.8125rem', sm: '0.875rem' },
                     lineHeight: 1.6,
                     flex: 1,
                     display: 'flex',
                     alignItems: 'center',
-                    minHeight: { xs: '64px', sm: '72px' },
+                    minHeight: { xs: '48px', sm: '56px' },
                   }}
                 >
                   Sync all data from Scrunch AI API including brands, prompts, and responses to Supabase database.
                 </Typography>
-                <Button
-                  variant="contained"
-                  fullWidth
-                  size="small"
-                  onClick={handleSyncScrunch}
-                  disabled={isLoading && currentJob?.sync_type === 'sync_all'}
-                  startIcon={
-                    isLoading && currentJob?.sync_type === 'sync_all' ? (
-                      <CircularProgress size={16} thickness={4} sx={{ color: 'white' }} />
-                    ) : (
-                      <SyncIcon sx={{ fontSize: 16 }} />
-                    )
-                  }
-                  sx={{
-                    borderRadius: 1.5,
-                    px: 2,
-                    py: 0.75,
-                    fontSize: { xs: '0.8125rem', sm: '0.875rem' },
-                    fontWeight: 600,
-                    boxShadow: 'none',
-                    mt: 'auto',
-                    '&:hover': {
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
-                    },
-                  }}
-                >
-                  {isLoading && currentJob?.sync_type === 'sync_all' ? 'Syncing...' : 'Sync Scrunch Data'}
-                </Button>
+                <Box sx={{ display: 'flex', gap: 1, mt: 'auto' }}>
+                  <Tooltip 
+                    title="New Sync: Only syncs brands that don't exist in the database. Use for regular operations." 
+                    arrow
+                    placement="top"
+                  >
+                    <Button
+                      variant="outlined"
+                      fullWidth
+                      size="small"
+                      onClick={() => handleSyncScrunch('new')}
+                      disabled={isLoading && currentJob?.sync_type === 'sync_all'}
+                      sx={{
+                        borderRadius: 1.5,
+                        px: 1.5,
+                        py: 0.75,
+                        fontSize: { xs: '0.75rem', sm: '0.8125rem' },
+                        fontWeight: 600,
+                        borderColor: theme.palette.primary.main,
+                        color: theme.palette.primary.main,
+                        '&:hover': {
+                          borderColor: theme.palette.primary.dark,
+                          bgcolor: alpha(theme.palette.primary.main, 0.05),
+                        },
+                      }}
+                    >
+                      New Sync
+                    </Button>
+                  </Tooltip>
+                  <Tooltip 
+                    title="Complete Sync: Syncs all brands, prompts, and responses. Use for initial onboarding or full refresh." 
+                    arrow
+                    placement="top"
+                  >
+                    <Button
+                      variant="contained"
+                      fullWidth
+                      size="small"
+                      onClick={() => handleSyncScrunch('complete')}
+                      disabled={isLoading && currentJob?.sync_type === 'sync_all'}
+                      startIcon={
+                        isLoading && currentJob?.sync_type === 'sync_all' ? (
+                          <CircularProgress size={14} thickness={4} sx={{ color: 'white' }} />
+                        ) : (
+                          <SyncIcon sx={{ fontSize: 14 }} />
+                        )
+                      }
+                      sx={{
+                        borderRadius: 1.5,
+                        px: 1.5,
+                        py: 0.75,
+                        fontSize: { xs: '0.75rem', sm: '0.8125rem' },
+                        fontWeight: 600,
+                        boxShadow: 'none',
+                        '&:hover': {
+                          boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+                        },
+                      }}
+                    >
+                      {isLoading && currentJob?.sync_type === 'sync_all' ? 'Syncing...' : 'Complete'}
+                    </Button>
+                  </Tooltip>
+                </Box>
               </CardContent>
             </Card>
           </motion.div>
@@ -362,48 +398,83 @@ function SyncPanel() {
                 <Typography 
                   variant="body2" 
                   color="text.secondary" 
-                  mb={3}
+                  mb={2}
                   sx={{ 
                     fontSize: { xs: '0.8125rem', sm: '0.875rem' },
                     lineHeight: 1.6,
                     flex: 1,
                     display: 'flex',
                     alignItems: 'center',
-                    minHeight: { xs: '64px', sm: '72px' },
+                    minHeight: { xs: '48px', sm: '56px' },
                   }}
                 >
                   Sync Google Analytics 4 data for all clients with GA4 property IDs configured. Includes traffic overview, top pages, sources, geographic, devices, and conversions.
                 </Typography>
-                <Button
-                  variant="contained"
-                  fullWidth
-                  size="small"
-                  onClick={handleSyncGA4}
-                  disabled={isLoading && currentJob?.sync_type === 'sync_ga4'}
-                  startIcon={
-                    isLoading && currentJob?.sync_type === 'sync_ga4' ? (
-                      <CircularProgress size={16} thickness={4} sx={{ color: 'white' }} />
-                    ) : (
-                      <AnalyticsIcon sx={{ fontSize: 16 }} />
-                    )
-                  }
-                  sx={{
-                    borderRadius: 1.5,
-                    px: 2,
-                    py: 0.75,
-                    fontSize: { xs: '0.8125rem', sm: '0.875rem' },
-                    fontWeight: 600,
-                    bgcolor: theme.palette.success.main,
-                    boxShadow: 'none',
-                    mt: 'auto',
-                    '&:hover': {
-                      bgcolor: theme.palette.success.dark,
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
-                    },
-                  }}
-                >
-                  {isLoading && currentJob?.sync_type === 'sync_ga4' ? 'Syncing...' : 'Sync GA4 Data'}
-                </Button>
+                <Box sx={{ display: 'flex', gap: 1, mt: 'auto' }}>
+                  <Tooltip 
+                    title="New Sync: Only syncs GA4 data for clients without existing GA4 data. Use for regular operations." 
+                    arrow
+                    placement="top"
+                  >
+                    <Button
+                      variant="outlined"
+                      fullWidth
+                      size="small"
+                      onClick={() => handleSyncGA4('new')}
+                      disabled={isLoading && currentJob?.sync_type === 'sync_ga4'}
+                      sx={{
+                        borderRadius: 1.5,
+                        px: 1.5,
+                        py: 0.75,
+                        fontSize: { xs: '0.75rem', sm: '0.8125rem' },
+                        fontWeight: 600,
+                        borderColor: theme.palette.success.main,
+                        color: theme.palette.success.main,
+                        '&:hover': {
+                          borderColor: theme.palette.success.dark,
+                          bgcolor: alpha(theme.palette.success.main, 0.05),
+                        },
+                      }}
+                    >
+                      New Sync
+                    </Button>
+                  </Tooltip>
+                  <Tooltip 
+                    title="Complete Sync: Syncs GA4 data for all clients with GA4 property IDs. Use for initial onboarding or full refresh." 
+                    arrow
+                    placement="top"
+                  >
+                    <Button
+                      variant="contained"
+                      fullWidth
+                      size="small"
+                      onClick={() => handleSyncGA4('complete')}
+                      disabled={isLoading && currentJob?.sync_type === 'sync_ga4'}
+                      startIcon={
+                        isLoading && currentJob?.sync_type === 'sync_ga4' ? (
+                          <CircularProgress size={14} thickness={4} sx={{ color: 'white' }} />
+                        ) : (
+                          <AnalyticsIcon sx={{ fontSize: 14 }} />
+                        )
+                      }
+                      sx={{
+                        borderRadius: 1.5,
+                        px: 1.5,
+                        py: 0.75,
+                        fontSize: { xs: '0.75rem', sm: '0.8125rem' },
+                        fontWeight: 600,
+                        bgcolor: theme.palette.success.main,
+                        boxShadow: 'none',
+                        '&:hover': {
+                          bgcolor: theme.palette.success.dark,
+                          boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+                        },
+                      }}
+                    >
+                      {isLoading && currentJob?.sync_type === 'sync_ga4' ? 'Syncing...' : 'Complete'}
+                    </Button>
+                  </Tooltip>
+                </Box>
               </CardContent>
             </Card>
           </motion.div>
@@ -484,48 +555,83 @@ function SyncPanel() {
                 <Typography 
                   variant="body2" 
                   color="text.secondary" 
-                  mb={3}
+                  mb={2}
                   sx={{ 
                     fontSize: { xs: '0.8125rem', sm: '0.875rem' },
                     lineHeight: 1.6,
                     flex: 1,
                     display: 'flex',
                     alignItems: 'center',
-                    minHeight: { xs: '64px', sm: '72px' },
+                    minHeight: { xs: '48px', sm: '56px' },
                   }}
                 >
                   Sync Agency Analytics campaigns and quarterly ranking data. Includes Google rankings, Bing rankings, search volume, and competition metrics.
                 </Typography>
-                <Button
-                  variant="contained"
-                  fullWidth
-                  size="small"
-                  onClick={handleSyncAgencyAnalytics}
-                  disabled={isLoading && currentJob?.sync_type === 'sync_agency_analytics'}
-                  startIcon={
-                    isLoading && currentJob?.sync_type === 'sync_agency_analytics' ? (
-                      <CircularProgress size={16} thickness={4} sx={{ color: 'white' }} />
-                    ) : (
-                      <AnalyticsIcon sx={{ fontSize: 16 }} />
-                    )
-                  }
-                  sx={{
-                    borderRadius: 1.5,
-                    px: 2,
-                    py: 0.75,
-                    fontSize: { xs: '0.8125rem', sm: '0.875rem' },
-                    fontWeight: 600,
-                    bgcolor: theme.palette.warning.main,
-                    boxShadow: 'none',
-                    mt: 'auto',
-                    '&:hover': {
-                      bgcolor: theme.palette.warning.dark,
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
-                    },
-                  }}
-                >
-                  {isLoading && currentJob?.sync_type === 'sync_agency_analytics' ? 'Syncing...' : 'Sync Agency Analytics'}
-                </Button>
+                <Box sx={{ display: 'flex', gap: 1, mt: 'auto' }}>
+                  <Tooltip 
+                    title="New Sync: Only syncs campaigns that don't exist in the database. Use for regular operations." 
+                    arrow
+                    placement="top"
+                  >
+                    <Button
+                      variant="outlined"
+                      fullWidth
+                      size="small"
+                      onClick={() => handleSyncAgencyAnalytics('new')}
+                      disabled={isLoading && currentJob?.sync_type === 'sync_agency_analytics'}
+                      sx={{
+                        borderRadius: 1.5,
+                        px: 1.5,
+                        py: 0.75,
+                        fontSize: { xs: '0.75rem', sm: '0.8125rem' },
+                        fontWeight: 600,
+                        borderColor: theme.palette.warning.main,
+                        color: theme.palette.warning.main,
+                        '&:hover': {
+                          borderColor: theme.palette.warning.dark,
+                          bgcolor: alpha(theme.palette.warning.main, 0.05),
+                        },
+                      }}
+                    >
+                      New Sync
+                    </Button>
+                  </Tooltip>
+                  <Tooltip 
+                    title="Complete Sync: Syncs all campaigns, rankings, and keywords. May take >2 hours. Use for initial onboarding or full refresh." 
+                    arrow
+                    placement="top"
+                  >
+                    <Button
+                      variant="contained"
+                      fullWidth
+                      size="small"
+                      onClick={() => handleSyncAgencyAnalytics('complete')}
+                      disabled={isLoading && currentJob?.sync_type === 'sync_agency_analytics'}
+                      startIcon={
+                        isLoading && currentJob?.sync_type === 'sync_agency_analytics' ? (
+                          <CircularProgress size={14} thickness={4} sx={{ color: 'white' }} />
+                        ) : (
+                          <AnalyticsIcon sx={{ fontSize: 14 }} />
+                        )
+                      }
+                      sx={{
+                        borderRadius: 1.5,
+                        px: 1.5,
+                        py: 0.75,
+                        fontSize: { xs: '0.75rem', sm: '0.8125rem' },
+                        fontWeight: 600,
+                        bgcolor: theme.palette.warning.main,
+                        boxShadow: 'none',
+                        '&:hover': {
+                          bgcolor: theme.palette.warning.dark,
+                          boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+                        },
+                      }}
+                    >
+                      {isLoading && currentJob?.sync_type === 'sync_agency_analytics' ? 'Syncing...' : 'Complete'}
+                    </Button>
+                  </Tooltip>
+                </Box>
               </CardContent>
             </Card>
           </motion.div>

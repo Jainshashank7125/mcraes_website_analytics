@@ -20,6 +20,7 @@ async def sync_all_background(
     job_id: str,
     user_id: str,
     user_email: str,
+    sync_mode: str = "complete",
     request = None
 ):
     """Background task to sync all Scrunch AI data"""
@@ -46,14 +47,22 @@ async def sync_all_background(
             job_id, "running", progress=10,
             current_step="Syncing brands...", completed_steps=0, total_steps=3
         )
-        logger.info(f"[Job {job_id}] Step 1: Syncing brands...")
+        logger.info(f"[Job {job_id}] Step 1: Syncing brands... (mode: {sync_mode})")
         brands = await client.get_brands()
         
         if sync_job_service.is_cancelled(job_id):
             logger.info(f"[Job {job_id}] Job cancelled after fetching brands")
             return
         
-        brands_count = supabase.upsert_brands(brands)
+        # For "new" mode, filter to only missing brands
+        if sync_mode == "new":
+            from app.db.models import Brand
+            existing_brand_ids = set(db.query(Brand.id).all())
+            existing_brand_ids = {row[0] for row in existing_brand_ids}
+            brands = [b for b in brands if b.get("id") not in existing_brand_ids]
+            logger.info(f"[Job {job_id}] New mode: Filtered to {len(brands)} new brands (out of {len(brands) + len(existing_brand_ids)} total)")
+        
+        brands_count = supabase.upsert_brands(brands) if brands else 0
         logger.info(f"[Job {job_id}] Synced {brands_count} brands")
         
         # Step 2: Sync prompts
@@ -61,11 +70,19 @@ async def sync_all_background(
             job_id, "running", progress=40,
             current_step="Syncing prompts...", completed_steps=1, total_steps=3
         )
-        logger.info(f"[Job {job_id}] Step 2: Syncing prompts...")
+        logger.info(f"[Job {job_id}] Step 2: Syncing prompts... (mode: {sync_mode})")
         total_prompts = 0
         prompts_by_brand = []
         
-        for idx, brand in enumerate(brands):
+        # For "new" mode, get all brands from DB to sync prompts/responses for all
+        brands_to_process = brands
+        if sync_mode == "new":
+            from app.db.models import Brand
+            all_brands = db.query(Brand).all()
+            brands_to_process = [{"id": b.id, "name": b.name} for b in all_brands]
+            logger.info(f"[Job {job_id}] New mode: Will sync prompts/responses for all {len(brands_to_process)} existing brands")
+        
+        for idx, brand in enumerate(brands_to_process):
             # Check for cancellation before each brand
             if sync_job_service.is_cancelled(job_id):
                 logger.info(f"[Job {job_id}] Job cancelled during prompts sync")
@@ -88,10 +105,10 @@ async def sync_all_background(
                 prompts_by_brand.append({"brand_id": brand_id_val, "brand_name": brand.get("name"), "count": count})
                 
                 # Update progress
-                progress = 40 + int((idx + 1) / len(brands) * 30)
+                progress = 40 + int((idx + 1) / len(brands_to_process) * 30) if brands_to_process else 40
                 await sync_job_service.update_job_status(
                     job_id, "running", progress=progress,
-                    current_step=f"Syncing prompts... ({idx + 1}/{len(brands)} brands)"
+                    current_step=f"Syncing prompts... ({idx + 1}/{len(brands_to_process)} brands)"
                 )
             except Exception as e:
                 logger.error(f"[Job {job_id}] Error syncing prompts for brand {brand_id_val}: {str(e)}")
@@ -102,11 +119,11 @@ async def sync_all_background(
             job_id, "running", progress=70,
             current_step="Syncing responses...", completed_steps=2, total_steps=3
         )
-        logger.info(f"[Job {job_id}] Step 3: Syncing responses...")
+        logger.info(f"[Job {job_id}] Step 3: Syncing responses... (mode: {sync_mode})")
         total_responses = 0
         responses_by_brand = []
         
-        for idx, brand in enumerate(brands):
+        for idx, brand in enumerate(brands_to_process):
             # Check for cancellation before each brand
             if sync_job_service.is_cancelled(job_id):
                 logger.info(f"[Job {job_id}] Job cancelled during responses sync")
@@ -129,10 +146,10 @@ async def sync_all_background(
                 responses_by_brand.append({"brand_id": brand_id_val, "brand_name": brand.get("name"), "count": count})
                 
                 # Update progress
-                progress = 70 + int((idx + 1) / len(brands) * 25)
+                progress = 70 + int((idx + 1) / len(brands_to_process) * 25) if brands_to_process else 70
                 await sync_job_service.update_job_status(
                     job_id, "running", progress=progress,
-                    current_step=f"Syncing responses... ({idx + 1}/{len(brands)} brands)"
+                    current_step=f"Syncing responses... ({idx + 1}/{len(brands_to_process)} brands)"
                 )
             except Exception as e:
                 logger.error(f"[Job {job_id}] Error syncing responses for brand {brand_id_val}: {str(e)}")
@@ -206,6 +223,7 @@ async def sync_ga4_background(
     job_id: str,
     user_id: str,
     user_email: str,
+    sync_mode: str = "complete",
     client_id: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -232,8 +250,8 @@ async def sync_ga4_background(
         )
         
         # Get clients with GA4 configured from local PostgreSQL database
-        from app.db.models import Client
-        from sqlalchemy import and_
+        from app.db.models import Client, GA4TrafficOverview
+        from sqlalchemy import and_, distinct
         
         if client_id:
             # Get specific client
@@ -241,12 +259,26 @@ async def sync_ga4_background(
             clients = [client_obj] if client_obj else []
         else:
             # Get all clients with GA4 property ID configured (not null and not empty)
-            clients = db.query(Client).filter(
+            all_clients = db.query(Client).filter(
                 and_(
                     Client.ga4_property_id.isnot(None),
                     Client.ga4_property_id != ''
                 )
             ).all()
+            
+            # For "new" mode, filter to only clients without existing GA4 data
+            if sync_mode == "new":
+                # Get client IDs that already have GA4 data
+                existing_client_ids = set(
+                    db.query(distinct(GA4TrafficOverview.client_id))
+                    .filter(GA4TrafficOverview.client_id.isnot(None))
+                    .all()
+                )
+                existing_client_ids = {row[0] for row in existing_client_ids}
+                clients = [c for c in all_clients if c.id not in existing_client_ids]
+                logger.info(f"[Job {job_id}] New mode: Filtered to {len(clients)} clients without GA4 data (out of {len(all_clients)} total)")
+            else:
+                clients = all_clients
         
         # Convert ORM objects to dicts for compatibility
         clients = [
@@ -823,6 +855,7 @@ async def sync_agency_analytics_background(
     job_id: str,
     user_id: str,
     user_email: str,
+    sync_mode: str = "complete",
     campaign_id: Optional[int] = None,
     auto_match_brands: bool = True,
     request = None
@@ -859,6 +892,18 @@ async def sync_agency_analytics_background(
         
         # Filter out None campaigns
         campaigns = [c for c in campaigns if c is not None]
+        
+        # For "new" mode, filter to only missing campaigns
+        if sync_mode == "new" and not campaign_id:
+            from app.db.models import AgencyAnalyticsCampaign
+            existing_campaign_ids = set(
+                db.query(AgencyAnalyticsCampaign.id).all()
+            )
+            existing_campaign_ids = {row[0] for row in existing_campaign_ids}
+            original_count = len(campaigns)
+            campaigns = [c for c in campaigns if c.get("id") not in existing_campaign_ids]
+            logger.info(f"[Job {job_id}] New mode: Filtered to {len(campaigns)} new campaigns (out of {original_count} total)")
+        
         total_campaigns = len(campaigns)
         
         if total_campaigns == 0:
@@ -898,7 +943,7 @@ async def sync_agency_analytics_background(
         active_campaigns = [c for c in campaigns if c.get("status", "").lower() == "active"]
         active_count = len(active_campaigns)
         
-        logger.info(f"Total campaigns: {total_campaigns}, Active campaigns: {active_count}")
+        logger.info(f"Total campaigns: {total_campaigns}, Active campaigns: {active_count} (mode: {sync_mode})")
         
         # Batch create/update clients from active campaigns
         if active_campaigns:
@@ -934,7 +979,7 @@ async def sync_agency_analytics_background(
         total_steps = active_count * 3  # Each active campaign: rankings, keywords, keyword_rankings
         current_step_num = 0
         
-        # Step 3: Fetch data only for active campaigns
+        # Step 3: Fetch data only for active campaigns (in "new" mode, only sync data for new campaigns)
         for idx, campaign in enumerate(active_campaigns):
             # Check for cancellation before each campaign
             if sync_job_service.is_cancelled(job_id):

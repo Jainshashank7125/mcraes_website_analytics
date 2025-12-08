@@ -5067,7 +5067,8 @@ async def get_clients(
             
             # Get keyword count from campaigns
             keywords_count = 0
-            campaign_ids = [c.get("campaign_id") for c in campaigns if c.get("campaign_id")]
+            # get_client_campaigns returns campaigns with "id" key, not "campaign_id"
+            campaign_ids = [c.get("id") for c in campaigns if c.get("id")]
             
             if campaign_ids:
                 keywords_table = supabase._get_table("agency_analytics_keywords")
@@ -5186,6 +5187,78 @@ async def get_client_by_slug(
         raise
     except Exception as e:
         logger.error(f"Error fetching client by slug: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/data/clients/{client_id}/regenerate-shareable-link")
+@handle_api_errors(context="regenerating shareable link")
+async def regenerate_shareable_link(
+    client_id: int,
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """Regenerate shareable link for a client (creates new slug and resets 48-hour window)"""
+    from app.services.websocket_manager import websocket_manager
+    from datetime import datetime
+    from sqlalchemy import select, update
+    import uuid
+    
+    try:
+        supabase = SupabaseService(db=db)
+        
+        # Get current client
+        table = supabase._get_table("clients")
+        query = select(table.c.id, table.c.company_name).where(table.c.id == client_id).limit(1)
+        result = db.execute(query)
+        current_client_row = result.first()
+        
+        if not current_client_row:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Generate new UUID-based slug (non-guessable)
+        new_slug = supabase.generate_client_slug()
+        
+        # Update client's url_slug (updated_at will be automatically updated by database trigger)
+        update_stmt = update(table).where(table.c.id == client_id).values(
+            url_slug=new_slug,
+            updated_by=current_user.get("email"),
+            last_modified_by=current_user.get("email")
+        )
+        db.execute(update_stmt)
+        db.commit()
+        
+        # Get updated client to return new slug
+        updated_query = select(table.c.url_slug, table.c.updated_at).where(table.c.id == client_id).limit(1)
+        updated_result = db.execute(updated_query)
+        updated_row = updated_result.first()
+        
+        if not updated_row:
+            raise HTTPException(status_code=500, detail="Failed to retrieve updated client")
+        
+        new_url = f"/reporting/client/{new_slug}"
+        
+        # Broadcast WebSocket notification
+        try:
+            await websocket_manager.notify_resource_updated(
+                resource_type="client",
+                resource_id=client_id,
+                updated_by=current_user.get("email"),
+                updated_at=datetime.utcnow().isoformat() + "Z",
+                exclude_user_id=current_user.get("id")
+            )
+        except Exception as ws_error:
+            logger.warning(f"Failed to send WebSocket notification: {str(ws_error)}")
+        
+        return {
+            "status": "success",
+            "message": "Shareable link regenerated successfully",
+            "slug": new_slug,
+            "shareable_url": new_url,
+            "expires_at": updated_row.updated_at  # Link expires 48 hours from updated_at
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error regenerating shareable link: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 class ClientMappingUpdateRequest(BaseModel):
