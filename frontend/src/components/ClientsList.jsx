@@ -523,9 +523,10 @@ function ClientsList() {
                         },
                       }}
                       onClick={() => {
-                        if (client.url_slug) {
-                          navigate(`/reporting/client/${client.url_slug}`)
-                        }
+                        // Navigate to reporting dashboard with client ID in state
+                        navigate('/reporting', { 
+                          state: { clientId: client.id } 
+                        })
                       }}
                     >
                       <TableCell>
@@ -747,6 +748,9 @@ function ClientsList() {
             sx={{
               borderTop: `1px solid ${theme.palette.divider}`,
               opacity: isFetching ? 0.6 : 1,
+              position: 'relative',
+              zIndex: 1000, // Ensure pagination is above support widgets and overlays
+              bgcolor: 'background.paper',
             }}
           />
         </TableContainer>

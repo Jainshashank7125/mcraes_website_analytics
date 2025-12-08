@@ -23,6 +23,14 @@ import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
 import { useSyncStatus } from '../hooks/useSync'
+import { useSyncStatus as useSyncStatusContext } from '../contexts/SyncStatusContext'
+import {
+  Sync as SyncIcon,
+  CheckCircle as CheckCircleIcon,
+  Error as ErrorIcon,
+  HourglassEmpty as HourglassEmptyIcon,
+} from '@mui/icons-material'
+import { Chip, LinearProgress } from '@mui/material'
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -89,6 +97,9 @@ function Dashboard() {
   const { data: status, isLoading: loading } = useSyncStatus({
     enabled: isAuthenticated,
   })
+  
+  // Get active sync jobs from context
+  const { activeJobs } = useSyncStatusContext()
 
   useEffect(() => {
     // Redirect to login if not authenticated
@@ -242,6 +253,73 @@ function Dashboard() {
             )
           })}
         </Grid>
+
+        {/* Sync Status Card */}
+        {activeJobs && activeJobs.length > 0 && (
+          <motion.div variants={cardVariants} style={{ marginBottom: theme.spacing(2.5) }}>
+            <Card
+              sx={{
+                borderRadius: 2,
+                border: `1px solid ${theme.palette.divider}`,
+                boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                bgcolor: alpha(theme.palette.info.main, 0.05),
+              }}
+            >
+              <CardContent sx={{ p: 2.5 }}>
+                <Box display="flex" alignItems="center" gap={1.5} mb={2}>
+                  <SyncIcon sx={{ color: theme.palette.info.main, fontSize: 24 }} />
+                  <Typography variant="h6" fontWeight={600} sx={{ fontSize: '1rem' }}>
+                    Current Sync Status
+                  </Typography>
+                </Box>
+                {activeJobs.map((job) => {
+                  const syncTypeLabels = {
+                    'sync_all': 'Scrunch Data',
+                    'sync_ga4': 'GA4 Data',
+                    'sync_agency_analytics': 'Agency Analytics',
+                  }
+                  const syncLabel = syncTypeLabels[job.sync_type] || job.sync_type
+                  
+                  return (
+                    <Box key={job.job_id} sx={{ mb: 2, '&:last-child': { mb: 0 } }}>
+                      <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
+                        <Typography variant="body2" fontWeight={600} sx={{ fontSize: '0.875rem' }}>
+                          {syncLabel} Sync
+                        </Typography>
+                        <Chip
+                          label={job.status === 'running' ? 'In Progress' : 'Pending'}
+                          size="small"
+                          color={job.status === 'running' ? 'primary' : 'default'}
+                          icon={job.status === 'running' ? <HourglassEmptyIcon sx={{ fontSize: 14 }} /> : <HourglassEmptyIcon sx={{ fontSize: 14 }} />}
+                          sx={{ fontSize: '0.75rem', height: 24 }}
+                        />
+                      </Box>
+                      {job.current_step && (
+                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem', display: 'block', mb: 1 }}>
+                          {job.current_step}
+                        </Typography>
+                      )}
+                      {job.progress > 0 && (
+                        <LinearProgress
+                          variant="determinate"
+                          value={job.progress}
+                          sx={{
+                            borderRadius: 1,
+                            height: 6,
+                            bgcolor: alpha(theme.palette.info.main, 0.1),
+                            '& .MuiLinearProgress-bar': {
+                              bgcolor: theme.palette.info.main,
+                            },
+                          }}
+                        />
+                      )}
+                    </Box>
+                  )
+                })}
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
 
         <motion.div variants={cardVariants}>
           <Card

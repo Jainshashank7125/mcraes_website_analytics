@@ -15,7 +15,7 @@ import {
 } from '@mui/material'
 import { createTheme } from '@mui/material/styles'
 import { motion } from 'framer-motion'
-import { reportingAPI } from '../services/api'
+import { reportingAPI, clientAPI } from '../services/api'
 import ReportingDashboard from './ReportingDashboard'
 import { theme as baseTheme } from '../theme'
 
@@ -25,6 +25,7 @@ function PublicReportingDashboard() {
   const [brandInfo, setBrandInfo] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [linkExpired, setLinkExpired] = useState(false)
   const theme = useTheme()
 
   // Create custom theme based on brand theme - MUST be called before any conditional returns
@@ -79,8 +80,45 @@ function PublicReportingDashboard() {
       try {
         setLoading(true)
         setError(null)
+        setLinkExpired(false)
 
-        // Fetch brand info first
+        // First, try to fetch client by slug to check expiry
+        try {
+          const client = await clientAPI.getClientBySlug(slug)
+          if (client && client.id) {
+            // Check if link is expired (48 hours from created_at or updated_at)
+            const linkTimestamp = client.updated_at || client.created_at
+            if (linkTimestamp) {
+              const linkDate = new Date(linkTimestamp)
+              const now = new Date()
+              const hoursSinceCreation = (now - linkDate) / (1000 * 60 * 60) // Convert to hours
+              
+              if (hoursSinceCreation > 48) {
+                setLinkExpired(true)
+                setLoading(false)
+                return
+              }
+            }
+            
+            // Link is valid, continue with brand fetch
+            // Fetch brand info (which may use client data)
+            const brand = await reportingAPI.getBrandBySlug(slug)
+            
+            // Check if brand has no_data flag (graceful degradation from backend)
+            if (brand && brand.no_data) {
+              // Still set brandInfo so UI can render, but mark it as no data
+              setBrandInfo({ ...brand, no_data: true })
+            } else {
+              setBrandInfo(brand)
+            }
+            return
+          }
+        } catch (clientErr) {
+          // Client not found, try brand (backward compatibility)
+          console.log("Client not found by slug, trying brand...")
+        }
+
+        // Fallback to brand lookup for backward compatibility
         const brand = await reportingAPI.getBrandBySlug(slug)
         
         // Check if brand has no_data flag (graceful degradation from backend)
@@ -120,6 +158,22 @@ function PublicReportingDashboard() {
       >
         <CircularProgress size={40} thickness={4} />
       </Box>
+    )
+  }
+
+  if (linkExpired) {
+    return (
+      <Container maxWidth="lg" sx={{ py: 4 }}>
+        <Alert severity="warning" sx={{ borderRadius: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            Link Expired
+          </Typography>
+          <Typography>
+            This shareable link has expired. Shareable links are valid for 48 hours from creation.
+            Please contact the report owner to generate a new link.
+          </Typography>
+        </Alert>
+      </Container>
     )
   }
 

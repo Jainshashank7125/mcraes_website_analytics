@@ -273,11 +273,15 @@ async def sync_responses(
 @router.post("/sync/all")
 @handle_api_errors(context="syncing all data")
 async def sync_all(
-    request: Request,
+    sync_mode: str = Query("complete", description="Sync mode: 'new' (only missing items) or 'complete' (all items)"),
+    request: Request = None,
     current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
     """Start async sync of all Scrunch AI data. Returns immediately with job ID."""
+    if sync_mode not in ["new", "complete"]:
+        raise ValueError("sync_mode must be 'new' or 'complete'")
+    
     # Create job with database session
     from app.services.sync_job_service import SyncJobService
     sync_job_service_instance = SyncJobService(db=db)
@@ -285,12 +289,12 @@ async def sync_all(
         sync_type="sync_all",
         user_id=current_user["id"],
         user_email=current_user["email"],
-        parameters={}
+        parameters={"sync_mode": sync_mode}
     )
     
     # Start background task (will create its own database session)
     sync_job_service.run_background_task(
-        sync_all_background(job_id, current_user["id"], current_user["email"], request),
+        sync_all_background(job_id, current_user["id"], current_user["email"], sync_mode, request),
         job_id
     )
     
@@ -313,6 +317,7 @@ async def sync_status(db: Session = Depends(get_db)):
 @router.post("/sync/agency-analytics")
 @handle_api_errors(context="syncing Agency Analytics data")
 async def sync_agency_analytics(
+    sync_mode: str = Query("complete", description="Sync mode: 'new' (only missing campaigns) or 'complete' (all campaigns)"),
     campaign_id: Optional[int] = Query(None, description="Sync specific campaign (if not provided, syncs all campaigns)"),
     auto_match_brands: bool = Query(True, description="Automatically match campaigns to brands by URL"),
     request: Request = None,
@@ -320,6 +325,9 @@ async def sync_agency_analytics(
     db: Session = Depends(get_db)
 ):
     """Start async sync of Agency Analytics data. Returns immediately with job ID."""
+    if sync_mode not in ["new", "complete"]:
+        raise ValueError("sync_mode must be 'new' or 'complete'")
+    
     # Create job with database session
     from app.services.sync_job_service import SyncJobService
     sync_job_service_instance = SyncJobService(db=db)
@@ -328,6 +336,7 @@ async def sync_agency_analytics(
         user_id=current_user["id"],
         user_email=current_user["email"],
         parameters={
+            "sync_mode": sync_mode,
             "campaign_id": campaign_id,
             "auto_match_brands": auto_match_brands
         }
@@ -335,7 +344,7 @@ async def sync_agency_analytics(
     
     # Start background task (will create its own database session)
     sync_job_service.run_background_task(
-        sync_agency_analytics_background(job_id, current_user["id"], current_user["email"], campaign_id, auto_match_brands, request),
+        sync_agency_analytics_background(job_id, current_user["id"], current_user["email"], sync_mode, campaign_id, auto_match_brands, request),
         job_id
     )
     
@@ -350,6 +359,7 @@ async def sync_agency_analytics(
 @router.post("/sync/ga4")
 @handle_api_errors(context="syncing Google Analytics data")
 async def sync_ga4(
+    sync_mode: str = Query("complete", description="Sync mode: 'new' (only clients without GA4 data) or 'complete' (all clients with GA4)"),
     client_id: Optional[int] = Query(None, description="Sync GA4 data for specific client ID (if not provided, syncs all clients with GA4 configured)"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD), defaults to 30 days ago"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD), defaults to today"),
@@ -359,6 +369,9 @@ async def sync_ga4(
     db: Session = Depends(get_db)
 ):
     """Start async sync of GA4 data. Returns immediately with job ID. Now uses client_id instead of brand_id."""
+    if sync_mode not in ["new", "complete"]:
+        raise ValueError("sync_mode must be 'new' or 'complete'")
+    
     # Create job with database session
     from app.services.sync_job_service import SyncJobService
     sync_job_service_instance = SyncJobService(db=db)
@@ -367,6 +380,7 @@ async def sync_ga4(
         user_id=current_user["id"],
         user_email=current_user["email"],
         parameters={
+            "sync_mode": sync_mode,
             "client_id": client_id,
             "start_date": start_date,
             "end_date": end_date,
@@ -376,7 +390,7 @@ async def sync_ga4(
     
     # Start background task (will create its own database session)
     sync_job_service.run_background_task(
-        sync_ga4_background(job_id, current_user["id"], current_user["email"], client_id, start_date, end_date, sync_realtime, request),
+        sync_ga4_background(job_id, current_user["id"], current_user["email"], sync_mode, client_id, start_date, end_date, sync_realtime, request),
         job_id
     )
     

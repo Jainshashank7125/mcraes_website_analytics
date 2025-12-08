@@ -74,6 +74,18 @@ const refreshAccessToken = async () => {
     localStorage.removeItem('token_expires_at')
     localStorage.removeItem('user')
     stopTokenRefresh()
+    
+    // Redirect to login if refresh token expired
+    const currentPath = window.location.pathname
+    const isPublicRoute = 
+      currentPath === '/login' || 
+      currentPath === '/signup' || 
+      currentPath.startsWith('/reporting/')
+    
+    if (!isPublicRoute) {
+      window.location.href = '/login'
+    }
+    
     return false
   }
 }

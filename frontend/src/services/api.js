@@ -125,13 +125,22 @@ api.interceptors.response.use(
         localStorage.removeItem('access_token')
         localStorage.removeItem('refresh_token')
         localStorage.removeItem('user')
+        localStorage.removeItem('token_expires_at')
         
         isRefreshing = false
         processQueue(refreshError, null)
         
-        if (!isPublicRoute) {
+        // Check if refresh token expired (401 or specific error message)
+        const isRefreshTokenExpired = 
+          refreshError.response?.status === 401 ||
+          refreshError.response?.data?.detail?.includes('expired') ||
+          refreshError.response?.data?.detail?.includes('Refresh token')
+        
+        if (isRefreshTokenExpired && !isPublicRoute) {
+          // Immediately redirect to login when refresh token expires
           window.location.href = '/login'
         }
+        
         return Promise.reject(refreshError)
       }
     }
@@ -179,14 +188,18 @@ export const syncAPI = {
   },
 
   // Sync all Scrunch AI data (async - returns job_id)
-  syncAll: async () => {
-    const response = await api.post('/api/v1/sync/all')
+  syncAll: async (syncMode = 'complete') => {
+    const params = new URLSearchParams()
+    params.append('sync_mode', syncMode)
+    
+    const response = await api.post(`/api/v1/sync/all?${params.toString()}`)
     return response.data
   },
 
   // Sync GA4 data (async - returns job_id) - now uses clientId instead of brandId
-  syncGA4: async (clientId = null, startDate = null, endDate = null, syncRealtime = false) => {
+  syncGA4: async (syncMode = 'complete', clientId = null, startDate = null, endDate = null, syncRealtime = false) => {
     const params = new URLSearchParams()
+    params.append('sync_mode', syncMode)
     if (clientId) params.append('client_id', clientId)
     if (startDate) params.append('start_date', startDate)
     if (endDate) params.append('end_date', endDate)
@@ -197,8 +210,9 @@ export const syncAPI = {
   },
 
   // Sync Agency Analytics data (async - returns job_id)
-  syncAgencyAnalytics: async (campaignId = null) => {
+  syncAgencyAnalytics: async (syncMode = 'complete', campaignId = null) => {
     const params = new URLSearchParams()
+    params.append('sync_mode', syncMode)
     if (campaignId) params.append('campaign_id', campaignId)
     
     const response = await api.post(`/api/v1/sync/agency-analytics?${params.toString()}`)
@@ -634,6 +648,12 @@ export const clientAPI = {
   },
   deleteClient: async (clientId) => {
     const response = await api.delete(`/api/v1/data/clients/${clientId}`)
+    return response.data
+  },
+  
+  // Regenerate shareable link
+  regenerateShareableLink: async (clientId) => {
+    const response = await api.post(`/api/v1/data/clients/${clientId}/regenerate-shareable-link`)
     return response.data
   },
 }

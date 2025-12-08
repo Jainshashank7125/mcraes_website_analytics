@@ -9,6 +9,7 @@ This document provides a comprehensive list of Docker Compose commands for manag
 - [Logs and Monitoring](#logs-and-monitoring)
 - [Backup and Restore](#backup-and-restore)
 - [Migrations](#migrations)
+- [Cron Jobs and Sync Jobs](#cron-jobs-and-sync-jobs)
 - [Troubleshooting](#troubleshooting)
 - [Development Commands](#development-commands)
 
@@ -449,6 +450,205 @@ docker compose exec postgres psql -U postgres -d postgres -c "\dt"
 
 # Check specific columns
 docker compose exec postgres psql -U postgres -d postgres -c "\d+ clients"
+```
+
+---
+
+## Cron Jobs and Sync Jobs
+
+### Check Cron Status
+
+#### Quick Validation
+```bash
+# Run validation script to check cron setup
+./validate_cron_docker.sh
+```
+
+#### Check if Cron Service is Running
+```bash
+# Check if cron process is running
+docker exec mcraes-backend pgrep -x cron
+
+# Check cron service status
+docker exec mcraes-backend service cron status
+```
+
+#### View Configured Cron Jobs
+```bash
+# List all cron jobs in container
+docker exec mcraes-backend crontab -l
+
+# Check if daily sync job is configured
+docker exec mcraes-backend crontab -l | grep daily_sync_job.py
+```
+
+### Setup Cron Jobs
+
+#### Automatic Setup Script
+```bash
+# Run comprehensive setup/check script
+./check_and_setup_cron_docker.sh
+```
+
+#### Manual Setup
+```bash
+# Install cron (if not installed)
+docker exec mcraes-backend apt-get update && \
+  docker exec mcraes-backend apt-get install -y cron && \
+  docker exec mcraes-backend rm -rf /var/lib/apt/lists/*
+
+# Start cron service
+docker exec mcraes-backend service cron start
+
+# Create logs directory
+docker exec mcraes-backend mkdir -p /app/logs
+
+# Add daily sync cron job (runs at 18:30 UTC = 11:30 PM IST)
+docker exec mcraes-backend bash -c \
+  'echo "30 18 * * * cd /app && python3 daily_sync_job.py >> /app/logs/daily_sync.log 2>&1" | crontab -'
+
+# Verify cron job was added
+docker exec mcraes-backend crontab -l
+```
+
+### Validate Cron is Working
+
+#### Check Cron Process
+```bash
+# Verify cron is running
+docker exec mcraes-backend ps aux | grep cron
+
+# Check cron PID
+docker exec mcraes-backend pgrep -x cron
+```
+
+#### Test Sync Script Manually
+```bash
+# Run the daily sync script manually to test
+docker exec mcraes-backend python3 /app/daily_sync_job.py
+```
+
+#### View Sync Logs
+```bash
+# View recent sync logs
+docker exec mcraes-backend tail -n 50 /app/logs/daily_sync.log
+
+# Follow sync logs in real-time
+docker exec mcraes-backend tail -f /app/logs/daily_sync.log
+
+# Search for errors in logs
+docker exec mcraes-backend grep -i error /app/logs/daily_sync.log
+```
+
+### Check Sync Jobs via API
+
+#### Get All Sync Jobs
+```bash
+# Get all sync jobs (requires authentication token)
+curl -X GET "http://localhost:8000/api/v1/sync/jobs" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# Filter by status
+curl -X GET "http://localhost:8000/api/v1/sync/jobs?status=running" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# Filter by sync type
+curl -X GET "http://localhost:8000/api/v1/sync/jobs?sync_type=agency_analytics" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+#### Get Sync Status Summary
+```bash
+curl -X GET "http://localhost:8000/api/v1/sync/status" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Check Sync Jobs in Database
+
+#### View Recent Sync Jobs
+```bash
+# View all sync jobs
+docker exec mcraes-postgres psql -U postgres -d postgres -c \
+  "SELECT job_id, sync_type, status, created_at FROM sync_jobs ORDER BY created_at DESC LIMIT 10;"
+
+# View running jobs
+docker exec mcraes-postgres psql -U postgres -d postgres -c \
+  "SELECT job_id, sync_type, status, progress, current_step FROM sync_jobs WHERE status = 'running';"
+
+# View recent completed jobs
+docker exec mcraes-postgres psql -U postgres -d postgres -c \
+  "SELECT job_id, sync_type, status, completed_at FROM sync_jobs WHERE status = 'completed' ORDER BY completed_at DESC LIMIT 10;"
+
+# Count jobs in last 24 hours
+docker exec mcraes-postgres psql -U postgres -d postgres -c \
+  "SELECT COUNT(*) FROM sync_jobs WHERE created_at > NOW() - INTERVAL '24 hours';"
+```
+
+### Cron Job Schedules
+
+#### GA4 Token Generation (Hourly)
+- **Schedule**: `0 * * * *` (Every hour at minute 0)
+- **Script**: `generate_ga4_token.py`
+- **Logs**: `/app/logs/ga4_token.log` (inside container)
+- **Purpose**: Ensures GA4 access token is always fresh (tokens expire after 1 hour)
+
+#### Daily Sync Job
+- **Schedule**: `30 18 * * *` (Daily at 18:30 UTC)
+- **IST Time**: 11:30 PM IST (IST = UTC + 5:30)
+- **Script**: `daily_sync_job.py`
+- **Logs**: `/app/logs/daily_sync.log` (inside container)
+- **Note**: Token generation runs before sync (via hourly job or as part of sync script)
+
+### What Gets Synced
+
+The daily sync job automatically syncs:
+1. **AgencyAnalytics**: All active clients (Complete mode)
+2. **GA4**: All clients with GA4 property ID mapped (Complete mode)
+3. **Scrunch AI**: All clients linked to Scrunch (Complete mode)
+
+### Troubleshooting Cron
+
+#### Cron Not Running
+```bash
+# Check if cron is installed
+docker exec mcraes-backend which cron
+
+# Install cron if missing
+docker exec mcraes-backend apt-get update && \
+  docker exec mcraes-backend apt-get install -y cron
+
+# Start cron service
+docker exec mcraes-backend service cron start
+
+# Verify cron is running
+docker exec mcraes-backend pgrep -x cron
+```
+
+#### Cron Job Not Executing
+```bash
+# Verify cron job is configured
+docker exec mcraes-backend crontab -l
+
+# Check script permissions
+docker exec mcraes-backend ls -la /app/daily_sync_job.py
+
+# Test script manually
+docker exec mcraes-backend python3 /app/daily_sync_job.py
+
+# Check logs for errors
+docker exec mcraes-backend tail -n 100 /app/logs/daily_sync.log
+```
+
+#### Rebuild Container with Cron Support
+```bash
+# Rebuild backend container (includes cron auto-setup)
+docker compose build backend
+
+# Restart container
+docker compose up -d backend
+
+# Verify cron is configured
+./validate_cron_docker.sh
 ```
 
 ---

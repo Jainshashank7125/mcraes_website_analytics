@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import {
   Box,
   Card,
@@ -249,6 +250,8 @@ const DATE_PRESETS = [
 
 function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   const isPublic = !!publicSlug;
+  const location = useLocation();
+  const hasHandledNavigationClientId = useRef(false); // Track if we've handled clientId from navigation state
   const [clients, setClients] = useState([]);
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [clientSearchTerm, setClientSearchTerm] = useState("");
@@ -287,11 +290,16 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   const [showShareDialog, setShowShareDialog] = useState(false);
   const [shareableUrl, setShareableUrl] = useState("");
   const [copied, setCopied] = useState(false);
+  const [linkExpiryHours, setLinkExpiryHours] = useState(null);
+  const [regenerating, setRegenerating] = useState(false);
   const [selectedBrandSlug, setSelectedBrandSlug] = useState(null);
+  const [selectedClientReportTitle, setSelectedClientReportTitle] = useState(null); // Store custom report title
+  const [selectedClientLogoUrl, setSelectedClientLogoUrl] = useState(null); // Store client logo URL
   const [showOverviewDialog, setShowOverviewDialog] = useState(false);
   const [overviewData, setOverviewData] = useState(null);
   const [loadingOverview, setLoadingOverview] = useState(false);
   const [overviewCacheKey, setOverviewCacheKey] = useState(null); // Track cache key (clientId/brandId + date range)
+  const [expandedMetricsSources, setExpandedMetricsSources] = useState(new Set()); // Track which metric sources are expanded
   // Pagination state for Scrunch AI Insights table
   const [insightsPage, setInsightsPage] = useState(0);
   const [insightsRowsPerPage, setInsightsRowsPerPage] = useState(10);
@@ -326,6 +334,35 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   const getRandomCaption = () => {
     return loadingCaptions[Math.floor(Math.random() * loadingCaptions.length)];
   };
+
+  // Read clientId from navigation state (when navigating from ClientsList)
+  useEffect(() => {
+    if (!isPublic && location.state?.clientId && !selectedClientId && !hasHandledNavigationClientId.current) {
+      const clientIdFromState = location.state.clientId;
+      hasHandledNavigationClientId.current = true; // Mark as handled
+      setSelectedClientId(clientIdFromState);
+      
+      // Fetch the specific client data to ensure we have all metadata (slug, brand_id, etc.)
+      const fetchClientData = async () => {
+        try {
+          const client = await clientAPI.getClient(clientIdFromState);
+          if (client) {
+            // Update clients list to include this client if not already present
+            setClients((prevClients) => {
+              const exists = prevClients.find((c) => c.id === clientIdFromState);
+              if (exists) {
+                return prevClients;
+              }
+              return [client, ...prevClients];
+            });
+          }
+        } catch (err) {
+          console.error("Error fetching client data:", err);
+        }
+      };
+      fetchClientData();
+    }
+  }, [location.state, isPublic, selectedClientId]);
 
   // Load KPI selections from database when client changes (for authenticated users) - client-centric
   useEffect(() => {
@@ -537,6 +574,9 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
               if (client.scrunch_brand_id) {
                 setSelectedBrandId(client.scrunch_brand_id);
               }
+              // Store report_title and logo_url for public view
+              setSelectedClientReportTitle(client.report_title || null);
+              setSelectedClientLogoUrl(client.logo_url || null);
               return;
             }
           } catch (clientErr) {
@@ -575,9 +615,14 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
       fetchPublicEntity();
     } else {
       // Load initial small set of clients (first 10) for admin view
-      loadClients("", true);
+      // Only load clients if no clientId is provided in navigation state
+      // (If clientId is provided, we'll fetch that specific client in the other useEffect)
+      // Also check the ref to ensure we don't load if we're handling navigation state
+      if (!location.state?.clientId && !hasHandledNavigationClientId.current) {
+        loadClients("", true);
+      }
     }
-  }, [isPublic, publicSlug]);
+  }, [isPublic, publicSlug, location.state]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -608,6 +653,11 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   }, [selectedClientId, selectedBrandId, startDate, endDate, isPublic, publicSlug]);
 
   const loadClients = async (searchTerm = "", autoSelectFirst = false) => {
+    // Don't load clients if we have a clientId from navigation state (to prevent unwanted dropdown updates)
+    if (location.state?.clientId && !searchTerm) {
+      return;
+    }
+    
     try {
       setLoadingClients(true);
       const data = await clientAPI.getClients(1, 25, searchTerm); // Get up to 50 clients based on search
@@ -617,7 +667,12 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
         clientsList.map((c) => ({ id: c.id, name: c.company_name, url_slug: c.url_slug, scrunch_brand_id: c.scrunch_brand_id }))
       );
       setClients(clientsList);
-      if (autoSelectFirst && clientsList.length > 0 && !selectedClientId) {
+      // Only auto-select first client if:
+      // 1. autoSelectFirst is true
+      // 2. We have clients
+      // 3. No clientId is currently selected
+      // 4. No clientId was provided in navigation state
+      if (autoSelectFirst && clientsList.length > 0 && !selectedClientId && !location.state?.clientId) {
         const firstClient = clientsList[0];
         setSelectedClientId(firstClient.id);
         // Set brand_id from client's scrunch_brand_id for data loading
@@ -654,7 +709,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
     setClientSearchTimeout(timeout);
   };
 
-  // Update slug and brand_id when client changes
+  // Update slug, brand_id, and report_title when client changes
   useEffect(() => {
     if (selectedClientId && clients.length > 0) {
       const selectedClient = clients.find((c) => c.id === selectedClientId);
@@ -671,21 +726,65 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
         } else {
           setSelectedBrandId(null);
         }
+        // Update report_title and logo_url from client
+        setSelectedClientReportTitle(selectedClient.report_title || null);
+        setSelectedClientLogoUrl(selectedClient.logo_url || null);
       }
     }
   }, [selectedClientId, clients]);
 
-  const handleOpenShareDialog = () => {
-    if (selectedBrandSlug) {
+  const handleOpenShareDialog = async () => {
+    if (selectedBrandSlug && selectedClientId) {
       const baseUrl = window.location.origin;
       const url = `${baseUrl}/reporting/client/${selectedBrandSlug}`;
       setShareableUrl(url);
       setShowShareDialog(true);
       setCopied(false);
+      
+      // Calculate hours remaining until expiry
+      try {
+        const client = await clientAPI.getClient(selectedClientId);
+        if (client) {
+          const linkTimestamp = client.updated_at || client.created_at;
+          if (linkTimestamp) {
+            const linkDate = new Date(linkTimestamp);
+            const now = new Date();
+            const hoursSinceCreation = (now - linkDate) / (1000 * 60 * 60);
+            const hoursRemaining = Math.max(0, 48 - hoursSinceCreation);
+            setLinkExpiryHours(hoursRemaining);
+          }
+        }
+      } catch (err) {
+        console.error("Error calculating link expiry:", err);
+      }
     } else {
       setError(
         "Brand slug not available. Please ensure the brand has a slug configured."
       );
+    }
+  };
+
+  const handleRegenerateLink = async () => {
+    if (!selectedClientId) return;
+    
+    setRegenerating(true);
+    try {
+      const result = await clientAPI.regenerateShareableLink(selectedClientId);
+      const baseUrl = window.location.origin;
+      const newUrl = `${baseUrl}${result.shareable_url}`;
+      setShareableUrl(newUrl);
+      setLinkExpiryHours(48); // Reset to 48 hours
+      setCopied(false);
+      // Refresh clients list to get updated slug
+      if (selectedClientId && clients.length > 0) {
+        const updatedClients = await clientAPI.getClients(1, 25, "");
+        setClients(updatedClients.items || []);
+      }
+    } catch (err) {
+      console.error("Error regenerating link:", err);
+      setError("Failed to regenerate link. Please try again.");
+    } finally {
+      setRegenerating(false);
     }
   };
 
@@ -733,6 +832,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
       );
       setOverviewData(overview);
       setOverviewCacheKey(cacheKey);
+      setExpandedMetricsSources(new Set()); // Reset expanded state when new overview is loaded
     } catch (err) {
       console.error("Error generating overview:", err);
       // Don't set error here - just log it, user can retry by clicking button
@@ -1635,38 +1735,49 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
           alignItems="center"
           mb={2}
         >
-          <Box display="flex" alignItems="center" gap={2}>
-            {/* Show brand logo in public mode */}
-            {isPublic && publicBrandInfo?.logo_url && (
+          <Box display="flex" alignItems="center" gap={2} flex={1}>
+            {/* MacRAS Logo - Always show in header */}
+            <Box
+              component="img"
+              src="https://kvrnlsosagpwiuqzifva.supabase.co/storage/v1/object/public/brand-logos/1631325584055.jpeg"
+              alt="MacRAS"
+              sx={{
+                maxHeight: 48,
+                maxWidth: 180,
+                height: 'auto',
+                width: 'auto',
+                objectFit: 'contain',
+                borderRadius: 1,
+              }}
+            />
+            {/* Main heading - use custom report title if available, otherwise default */}
+            <Typography
+              variant="h4"
+              fontWeight={700}
+              sx={{
+                fontSize: "1.75rem",
+                letterSpacing: "-0.02em",
+                color: "text.primary",
+                flex: 1,
+              }}
+            >
+              {selectedClientReportTitle || "MacRAES Reporting Dashboard"}
+            </Typography>
+            {/* Show client logo if available */}
+            {(selectedClientLogoUrl || (isPublic && publicBrandInfo?.logo_url)) && (
               <Box
                 component="img"
-                src={publicBrandInfo.logo_url}
-                alt={`${publicBrandInfo.name} logo`}
+                src={selectedClientLogoUrl || publicBrandInfo.logo_url}
+                alt={isPublic ? `${publicBrandInfo?.name || 'Client'} logo` : "Client logo"}
                 sx={{
-                  maxHeight: 56,
-                  maxWidth: 240,
+                  maxHeight: 48,
+                  maxWidth: 180,
                   height: 'auto',
                   width: 'auto',
                   objectFit: 'contain',
                   borderRadius: 1,
                 }}
               />
-            )}
-            {/* Show brand name only if no logo, or show both if logo exists */}
-            {(!isPublic || !publicBrandInfo?.logo_url) && (
-              <Typography
-                variant="h4"
-                fontWeight={700}
-                sx={{
-                  fontSize: "1.75rem",
-                  letterSpacing: "-0.02em",
-                  color: "text.primary",
-                }}
-              >
-                {isPublic && publicBrandInfo
-                  ? publicBrandInfo.name
-                  : "Unified Reporting Dashboard"}
-              </Typography>
             )}
           </Box>
           <Box display="flex" gap={1.5}>
@@ -5533,8 +5644,28 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
               URL copied to clipboard!
             </Typography>
           )}
+          {linkExpiryHours !== null && (
+            <Box sx={{ mt: 2, p: 1.5, borderRadius: 2, bgcolor: alpha(theme.palette.info.main, 0.05), border: `1px solid ${theme.palette.divider}` }}>
+              <Typography variant="body2" color="text.secondary" sx={{ fontSize: "0.875rem" }}>
+                <strong>Link expires in:</strong> {linkExpiryHours > 0 
+                  ? `${Math.floor(linkExpiryHours)} hours ${Math.floor((linkExpiryHours % 1) * 60)} minutes`
+                  : "Link has expired"}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: "block", fontSize: "0.75rem" }}>
+                Shareable links are valid for 48 hours from creation. Regenerate to create a new link.
+              </Typography>
+            </Box>
+          )}
         </DialogContent>
         <DialogActions sx={{ p: 2, pt: 1 }}>
+          <Button
+            onClick={handleRegenerateLink}
+            variant="contained"
+            disabled={regenerating}
+            sx={{ borderRadius: 2, textTransform: "none" }}
+          >
+            {regenerating ? "Regenerating..." : "Regenerate Link"}
+          </Button>
           <Button
             onClick={() => setShowShareDialog(false)}
             variant="outlined"
@@ -5548,7 +5679,10 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
       {/* AI Overview Dialog */}
       <Dialog
         open={showOverviewDialog}
-        onClose={() => setShowOverviewDialog(false)}
+        onClose={() => {
+          setShowOverviewDialog(false);
+          setExpandedMetricsSources(new Set()); // Reset expanded state when dialog closes
+        }}
         maxWidth="lg"
         fullWidth
         PaperProps={{
@@ -5629,6 +5763,10 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                       const sourceMetrics = overviewData.metrics.filter(m => m.source === source);
                       if (sourceMetrics.length === 0) return null;
                       
+                      const isExpanded = expandedMetricsSources.has(source);
+                      const metricsToShow = isExpanded ? sourceMetrics : sourceMetrics.slice(0, 5);
+                      const hasMore = sourceMetrics.length > 5;
+                      
                       return (
                         <Grid item xs={12} md={4} key={source}>
                           <Paper
@@ -5647,7 +5785,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                               }
                             </Typography>
                             <Box component="ul" sx={{ m: 0, pl: 2 }}>
-                              {sourceMetrics.slice(0, 5).map((metric, idx) => (
+                              {metricsToShow.map((metric, idx) => (
                                 <li key={idx}>
                                   <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
                                     <strong>{metric.metric}:</strong> {formatValue({
@@ -5665,9 +5803,33 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
                                   </Typography>
                                 </li>
                               ))}
-                              {sourceMetrics.length > 5 && (
-                                <Typography variant="caption" color="text.secondary">
-                                  +{sourceMetrics.length - 5} more
+                              {hasMore && (
+                                <Typography 
+                                  variant="caption" 
+                                  color="primary"
+                                  onClick={() => {
+                                    const newExpanded = new Set(expandedMetricsSources);
+                                    if (isExpanded) {
+                                      newExpanded.delete(source);
+                                    } else {
+                                      newExpanded.add(source);
+                                    }
+                                    setExpandedMetricsSources(newExpanded);
+                                  }}
+                                  sx={{
+                                    cursor: 'pointer',
+                                    textDecoration: 'underline',
+                                    '&:hover': {
+                                      color: theme.palette.primary.dark,
+                                    },
+                                    display: 'block',
+                                    mt: 0.5,
+                                  }}
+                                >
+                                  {isExpanded 
+                                    ? 'Show less' 
+                                    : `+${sourceMetrics.length - 5} more`
+                                  }
                                 </Typography>
                               )}
                             </Box>
