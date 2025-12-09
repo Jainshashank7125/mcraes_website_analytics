@@ -1223,6 +1223,8 @@ async def get_reporting_dashboard(
     brand_id: int,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
     client_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
@@ -1263,6 +1265,9 @@ async def get_reporting_dashboard(
         
         section_times["get_brand"] = time.time() - brand_start
         
+        # Map alias params (`from`/`to`) to canonical start/end
+        start_date = start_date or from_date
+        end_date = end_date or to_date
         # Set default date range
         if not start_date:
             start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -3186,7 +3191,7 @@ async def get_reporting_dashboard(
             brand_name = None
             ga4_configured = False
         
-        return {
+        response_payload = {
             "brand_id": brand_id,
             "client_id": client_id if client_id else None,
             "brand_name": brand_name,
@@ -3215,6 +3220,19 @@ async def get_reporting_dashboard(
                 }
             }
         }
+        # If nothing matched the requested date range, return graceful empty payload
+        has_kpis = kpis and len(kpis) > 0
+        has_chart_data = chart_data and any(
+            chart_data.get(key) and (
+                isinstance(chart_data[key], list) and len(chart_data[key]) > 0 or
+                isinstance(chart_data[key], dict) and len(chart_data[key]) > 0
+            )
+            for key in chart_data.keys()
+        )
+        if not has_kpis and not has_chart_data:
+            response_payload["no_data"] = True
+            response_payload["message"] = "No data available for the selected date range."
+        return response_payload
         
     except Exception as e:
         logger.error(f"Error fetching reporting dashboard: {str(e)}")
@@ -3316,6 +3334,8 @@ async def get_reporting_dashboard_by_client(
     client_id: int,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
     db: Session = Depends(get_db)
 ):
     """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard by client ID (client-centric)
@@ -3345,9 +3365,11 @@ async def get_reporting_dashboard_by_client(
         
         logger.info(f"Found client {client_id}, using client-centric approach. scrunch_brand_id={scrunch_brand_id}")
         
-        # Call the main reporting dashboard endpoint with client_id
+        # Map alias params and call the main reporting dashboard endpoint with client_id
         # The main endpoint will use client_id for all data queries
         # Pass client_id so GA4 queries can use it
+        start_date = start_date or from_date
+        end_date = end_date or to_date
         return await get_reporting_dashboard(brand_id, start_date, end_date, client_id=client_id, db=db)
         
     except HTTPException:
@@ -3364,6 +3386,8 @@ async def get_reporting_dashboard_by_slug(
     slug: str,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
     db: Session = Depends(get_db)
 ):
     """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard by slug (public access)
@@ -3379,6 +3403,10 @@ async def get_reporting_dashboard_by_slug(
         dashboard_link = supabase.get_dashboard_link_by_slug(slug)
         client = None
 
+        # Respect explicit query params first, then dashboard link stored range
+        start_date = start_date or from_date
+        end_date = end_date or to_date
+
         if dashboard_link:
             if not dashboard_link.get("enabled", False):
                 raise HTTPException(status_code=403, detail="Dashboard link is disabled")
@@ -3392,8 +3420,10 @@ async def get_reporting_dashboard_by_slug(
                 raise HTTPException(status_code=404, detail="Client not found for dashboard link")
 
             client_id_for_dashboard = client.get("id")
-            start_date = dashboard_link["start_date"].isoformat()
-            end_date = dashboard_link["end_date"].isoformat()
+            if not start_date:
+                start_date = dashboard_link["start_date"].isoformat()
+            if not end_date:
+                end_date = dashboard_link["end_date"].isoformat()
             logger.info(f"Found dashboard link for slug '{slug}', client_id={client_id_for_dashboard}, date range {start_date} to {end_date}")
 
             if client.get("scrunch_brand_id"):
@@ -3554,6 +3584,8 @@ async def get_scrunch_dashboard_data_by_slug(
     slug: str,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
     db: Session = Depends(get_db)
 ):
     """Get Scrunch AI KPIs and chart data for reporting dashboard by slug (public access)
@@ -3566,6 +3598,10 @@ async def get_scrunch_dashboard_data_by_slug(
         supabase = SupabaseService(db=db)
         brand_id = None
         dashboard_link = supabase.get_dashboard_link_by_slug(slug)
+        # Respect explicit query params first, then dashboard link stored range
+        start_date = start_date or from_date
+        end_date = end_date or to_date
+
         if dashboard_link:
             if not dashboard_link.get("enabled", False):
                 raise HTTPException(status_code=403, detail="Dashboard link is disabled")
@@ -3588,8 +3624,10 @@ async def get_scrunch_dashboard_data_by_slug(
                 }
 
             brand_id = client["scrunch_brand_id"]
-            start_date = dashboard_link["start_date"].isoformat()
-            end_date = dashboard_link["end_date"].isoformat()
+            if not start_date:
+                start_date = dashboard_link["start_date"].isoformat()
+            if not end_date:
+                end_date = dashboard_link["end_date"].isoformat()
             logger.info(f"Found dashboard link for Scrunch slug '{slug}', using brand_id={brand_id} and date range {start_date} to {end_date}")
         
         # First, try to find a client by url_slug (for /reporting/client/:slug routes)
@@ -6088,6 +6126,10 @@ async def get_client_keywords(
     location_country: Optional[str] = Query(None, description="Filter by country code"),
     location_region: Optional[str] = Query(None, description="Filter by region name"),
     location_city: Optional[str] = Query(None, description="Filter by city"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
     volume_min: Optional[int] = Query(None, description="Minimum search volume"),
     volume_max: Optional[int] = Query(None, description="Maximum search volume"),
     google_ranking_min: Optional[int] = Query(None, description="Minimum Google ranking"),
@@ -6137,10 +6179,42 @@ async def get_client_keywords(
                 }
             }
         
+        # Resolve date range (default last 30 days if not provided)
+        start_date = start_date or from_date
+        end_date = end_date or to_date
+        if not end_date:
+            end_date = datetime.now().strftime("%Y-%m-%d")
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+            if start_dt > end_dt:
+                raise HTTPException(status_code=400, detail=f"Invalid date range: start_date ({start_date}) must be before or equal to end_date ({end_date})")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid date format. Use YYYY-MM-DD. Error: {str(e)}")
+        
         # Build base query for keywords with joins using SQLAlchemy Core
         keywords_table = supabase._get_table("agency_analytics_keywords")
         campaigns_table = supabase._get_table("agency_analytics_campaigns")
-        summaries_table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
+        rankings_table = supabase._get_table("agency_analytics_keyword_rankings")
+        
+        # Averages from rankings within the date range
+        averages_subquery = (
+            select(
+                rankings_table.c.keyword_id.label("avg_keyword_id"),
+                func.avg(rankings_table.c.google_ranking).label("avg_google_ranking"),
+                func.avg(rankings_table.c.volume).label("avg_search_volume"),
+            )
+            .where(
+                and_(
+                    rankings_table.c.date >= start_date,
+                    rankings_table.c.date <= end_date,
+                )
+            )
+            .group_by(rankings_table.c.keyword_id)
+            .subquery()
+        )
         
         # Build conditions
         conditions = [keywords_table.c.campaign_id.in_(campaign_ids)]
@@ -6163,11 +6237,12 @@ async def get_client_keywords(
         query = select(
             keywords_table,
             campaigns_table.c.company,
-            summaries_table
+            averages_subquery.c.avg_google_ranking,
+            averages_subquery.c.avg_search_volume
         ).join(
             campaigns_table, keywords_table.c.campaign_id == campaigns_table.c.id, isouter=True
         ).join(
-            summaries_table, keywords_table.c.id == summaries_table.c.keyword_id, isouter=True
+            averages_subquery, keywords_table.c.id == averages_subquery.c.avg_keyword_id, isouter=True
         ).where(and_(*conditions))
         
         # Execute query
@@ -6175,32 +6250,39 @@ async def get_client_keywords(
         keywords_data = []
         for row in result:
             kw_dict = dict(row._mapping)
+            kw_dict["average_google_ranking"] = kw_dict.get("avg_google_ranking")
+            kw_dict["average_search_volume"] = kw_dict.get("avg_search_volume")
             # Handle the joined data
             if 'company' in kw_dict:
                 kw_dict['agency_analytics_campaigns'] = {'company': kw_dict.pop('company')}
-            # Handle summaries - they might be in the row
-            if summaries_table.name in kw_dict:
-                summary_data = kw_dict.get(summaries_table.name)
-                if summary_data:
-                    kw_dict['agency_analytics_keyword_ranking_summaries'] = [summary_data] if not isinstance(summary_data, list) else summary_data
-                else:
-                    kw_dict['agency_analytics_keyword_ranking_summaries'] = []
             keywords_data.append(kw_dict)
         
-        # Process and filter by summary fields (volume, rankings, competition)
+        # Process and filter by summary fields (volume, rankings, competition) - using latest ranking per keyword within range
         filtered_keywords = []
         for kw in keywords_data:
-            summary = kw.get("agency_analytics_keyword_ranking_summaries")
-            if summary and isinstance(summary, list) and len(summary) > 0:
-                summary = summary[0]
-            elif not summary:
-                summary = {}
+            # Latest ranking in range
+            ranking_row = supabase.db.execute(
+                select(rankings_table)
+                .where(
+                    and_(
+                        rankings_table.c.keyword_id == kw.get("id"),
+                        rankings_table.c.date >= start_date,
+                        rankings_table.c.date <= end_date,
+                    )
+                )
+                .order_by(rankings_table.c.date.desc())
+                .limit(1)
+            ).fetchone()
+            summary = dict(ranking_row._mapping) if ranking_row else {}
             
             # Apply summary-based filters
-            volume = summary.get("search_volume", 0) or 0
+            volume = summary.get("volume", 0) or 0
+            # Require volume > 0 and not null
+            if volume <= 0:
+                continue
             google_ranking = summary.get("google_ranking")
             bing_ranking = summary.get("bing_ranking")
-            competition = summary.get("competition", 0) or 0
+            competition = summary.get("competition", 0) or 0  # competition may be null in rankings
             
             if volume_min is not None and volume < volume_min:
                 continue
@@ -6258,19 +6340,37 @@ async def get_client_keywords(
         google_change_total = 0
         bing_rankings_count = 0
         bing_change_total = 0
+        avg_google_list = []
+        avg_volume_list = []
         
         for kw in filtered_keywords:
-            summary = kw.get("agency_analytics_keyword_ranking_summaries")
-            if summary and isinstance(summary, list) and len(summary) > 0:
-                summary = summary[0]
-            elif not summary:
-                continue
+            # Latest ranking in range
+            ranking_row = supabase.db.execute(
+                select(rankings_table)
+                .where(
+                    and_(
+                        rankings_table.c.keyword_id == kw.get("id"),
+                        rankings_table.c.date >= start_date,
+                        rankings_table.c.date <= end_date,
+                    )
+                )
+                .order_by(rankings_table.c.date.desc())
+                .limit(1)
+            ).fetchone()
+            summary = dict(ranking_row._mapping) if ranking_row else {}
+            volume = summary.get("volume", 0) or 0
             
             if summary.get("google_ranking") is not None:
                 google_rankings_count += 1
                 change = summary.get("ranking_change", 0) or 0
                 if change > 0:  # Positive change means improvement (lower ranking number)
                     google_change_total += change
+            if kw.get("average_google_ranking") is not None:
+                avg_google_list.append(kw.get("average_google_ranking"))
+            if kw.get("average_search_volume") is not None and kw.get("average_search_volume") > 0:
+                avg_volume_list.append(kw.get("average_search_volume"))
+            elif volume > 0:
+                avg_volume_list.append(volume)
             
             if summary.get("bing_ranking") is not None:
                 bing_rankings_count += 1
@@ -6285,11 +6385,21 @@ async def get_client_keywords(
         # Format response
         formatted_keywords = []
         for kw in paginated_keywords:
-            summary = kw.get("agency_analytics_keyword_ranking_summaries")
-            if summary and isinstance(summary, list) and len(summary) > 0:
-                summary = summary[0]
-            else:
-                summary = {}
+            # Latest ranking in range
+            ranking_row = supabase.db.execute(
+                select(rankings_table)
+                .where(
+                    and_(
+                        rankings_table.c.keyword_id == kw.get("id"),
+                        rankings_table.c.date >= start_date,
+                        rankings_table.c.date <= end_date,
+                    )
+                )
+                .order_by(rankings_table.c.date.desc())
+                .limit(1)
+            ).fetchone()
+            summary = dict(ranking_row._mapping) if ranking_row else {}
+            volume = summary.get("volume", 0) or 0
             
             campaign = kw.get("agency_analytics_campaigns")
             if campaign and isinstance(campaign, dict):
@@ -6310,8 +6420,10 @@ async def get_client_keywords(
                 "bing_ranking_url": summary.get("bing_ranking_url"),
                 "google_change": summary.get("ranking_change", 0) or 0,
                 "bing_change": 0,  # Would need to calculate from historical data
-                "search_volume": summary.get("search_volume", 0) or 0,
+                "search_volume": volume,
                 "competition": summary.get("competition", 0) or 0,
+                "average_google_ranking": kw.get("average_google_ranking"),
+                "average_search_volume": kw.get("average_search_volume"),
                 "search_location": kw.get("search_location", ""),
                 "search_location_formatted_name": kw.get("search_location_formatted_name", ""),
                 "search_location_country_code": kw.get("search_location_country_code", ""),
@@ -6337,7 +6449,9 @@ async def get_client_keywords(
                 "google_rankings_count": google_rankings_count,
                 "google_change_total": google_change_total,
                 "bing_rankings_count": bing_rankings_count,
-                "bing_change_total": bing_change_total
+                "bing_change_total": bing_change_total,
+                "average_google_ranking": round(sum(avg_google_list) / len(avg_google_list), 1) if avg_google_list else 0,
+                "average_search_volume": round(sum(avg_volume_list) / len(avg_volume_list), 1) if avg_volume_list else 0
             }
         }
     except HTTPException:
@@ -6538,9 +6652,28 @@ async def get_client_keyword_summary(
                 "stable_keywords_count": 0
             }
         
-        # Build query for keywords with summaries using SQLAlchemy Core
+        # Resolve date range
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        if not end_date:
+            end_date = today_str
+        if not start_date:
+            if date_range == "last_7_days":
+                start_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+            elif date_range == "last_90_days":
+                start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+            else:  # default last 30 days
+                start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+            if start_dt > end_dt:
+                raise HTTPException(status_code=400, detail=f"Invalid date range: start_date ({start_date}) must be before or equal to end_date ({end_date})")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid date format. Use YYYY-MM-DD. Error: {str(e)}")
+        
+        # Build query for keywords using SQLAlchemy Core
         keywords_table = supabase._get_table("agency_analytics_keywords")
-        summaries_table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
+        rankings_table = supabase._get_table("agency_analytics_keyword_rankings")
         
         conditions = [keywords_table.c.campaign_id.in_(campaign_ids)]
         if campaign_id:
@@ -6548,86 +6681,101 @@ async def get_client_keyword_summary(
         if location_country:
             conditions.append(keywords_table.c.search_location_country_code == location_country)
         
-        # Get keywords with summaries using left join
-        query = select(
-            keywords_table.c.id,
-            summaries_table
-        ).join(
-            summaries_table, keywords_table.c.id == summaries_table.c.keyword_id, isouter=True
-        ).where(and_(*conditions))
+        # Get keyword ids
+        keyword_query = select(keywords_table.c.id).where(and_(*conditions))
+        keyword_rows = db.execute(keyword_query)
+        keyword_ids = [row.id for row in keyword_rows if row.id]
+        total_keywords = len(keyword_ids)
         
-        keywords_result = db.execute(query)
-        keywords_data = []
-        current_keyword_id = None
-        current_keyword = None
+        if not keyword_ids:
+            return {
+                "google_rankings": 0,
+                "google_change": 0,
+                "bing_rankings": 0,
+                "bing_change": 0,
+                "total_keywords": 0,
+                "average_google_ranking": 0,
+                "average_bing_ranking": 0,
+                "total_search_volume": 0,
+                "top_10_visibility_percentage": 0,
+                "improving_keywords_count": 0,
+                "declining_keywords_count": 0,
+                "stable_keywords_count": 0
+            }
         
-        for row in keywords_result:
-            row_dict = dict(row._mapping)
-            kw_id = row_dict.get('id')
-            summary_data = row_dict.get(summaries_table.name)
-            
-            if kw_id != current_keyword_id:
-                if current_keyword:
-                    keywords_data.append(current_keyword)
-                current_keyword_id = kw_id
-                current_keyword = {
-                    'id': kw_id,
-                    'agency_analytics_keyword_ranking_summaries': []
-                }
-            
-            if summary_data:
-                current_keyword['agency_analytics_keyword_ranking_summaries'].append(summary_data)
+        # Pull rankings in date range
+        rankings_query = select(
+            rankings_table.c.keyword_id,
+            rankings_table.c.date,
+            rankings_table.c.google_ranking,
+            rankings_table.c.bing_ranking,
+            rankings_table.c.volume
+        ).where(
+            and_(
+                rankings_table.c.keyword_id.in_(keyword_ids),
+                rankings_table.c.date >= start_date,
+                rankings_table.c.date <= end_date
+            )
+        )
+        rankings_rows = db.execute(rankings_query)
         
-        if current_keyword:
-            keywords_data.append(current_keyword)
+        # Bucket by keyword
+        rankings_by_keyword = {kw_id: [] for kw_id in keyword_ids}
+        for row in rankings_rows:
+            rd = dict(row._mapping)
+            rankings_by_keyword.setdefault(rd["keyword_id"], []).append(rd)
         
         # Calculate KPIs
-        total_keywords = len(keywords_data)
         google_rankings = 0
         bing_rankings = 0
         google_change_total = 0
         google_rankings_list = []
         bing_rankings_list = []
         total_search_volume = 0
+        volume_entries = 0
         top_10_count = 0
         improving_count = 0
         declining_count = 0
         stable_count = 0
         
-        for kw in keywords_data:
-            summary = kw.get("agency_analytics_keyword_ranking_summaries")
-            if summary and isinstance(summary, list) and len(summary) > 0:
-                summary = summary[0]
-            else:
+        for kw_id, rows in rankings_by_keyword.items():
+            if not rows:
                 continue
+            rows_sorted = sorted(rows, key=lambda r: r.get("date"))
+            google_vals = [r.get("google_ranking") for r in rows_sorted if r.get("google_ranking") is not None]
+            bing_vals = [r.get("bing_ranking") for r in rows_sorted if r.get("bing_ranking") is not None]
+            volume_vals = [r.get("volume") or 0 for r in rows_sorted if r.get("volume") is not None]
             
-            google_rank = summary.get("google_ranking")
-            bing_rank = summary.get("bing_ranking")
-            volume = summary.get("search_volume", 0) or 0
-            change = summary.get("ranking_change", 0) or 0
-            
-            if google_rank is not None:
-                google_rankings += 1
-                google_rankings_list.append(google_rank)
-                if google_rank <= 10:
+            if google_vals:
+                google_rankings += len(google_vals)
+                google_rankings_list.extend(google_vals)
+                if min(google_vals) <= 10:
                     top_10_count += 1
-                if change > 0:
+                # Trend: compare earliest vs latest non-null google ranking
+                first_g = google_vals[0]
+                last_g = google_vals[-1]
+                if last_g < first_g:
                     improving_count += 1
-                    google_change_total += change
-                elif change < 0:
+                    google_change_total += (first_g - last_g)
+                elif last_g > first_g:
                     declining_count += 1
                 else:
                     stable_count += 1
+            # If no google values but there are bing values, count stable for completeness
+            elif bing_vals:
+                stable_count += 1
             
-            if bing_rank is not None:
-                bing_rankings += 1
-                bing_rankings_list.append(bing_rank)
+            if bing_vals:
+                bing_rankings += len(bing_vals)
+                bing_rankings_list.extend(bing_vals)
             
-            total_search_volume += volume
+            total_search_volume += sum(volume_vals)
+            volume_entries += len(volume_vals)
         
         # Calculate averages
         average_google_ranking = sum(google_rankings_list) / len(google_rankings_list) if google_rankings_list else 0
         average_bing_ranking = sum(bing_rankings_list) / len(bing_rankings_list) if bing_rankings_list else 0
+        average_search_volume = total_search_volume / volume_entries if volume_entries > 0 else 0
         top_10_visibility_percentage = (top_10_count / total_keywords * 100) if total_keywords > 0 else 0
         
         return {
@@ -6638,6 +6786,7 @@ async def get_client_keyword_summary(
             "total_keywords": total_keywords,
             "average_google_ranking": round(average_google_ranking, 1),
             "average_bing_ranking": round(average_bing_ranking, 1),
+            "average_search_volume": round(average_search_volume, 1),
             "total_search_volume": total_search_volume,
             "top_10_visibility_percentage": round(top_10_visibility_percentage, 1),
             "improving_keywords_count": improving_count,
@@ -6824,13 +6973,18 @@ async def get_prompts_analytics(
     try:
         supabase = SupabaseService(db=db)
         brand_id = None
+        resolved_client_id = None
         
         # Resolve brand_id from client_id or slug using SQLAlchemy
         if client_id:
             client = supabase.get_client_by_id(client_id)
-            if client and client.get("scrunch_brand_id"):
+            if not client:
+                raise HTTPException(status_code=404, detail="Client not found")
+            resolved_client_id = client_id
+            if client.get("scrunch_brand_id"):
                 brand_id = client["scrunch_brand_id"]
             else:
+                # No scrunch_brand_id mapping; cannot resolve prompts/responses
                 return {
                     "items": [],
                     "count": 0,
@@ -6841,6 +6995,14 @@ async def get_prompts_analytics(
             client = supabase.get_client_by_slug(slug)
             if client and client.get("scrunch_brand_id"):
                 brand_id = client["scrunch_brand_id"]
+                resolved_client_id = client.get("id")
+            elif client:
+                # No scrunch_brand_id mapping; cannot resolve prompts/responses
+                return {
+                    "items": [],
+                    "count": 0,
+                    "total_count": 0
+                }
             else:
                 # Fall back to brand by slug using SQLAlchemy
                 brand = supabase.get_brand_by_slug(slug)

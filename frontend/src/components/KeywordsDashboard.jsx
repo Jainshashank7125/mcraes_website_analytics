@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Box,
   Card,
@@ -47,8 +47,13 @@ import StackedBarChart from "./reporting/charts/StackedBarChart";
 import ChartCard from "./reporting/ChartCard";
 import { formatDateForAxis } from "./reporting/hooks/useChartData";
 
-export default function KeywordsDashboard({ clientId }) {
+export default function KeywordsDashboard({ clientId, selectedKPIs }) {
   const theme = useTheme();
+  const selectedKPISet = selectedKPIs instanceof Set ? selectedKPIs : new Set(selectedKPIs || []);
+  const showKPI = (key) => {
+    if (!selectedKPISet || selectedKPISet.size === 0) return true;
+    return selectedKPISet.has(key);
+  };
   
   // Return early if no clientId
   if (!clientId) {
@@ -111,10 +116,13 @@ export default function KeywordsDashboard({ clientId }) {
     primary_only: filters.primary_only || undefined,
     tags: filters.tags || undefined,
     language: filters.language || undefined,
-    sort_by: sortBy,
-    sort_order: sortOrder,
-    page,
-    page_size: pageSize,
+    start_date: startDate,
+    end_date: endDate,
+    // Fetch all rows and sort client-side by volume
+    sort_by: "volume",
+    sort_order: "desc",
+    page: 1,
+    page_size: 10000,
   };
   
   // Fetch keywords data
@@ -265,9 +273,25 @@ export default function KeywordsDashboard({ clientId }) {
   };
   
   const keywords = keywordsData?.keywords || [];
-  const pagination = keywordsData?.pagination || { total: 0, page: 1, page_size: 50, total_pages: 0 };
+  const sortedKeywords = useMemo(
+    () => [...keywords].sort((a, b) => (b.search_volume || 0) - (a.search_volume || 0)),
+    [keywords]
+  );
+  const pagination = {
+    total: sortedKeywords.length,
+    page,
+    page_size: pageSize,
+    total_pages: Math.max(1, Math.ceil(sortedKeywords.length / pageSize)),
+  };
   // Use summaryData from the dedicated summary endpoint, fallback to keywordsData summary
   const summary = summaryData || keywordsData?.summary || {};
+
+  const fmt = (val, digits = 0) => {
+    if (val === null || val === undefined) return "0";
+    const num = Number(val);
+    if (Number.isNaN(num)) return "0";
+    return digits > 0 ? num.toFixed(digits) : num.toString();
+  };
   
   return (
     <Box>
@@ -299,69 +323,104 @@ export default function KeywordsDashboard({ clientId }) {
       
       {/* KPI Summary Cards */}
       <Grid container spacing={2} mb={3}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card
-            sx={{
-              border: (summary.google_rankings_count || summary.google_rankings) ? `2px solid ${theme.palette.primary.main}` : `1px solid ${theme.palette.divider}`,
-              borderRadius: 2,
-            }}
-          >
-            <CardContent>
-              <Typography variant="caption" color="text.secondary">
-                Google Rankings
-              </Typography>
-              <Typography variant="h4" fontWeight={700}>
-                {summary.google_rankings_count || summary.google_rankings || 0}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
-            <CardContent>
-              <Typography variant="caption" color="text.secondary">
-                Google Change
-              </Typography>
-              <Box display="flex" alignItems="center" gap={1}>
-                <Typography variant="h4" fontWeight={700}>
-                  {summary.google_change_total || summary.google_change || 0}
+        {showKPI("average_google_ranking") && (
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
+              <CardContent>
+                <Typography variant="caption" color="text.secondary">
+                  Avg Google Ranking
                 </Typography>
-                {(summary.google_change_total || summary.google_change || 0) > 0 && (
-                  <TrendingUpIcon sx={{ color: "#34A853", fontSize: 20 }} />
-                )}
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
-            <CardContent>
-              <Typography variant="caption" color="text.secondary">
-                Bing Rankings
-              </Typography>
-              <Typography variant="h4" fontWeight={700}>
-                {summary.bing_rankings_count || summary.bing_rankings || 0}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
-            <CardContent>
-              <Typography variant="caption" color="text.secondary">
-                Bing Change
-              </Typography>
-              <Box display="flex" alignItems="center" gap={1}>
                 <Typography variant="h4" fontWeight={700}>
-                  {summary.bing_change_total || summary.bing_change || 0}
+                  {fmt(summary.average_google_ranking ?? summary.avg_google_ranking, 1)}
                 </Typography>
-                {(summary.bing_change_total || summary.bing_change || 0) > 0 && (
-                  <TrendingUpIcon sx={{ color: "#34A853", fontSize: 20 }} />
-                )}
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
+        {showKPI("average_bing_ranking") && (
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
+              <CardContent>
+                <Typography variant="caption" color="text.secondary">
+                  Avg Bing Ranking
+                </Typography>
+                <Typography variant="h4" fontWeight={700}>
+                  {fmt(summary.average_bing_ranking ?? summary.avg_bing_ranking, 1)}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
+        {showKPI("average_search_volume") && (
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
+              <CardContent>
+                <Typography variant="caption" color="text.secondary">
+                  Avg Search Volume
+                </Typography>
+                <Typography variant="h4" fontWeight={700}>
+                  {fmt(summary.average_search_volume ?? summary.avg_search_volume, 0)}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
+        {showKPI("top_10_visibility_percentage") && (
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
+              <CardContent>
+                <Typography variant="caption" color="text.secondary">
+                  Top 10 Visibility %
+                </Typography>
+                <Typography variant="h4" fontWeight={700}>
+                  {fmt(summary.top_10_visibility_percentage ?? summary.top10_visibility_percentage, 1)}%
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
+        {showKPI("improving_keywords_count") && (
+          <Grid item xs={12} sm={6} md={4}>
+            <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
+              <CardContent>
+                <Typography variant="caption" color="text.secondary">
+                  Improving Keywords
+                </Typography>
+                <Typography variant="h4" fontWeight={700}>
+                  {fmt(summary.improving_keywords_count ?? summary.improving_keywords, 0)}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
+        {showKPI("declining_keywords_count") && (
+          <Grid item xs={12} sm={6} md={4}>
+            <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
+              <CardContent>
+                <Typography variant="caption" color="text.secondary">
+                  Declining Keywords
+                </Typography>
+                <Typography variant="h4" fontWeight={700}>
+                  {fmt(summary.declining_keywords_count ?? summary.declining_keywords, 0)}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
+        {showKPI("stable_keywords_count") && (
+          <Grid item xs={12} sm={6} md={4}>
+            <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
+              <CardContent>
+                <Typography variant="caption" color="text.secondary">
+                  Stable Keywords
+                </Typography>
+                <Typography variant="h4" fontWeight={700}>
+                  {fmt(summary.stable_keywords_count ?? summary.stable_keywords, 0)}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
       </Grid>
       
       {/* Google Rankings Chart */}
@@ -447,9 +506,9 @@ export default function KeywordsDashboard({ clientId }) {
           ) : (
             <>
               <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-                <Typography variant="body2" color="text.secondary">
-                  Showing {keywords.length} of {pagination.total} Rows
-                </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Showing {Math.min(pageSize, pagination.total - (page - 1) * pageSize)} of {pagination.total} Rows
+              </Typography>
               </Box>
               
               <TableContainer>
@@ -513,7 +572,9 @@ export default function KeywordsDashboard({ clientId }) {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {keywords.map((keyword) => (
+                    {sortedKeywords
+                      .slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
+                      .map((keyword) => (
                       <TableRow key={keyword.keyword_id} hover>
                         <TableCell padding="checkbox">
                           <Checkbox
