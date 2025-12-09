@@ -18,7 +18,7 @@ from typing import List, Tuple, Optional
 from datetime import datetime
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
-from app.db.database import SessionLocal, get_db_url
+from app.db.database import SessionLocal
 
 logging.basicConfig(
     level=logging.INFO,

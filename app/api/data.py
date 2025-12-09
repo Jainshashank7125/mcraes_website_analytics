@@ -2,7 +2,7 @@ from fastapi import APIRouter, Query, HTTPException, Depends, UploadFile, File, 
 from typing import Optional, List, Dict
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as date_type
 import base64
 import uuid
 from app.services.supabase_service import SupabaseService
@@ -22,6 +22,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 ga4_client = GA4APIClient()
+
+
+class DashboardLinkRequest(BaseModel):
+    slug: Optional[str] = None
+    start_date: date_type
+    end_date: date_type
+    enabled: bool = True
+    expires_at: Optional[datetime] = None
 
 @router.get("/data/brands")
 @handle_api_errors(context="fetching brands")
@@ -1317,6 +1325,12 @@ async def get_reporting_dashboard(
                     query_brand_id = scrunch_brand_id if client_id else brand_id
                     kpi_snapshot = supabase.get_ga4_kpi_snapshot_by_date_range(query_brand_id, start_date, end_date, client_id=client_id)
                     if kpi_snapshot:
+                        # Ensure dates are strings (convert if they're date objects)
+                        # Use date_type to avoid conflict with local 'date' variables later in function
+                        if isinstance(kpi_snapshot.get("period_start_date"), date_type):
+                            kpi_snapshot["period_start_date"] = kpi_snapshot["period_start_date"].strftime("%Y-%m-%d")
+                        if isinstance(kpi_snapshot.get("period_end_date"), date_type):
+                            kpi_snapshot["period_end_date"] = kpi_snapshot["period_end_date"].strftime("%Y-%m-%d")
                         use_stored_snapshot = True
                         logger.info(f"[GA4 KPI] Using stored KPI snapshot for brand {brand_id}, period_end_date: {kpi_snapshot['period_end_date']}, period_start_date: {kpi_snapshot['period_start_date']}")
                     else:
@@ -1325,8 +1339,18 @@ async def get_reporting_dashboard(
                         query_brand_id = scrunch_brand_id if client_id else brand_id
                         kpi_snapshot = supabase.get_latest_ga4_kpi_snapshot(query_brand_id, client_id=client_id)
                         if kpi_snapshot:
-                            snapshot_start_dt = datetime.strptime(kpi_snapshot["period_start_date"], "%Y-%m-%d")
-                            snapshot_end_dt = datetime.strptime(kpi_snapshot["period_end_date"], "%Y-%m-%d")
+                            # Ensure dates are strings (convert if they're date objects)
+                            # Use date_type to avoid conflict with local 'date' variables later in function
+                            period_start_date = kpi_snapshot["period_start_date"]
+                            period_end_date = kpi_snapshot["period_end_date"]
+                            if isinstance(period_start_date, date_type):
+                                period_start_date = period_start_date.strftime("%Y-%m-%d")
+                            if isinstance(period_end_date, date_type):
+                                period_end_date = period_end_date.strftime("%Y-%m-%d")
+                            period_start_str = str(period_start_date)
+                            period_end_str = str(period_end_date)
+                            snapshot_start_dt = datetime.strptime(period_start_str, "%Y-%m-%d")
+                            snapshot_end_dt = datetime.strptime(period_end_str, "%Y-%m-%d")
                             # Check if the snapshot's date range matches the requested range (within 2 days tolerance)
                             start_diff = abs((snapshot_start_dt - start_dt).days)
                             end_diff = abs((snapshot_end_dt - end_dt).days)
@@ -3207,9 +3231,25 @@ async def get_brand_by_slug(slug: str, db: Session = Depends(get_db)):
     """
     try:
         supabase = SupabaseService(db=db)
+        dashboard_link = supabase.get_dashboard_link_by_slug(slug)
+        client = None
+
+        if dashboard_link:
+            if not dashboard_link.get("enabled", False):
+                raise HTTPException(status_code=403, detail="Dashboard link is disabled")
+            expires_at = dashboard_link.get("expires_at")
+            if expires_at and datetime.utcnow() > expires_at:
+                supabase.disable_dashboard_link(dashboard_link["id"])
+                raise HTTPException(status_code=410, detail="Dashboard link has expired")
+            client = supabase.get_client_by_id(dashboard_link["client_id"])
+            if client:
+                client["dashboard_link"] = dashboard_link
+            else:
+                raise HTTPException(status_code=404, detail="Client not found for dashboard link")
         
         # First, try to find a client by url_slug (for /reporting/client/:slug routes)
-        client = supabase.get_client_by_slug(slug)
+        if client is None:
+            client = supabase.get_client_by_slug(slug)
         if client:
             # If client found, get the associated brand via scrunch_brand_id
             if client.get("scrunch_brand_id"):
@@ -3217,7 +3257,10 @@ async def get_brand_by_slug(slug: str, db: Session = Depends(get_db)):
                 brand = supabase.get_brand_by_id(brand_id)
                 if brand:
                     logger.info(f"Found client by url_slug '{slug}', returning associated brand")
-                    return brand
+                    brand_with_link = dict(brand)
+                    if client.get("dashboard_link"):
+                        brand_with_link["dashboard_link"] = client["dashboard_link"]
+                    return brand_with_link
                 else:
                     # Return client info as brand info for public view
                     # Don't set no_data: true here - let the dashboard endpoint check for Agency Analytics/GA4 data
@@ -3228,7 +3271,8 @@ async def get_brand_by_slug(slug: str, db: Session = Depends(get_db)):
                         "slug": slug,
                         "theme_color": client.get("theme_color"),
                         "logo_url": client.get("logo_url"),
-                        "client_id": client.get("id")  # Include client_id so dashboard can use it
+                        "client_id": client.get("id"),  # Include client_id so dashboard can use it
+                        "dashboard_link": client.get("dashboard_link")
                     }
             else:
                 # Return client info as brand info for public view
@@ -3240,7 +3284,8 @@ async def get_brand_by_slug(slug: str, db: Session = Depends(get_db)):
                     "slug": slug,
                     "theme_color": client.get("theme_color"),
                     "logo_url": client.get("logo_url"),
-                    "client_id": client.get("id")  # Include client_id so dashboard can use it
+                    "client_id": client.get("id"),  # Include client_id so dashboard can use it
+                    "dashboard_link": client.get("dashboard_link")
                 }
         
         # Fall back to finding a brand by slug (for backward compatibility)
@@ -3330,10 +3375,70 @@ async def get_reporting_dashboard_by_slug(
     try:
         supabase = SupabaseService(db=db)
         brand_id = None
-        
-        # First, try to find a client by url_slug (for /reporting/client/:slug routes)
-        client = supabase.get_client_by_slug(slug)
         client_id_for_dashboard = None
+        dashboard_link = supabase.get_dashboard_link_by_slug(slug)
+        client = None
+
+        if dashboard_link:
+            if not dashboard_link.get("enabled", False):
+                raise HTTPException(status_code=403, detail="Dashboard link is disabled")
+            expires_at = dashboard_link.get("expires_at")
+            if expires_at and datetime.utcnow() > expires_at:
+                supabase.disable_dashboard_link(dashboard_link["id"])
+                raise HTTPException(status_code=410, detail="Dashboard link has expired")
+
+            client = supabase.get_client_by_id(dashboard_link["client_id"])
+            if not client:
+                raise HTTPException(status_code=404, detail="Client not found for dashboard link")
+
+            client_id_for_dashboard = client.get("id")
+            start_date = dashboard_link["start_date"].isoformat()
+            end_date = dashboard_link["end_date"].isoformat()
+            logger.info(f"Found dashboard link for slug '{slug}', client_id={client_id_for_dashboard}, date range {start_date} to {end_date}")
+
+            if client.get("scrunch_brand_id"):
+                brand_id = client["scrunch_brand_id"]
+            else:
+                try:
+                    result = await get_reporting_dashboard_by_client(client_id_for_dashboard, start_date, end_date, db=db)
+                    result["brand_slug"] = slug
+                    result["dashboard_link"] = dashboard_link
+                    kpis = result.get("kpis", {})
+                    chart_data = result.get("chart_data", {})
+                    has_kpis = kpis and len(kpis) > 0
+                    has_chart_data = chart_data and any(
+                        chart_data.get(key) and (
+                            isinstance(chart_data[key], list) and len(chart_data[key]) > 0 or
+                            isinstance(chart_data[key], dict) and len(chart_data[key]) > 0
+                        )
+                        for key in chart_data.keys()
+                    )
+                    if not has_kpis and not has_chart_data:
+                        result["no_data"] = True
+                        result["diagnostics"] = result.get("diagnostics", {})
+                        result["diagnostics"]["message"] = "No data available. Please configure scrunch_brand_id for Scrunch data or ensure Agency Analytics/GA4 is configured."
+                    return result
+                except Exception as e:
+                    logger.error(f"Error fetching dashboard data for client_id={client_id_for_dashboard}: {str(e)}")
+                    return {
+                        "brand_id": None,
+                        "brand_name": client.get("company_name", "Unknown"),
+                        "brand_slug": slug,
+                        "client_id": client_id_for_dashboard,
+                        "kpis": {},
+                        "chart_data": {},
+                        "diagnostics": {
+                            "ga4_configured": bool(client.get("ga4_property_id")),
+                            "scrunch_configured": False,
+                            "agency_analytics_configured": False,
+                            "message": "Error loading data. Please check configuration."
+                        },
+                        "no_data": True
+                    }
+
+        # First, try to find a client by url_slug (for /reporting/client/:slug routes)
+        if client is None:
+            client = supabase.get_client_by_slug(slug)
         if client:
             # If client found, use the scrunch_brand_id from the client
             if client.get("scrunch_brand_id"):
@@ -3431,6 +3536,8 @@ async def get_reporting_dashboard_by_slug(
         # Call the existing get_reporting_dashboard function directly instead of making HTTP request
         result = await get_reporting_dashboard(brand_id, start_date, end_date, client_id=client_id_for_dashboard, db=db)
         result["brand_slug"] = slug
+        if dashboard_link:
+            result["dashboard_link"] = dashboard_link
         return result
         
     except HTTPException:
@@ -3458,39 +3565,66 @@ async def get_scrunch_dashboard_data_by_slug(
     try:
         supabase = SupabaseService(db=db)
         brand_id = None
-        
-        # First, try to find a client by url_slug (for /reporting/client/:slug routes)
-        client = supabase.get_client_by_slug(slug)
-        if client:
-            # If client found, use the scrunch_brand_id from the client
-            if client.get("scrunch_brand_id"):
-                brand_id = client["scrunch_brand_id"]
-                logger.info(f"Found client by url_slug '{slug}', using scrunch_brand_id: {brand_id}")
-            else:
-                # Return empty Scrunch data instead of 404 for public view (graceful degradation)
-                logger.warning(f"Client found but no Scrunch brand mapping configured (scrunch_brand_id is null), returning empty data")
+        dashboard_link = supabase.get_dashboard_link_by_slug(slug)
+        if dashboard_link:
+            if not dashboard_link.get("enabled", False):
+                raise HTTPException(status_code=403, detail="Dashboard link is disabled")
+            expires_at = dashboard_link.get("expires_at")
+            if expires_at and datetime.utcnow() > expires_at:
+                supabase.disable_dashboard_link(dashboard_link["id"])
+                raise HTTPException(status_code=410, detail="Dashboard link has expired")
+
+            client = supabase.get_client_by_id(dashboard_link["client_id"])
+            if not client:
+                raise HTTPException(status_code=404, detail="Client not found for dashboard link")
+
+            if not client.get("scrunch_brand_id"):
+                logger.warning(f"Dashboard link found but no Scrunch brand mapping configured for client_id={client.get('id')}, returning empty data")
                 return {
                     "kpis": {},
                     "chart_data": {},
                     "no_data": True,
                     "message": "No Scrunch brand mapping configured"
                 }
-        else:
-            # Fall back to finding a brand by slug (for backward compatibility)
-            brand = supabase.get_brand_by_slug(slug)
-            
-            if not brand:
-                # Return empty Scrunch data instead of 404 for public view (graceful degradation)
-                logger.warning(f"Neither client nor brand found for slug '{slug}', returning empty Scrunch data")
-                return {
-                    "kpis": {},
-                    "chart_data": {},
-                    "no_data": True,
-                    "message": "No data available for this slug."
-                }
-            
-            brand_id = brand["id"]
-            logger.info(f"Found brand by slug '{slug}', using brand_id: {brand_id}")
+
+            brand_id = client["scrunch_brand_id"]
+            start_date = dashboard_link["start_date"].isoformat()
+            end_date = dashboard_link["end_date"].isoformat()
+            logger.info(f"Found dashboard link for Scrunch slug '{slug}', using brand_id={brand_id} and date range {start_date} to {end_date}")
+        
+        # First, try to find a client by url_slug (for /reporting/client/:slug routes)
+        if not brand_id:
+            client = supabase.get_client_by_slug(slug)
+            if client:
+                # If client found, use the scrunch_brand_id from the client
+                if client.get("scrunch_brand_id"):
+                    brand_id = client["scrunch_brand_id"]
+                    logger.info(f"Found client by url_slug '{slug}', using scrunch_brand_id: {brand_id}")
+                else:
+                    # Return empty Scrunch data instead of 404 for public view (graceful degradation)
+                    logger.warning(f"Client found but no Scrunch brand mapping configured (scrunch_brand_id is null), returning empty data")
+                    return {
+                        "kpis": {},
+                        "chart_data": {},
+                        "no_data": True,
+                        "message": "No Scrunch brand mapping configured"
+                    }
+            else:
+                # Fall back to finding a brand by slug (for backward compatibility)
+                brand = supabase.get_brand_by_slug(slug)
+                
+                if not brand:
+                    # Return empty Scrunch data instead of 404 for public view (graceful degradation)
+                    logger.warning(f"Neither client nor brand found for slug '{slug}', returning empty Scrunch data")
+                    return {
+                        "kpis": {},
+                        "chart_data": {},
+                        "no_data": True,
+                        "message": "No data available for this slug."
+                    }
+                
+                brand_id = brand["id"]
+                logger.info(f"Found brand by slug '{slug}', using brand_id: {brand_id}")
         
         if not brand_id:
             # Return empty Scrunch data instead of 404 for public view (graceful degradation)
@@ -5177,8 +5311,21 @@ async def get_client_by_slug(
     """Get client by URL slug (public access for whitelabeled reports)"""
     try:
         supabase = SupabaseService(db=db)
+        link = supabase.get_dashboard_link_by_slug(url_slug)
+        if link:
+            if not link.get("enabled", False):
+                raise HTTPException(status_code=403, detail="Dashboard link is disabled")
+            expires_at = link.get("expires_at")
+            if expires_at and datetime.utcnow() > expires_at:
+                supabase.disable_dashboard_link(link["id"])
+                raise HTTPException(status_code=410, detail="Dashboard link has expired")
+            client = supabase.get_client_by_id(link["client_id"])
+            if not client:
+                raise HTTPException(status_code=404, detail="Client not found for dashboard link")
+            client["dashboard_link"] = link
+            return client
+
         client = supabase.get_client_by_slug(url_slug)
-        
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
@@ -5188,6 +5335,77 @@ async def get_client_by_slug(
     except Exception as e:
         logger.error(f"Error fetching client by slug: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/data/dashboard-links/{slug}")
+@handle_api_errors(context="fetching dashboard link by slug")
+async def get_dashboard_link_by_slug(
+    slug: str,
+    db: Session = Depends(get_db)
+):
+    """Fetch a dashboard link by slug with expiry/enablement checks (public)"""
+    supabase = SupabaseService(db=db)
+    link = supabase.get_dashboard_link_by_slug(slug)
+    if not link:
+        raise HTTPException(status_code=404, detail="Dashboard link not found")
+    if not link.get("enabled", False):
+        raise HTTPException(status_code=403, detail="Dashboard link is disabled")
+
+    expires_at = link.get("expires_at")
+    if expires_at and datetime.utcnow() > expires_at:
+        supabase.disable_dashboard_link(link["id"])
+        raise HTTPException(status_code=410, detail="Dashboard link has expired")
+
+    return link
+
+
+
+@router.get("/data/clients/{client_id}/dashboard-links")
+@handle_api_errors(context="listing dashboard links for client")
+async def list_dashboard_links_for_client(
+    client_id: int,
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """List all dashboard links for a client (admin view)"""
+    supabase = SupabaseService(db=db)
+    client = supabase.get_client_by_id(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    links = supabase.list_dashboard_links_for_client(client_id)
+    return {"items": links}
+
+@router.post("/data/clients/{client_id}/dashboard-links")
+@handle_api_errors(context="upserting dashboard link for client")
+async def upsert_dashboard_link_for_client(
+    client_id: int,
+    request: DashboardLinkRequest,
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """Create or update a dashboard link for a client based on date range"""
+    supabase = SupabaseService(db=db)
+    client = supabase.get_client_by_id(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    link = supabase.upsert_dashboard_link(
+        client_id=client_id,
+        slug=request.slug,
+        start_date=request.start_date,
+        end_date=request.end_date,
+        enabled=request.enabled,
+        expires_at=request.expires_at,
+        user_email=current_user.get("email")
+    )
+
+    if not link:
+        raise HTTPException(status_code=500, detail="Unable to save dashboard link")
+
+    return {
+        "status": "success",
+        "link": link,
+        "shareable_url": f"/reporting/client/{link['slug']}"
+    }
 
 @router.post("/data/clients/{client_id}/regenerate-shareable-link")
 @handle_api_errors(context="regenerating shareable link")
@@ -5463,6 +5681,111 @@ async def update_client_theme(
         raise
     except Exception as e:
         logger.error(f"Error updating client theme: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ClientReportDatesUpdateRequest(BaseModel):
+    report_start_date: Optional[str] = None  # YYYY-MM-DD format
+    report_end_date: Optional[str] = None  # YYYY-MM-DD format
+    version: Optional[int] = None  # Version for optimistic locking
+
+@router.put("/data/clients/{client_id}/report-dates")
+@handle_api_errors(context="updating client report dates")
+async def update_client_report_dates(
+    client_id: int,
+    request: ClientReportDatesUpdateRequest,
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """Update client report date range for public dashboard"""
+    from app.services.websocket_manager import websocket_manager
+    from datetime import datetime, date
+    
+    try:
+        supabase = SupabaseService(db=db)
+        
+        # Get current client to check version using SQLAlchemy
+        client = supabase.get_client_by_id(client_id)
+        
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        current_version = client.get("version", 1)
+        
+        # Version conflict check
+        if request.version is not None and request.version != current_version:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "conflict",
+                    "message": "Resource was modified by another user. Please refresh and try again.",
+                    "current_version": current_version,
+                    "current_data": {
+                        "report_start_date": client.get("report_start_date"),
+                        "report_end_date": client.get("report_end_date"),
+                        "last_modified_by": client.get("last_modified_by")
+                    }
+                }
+            )
+        
+        # Validate date format if provided
+        report_start_date = None
+        report_end_date = None
+        
+        if request.report_start_date:
+            try:
+                report_start_date = datetime.strptime(request.report_start_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid report_start_date format. Use YYYY-MM-DD.")
+        
+        if request.report_end_date:
+            try:
+                report_end_date = datetime.strptime(request.report_end_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid report_end_date format. Use YYYY-MM-DD.")
+        
+        # Validate date range
+        if report_start_date and report_end_date and report_start_date > report_end_date:
+            raise HTTPException(
+                status_code=400,
+                detail="report_start_date must be before or equal to report_end_date"
+            )
+        
+        success = supabase.update_client_report_dates(
+            client_id=client_id,
+            report_start_date=report_start_date,
+            report_end_date=report_end_date,
+            user_email=current_user.get("email")
+        )
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update client report dates")
+        
+        # Get updated version using SQLAlchemy
+        updated_client = supabase.get_client_by_id(client_id)
+        updated_version = updated_client.get("version", 1) if updated_client else 1
+        
+        # Broadcast WebSocket notification
+        try:
+            await websocket_manager.notify_resource_updated(
+                resource_type="client",
+                resource_id=client_id,
+                updated_by=current_user.get("email"),
+                updated_at=datetime.utcnow().isoformat() + "Z",
+                version=updated_version,
+                exclude_user_id=current_user.get("id")
+            )
+        except Exception as ws_error:
+            logger.warning(f"Failed to send WebSocket notification: {str(ws_error)}")
+        
+        return {
+            "status": "success",
+            "message": "Client report dates updated successfully",
+            "version": updated_version
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating client report dates: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/data/clients/{client_id}/logo")

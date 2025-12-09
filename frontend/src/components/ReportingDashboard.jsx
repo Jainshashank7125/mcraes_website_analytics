@@ -248,7 +248,7 @@ const DATE_PRESETS = [
 // Helper function to get month name
 // getMonthName is now imported from utils
 
-function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
+function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStartDate, publicEndDate }) {
   const isPublic = !!publicSlug;
   const location = useLocation();
   const hasHandledNavigationClientId = useRef(false); // Track if we've handled clientId from navigation state
@@ -282,8 +282,9 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   };
 
   const defaultDates = getDefaultDates();
-  const [startDate, setStartDate] = useState(defaultDates.start);
-  const [endDate, setEndDate] = useState(defaultDates.end);
+  // Use public date range if provided (from URL params), otherwise use default
+  const [startDate, setStartDate] = useState(publicStartDate || defaultDates.start);
+  const [endDate, setEndDate] = useState(publicEndDate || defaultDates.end);
   const [datePreset, setDatePreset] = useState("Last 30 days");
   const [brandAnalytics, setBrandAnalytics] = useState(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
@@ -298,6 +299,9 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
   const [showOverviewDialog, setShowOverviewDialog] = useState(false);
   const [overviewData, setOverviewData] = useState(null);
   const [loadingOverview, setLoadingOverview] = useState(false);
+  // Date range for shareable URL
+  const [shareDialogStartDate, setShareDialogStartDate] = useState(defaultDates.start);
+  const [shareDialogEndDate, setShareDialogEndDate] = useState(defaultDates.end);
   const [overviewCacheKey, setOverviewCacheKey] = useState(null); // Track cache key (clientId/brandId + date range)
   const [expandedMetricsSources, setExpandedMetricsSources] = useState(new Set()); // Track which metric sources are expanded
   // Pagination state for Scrunch AI Insights table
@@ -624,6 +628,14 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
     }
   }, [isPublic, publicSlug, location.state]);
 
+  // Update date range when public props change (from URL params)
+  useEffect(() => {
+    if (isPublic && publicStartDate && publicEndDate) {
+      setStartDate(publicStartDate);
+      setEndDate(publicEndDate);
+    }
+  }, [isPublic, publicStartDate, publicEndDate]);
+
   // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
@@ -735,16 +747,29 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
 
   const handleOpenShareDialog = async () => {
     if (selectedBrandSlug && selectedClientId) {
-      const baseUrl = window.location.origin;
-      const url = `${baseUrl}/reporting/client/${selectedBrandSlug}`;
-      setShareableUrl(url);
       setShowShareDialog(true);
       setCopied(false);
       
-      // Calculate hours remaining until expiry
       try {
+        // Load client data to get saved report dates
         const client = await clientAPI.getClient(selectedClientId);
         if (client) {
+          // Use saved report dates if available, otherwise use current date range
+          const savedStartDate = client.report_start_date || startDate;
+          const savedEndDate = client.report_end_date || endDate;
+          setShareDialogStartDate(savedStartDate);
+          setShareDialogEndDate(savedEndDate);
+          
+          // Generate URL with date range
+          const baseUrl = window.location.origin;
+          const urlParams = new URLSearchParams();
+          if (savedStartDate) urlParams.append('startDate', savedStartDate);
+          if (savedEndDate) urlParams.append('endDate', savedEndDate);
+          const queryString = urlParams.toString();
+          const url = `${baseUrl}/reporting/client/${selectedBrandSlug}${queryString ? `?${queryString}` : ''}`;
+          setShareableUrl(url);
+          
+          // Calculate hours remaining until expiry
           const linkTimestamp = client.updated_at || client.created_at;
           if (linkTimestamp) {
             const linkDate = new Date(linkTimestamp);
@@ -753,14 +778,60 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
             const hoursRemaining = Math.max(0, 48 - hoursSinceCreation);
             setLinkExpiryHours(hoursRemaining);
           }
+        } else {
+          // Fallback if client not found
+          setShareDialogStartDate(startDate);
+          setShareDialogEndDate(endDate);
+          const baseUrl = window.location.origin;
+          const urlParams = new URLSearchParams();
+          if (startDate) urlParams.append('startDate', startDate);
+          if (endDate) urlParams.append('endDate', endDate);
+          const queryString = urlParams.toString();
+          const url = `${baseUrl}/reporting/client/${selectedBrandSlug}${queryString ? `?${queryString}` : ''}`;
+          setShareableUrl(url);
         }
       } catch (err) {
-        console.error("Error calculating link expiry:", err);
+        console.error("Error loading client data:", err);
+        // Fallback on error
+        setShareDialogStartDate(startDate);
+        setShareDialogEndDate(endDate);
+        const baseUrl = window.location.origin;
+        const urlParams = new URLSearchParams();
+        if (startDate) urlParams.append('startDate', startDate);
+        if (endDate) urlParams.append('endDate', endDate);
+        const queryString = urlParams.toString();
+        const url = `${baseUrl}/reporting/client/${selectedBrandSlug}${queryString ? `?${queryString}` : ''}`;
+        setShareableUrl(url);
       }
     } else {
       setError(
         "Brand slug not available. Please ensure the brand has a slug configured."
       );
+    }
+  };
+
+  const handleUpdateShareUrl = async () => {
+    if (selectedBrandSlug && selectedClientId) {
+      // Update URL immediately
+      const baseUrl = window.location.origin;
+      const urlParams = new URLSearchParams();
+      if (shareDialogStartDate) urlParams.append('startDate', shareDialogStartDate);
+      if (shareDialogEndDate) urlParams.append('endDate', shareDialogEndDate);
+      const queryString = urlParams.toString();
+      const url = `${baseUrl}/reporting/client/${selectedBrandSlug}${queryString ? `?${queryString}` : ''}`;
+      setShareableUrl(url);
+      setCopied(false);
+      
+      // Save dates to client
+      try {
+        await clientAPI.updateClientReportDates(selectedClientId, {
+          report_start_date: shareDialogStartDate || null,
+          report_end_date: shareDialogEndDate || null,
+        });
+      } catch (err) {
+        console.error("Error saving report dates:", err);
+        setError("Failed to save date range. URL updated but dates were not persisted.");
+      }
     }
   };
 
@@ -771,7 +842,12 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
     try {
       const result = await clientAPI.regenerateShareableLink(selectedClientId);
       const baseUrl = window.location.origin;
-      const newUrl = `${baseUrl}${result.shareable_url}`;
+      // Include date range in regenerated URL
+      const urlParams = new URLSearchParams();
+      if (shareDialogStartDate) urlParams.append('startDate', shareDialogStartDate);
+      if (shareDialogEndDate) urlParams.append('endDate', shareDialogEndDate);
+      const queryString = urlParams.toString();
+      const newUrl = `${baseUrl}${result.shareable_url}${queryString ? `?${queryString}` : ''}`;
       setShareableUrl(newUrl);
       setLinkExpiryHours(48); // Reset to 48 hours
       setCopied(false);
@@ -5593,6 +5669,49 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo }) {
             Share this URL with clients to give them access to the public
             reporting dashboard for this brand.
           </Typography>
+          
+          {/* Date Range Selector */}
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="subtitle2" sx={{ mb: 1.5, fontWeight: 600 }}>
+              Date Range for Public Dashboard
+            </Typography>
+            <Box sx={{ display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap" }}>
+              <TextField
+                label="Start Date"
+                type="date"
+                size="small"
+                value={shareDialogStartDate || ""}
+                onChange={(e) => {
+                  setShareDialogStartDate(e.target.value);
+                }}
+                InputLabelProps={{ shrink: true }}
+                sx={{ minWidth: 150 }}
+              />
+              <TextField
+                label="End Date"
+                type="date"
+                size="small"
+                value={shareDialogEndDate || ""}
+                onChange={(e) => {
+                  setShareDialogEndDate(e.target.value);
+                }}
+                InputLabelProps={{ shrink: true }}
+                sx={{ minWidth: 150 }}
+              />
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={handleUpdateShareUrl}
+                sx={{ borderRadius: 2, textTransform: "none" }}
+              >
+                Update URL
+              </Button>
+            </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
+              Select the date range that will be used to display data on the public dashboard.
+            </Typography>
+          </Box>
+
           <Box
             sx={{
               display: "flex",

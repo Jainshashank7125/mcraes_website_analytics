@@ -26,7 +26,25 @@ function PublicReportingDashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [linkExpired, setLinkExpired] = useState(false)
+  const [linkDisabled, setLinkDisabled] = useState(false)
   const theme = useTheme()
+  
+  // Read date range from URL params, fallback to saved client dates
+  const urlStartDate = searchParams.get('startDate')
+  const urlEndDate = searchParams.get('endDate')
+  
+  // Use saved client dates if URL params are not provided
+  const effectiveStartDate = useMemo(() => {
+    if (urlStartDate) return urlStartDate
+    if (brandInfo?.dashboard_link?.start_date) return brandInfo.dashboard_link.start_date
+    return brandInfo?.clientData?.report_start_date || undefined
+  }, [urlStartDate, brandInfo?.dashboard_link?.start_date, brandInfo?.clientData?.report_start_date])
+  
+  const effectiveEndDate = useMemo(() => {
+    if (urlEndDate) return urlEndDate
+    if (brandInfo?.dashboard_link?.end_date) return brandInfo.dashboard_link.end_date
+    return brandInfo?.clientData?.report_end_date || undefined
+  }, [urlEndDate, brandInfo?.dashboard_link?.end_date, brandInfo?.clientData?.report_end_date])
 
   // Create custom theme based on brand theme - MUST be called before any conditional returns
   const brandTheme = useMemo(() => {
@@ -81,11 +99,59 @@ function PublicReportingDashboard() {
         setLoading(true)
         setError(null)
         setLinkExpired(false)
+        setLinkDisabled(false)
 
-        // First, try to fetch client by slug to check expiry
+        let dashboardLink = null
+        try {
+          dashboardLink = await clientAPI.getDashboardLinkBySlug(slug)
+        } catch (linkErr) {
+          const status = linkErr.response?.status
+          if (status === 403) {
+            setLinkDisabled(true)
+            setLoading(false)
+            return
+          }
+          if (status === 410) {
+            setLinkExpired(true)
+            setLoading(false)
+            return
+          }
+          if (status && status !== 404) {
+            throw linkErr
+          }
+        }
+
+        if (dashboardLink) {
+          try {
+            const brand = await reportingAPI.getBrandBySlug(slug)
+            if (brand && brand.no_data) {
+              setBrandInfo({ ...brand, no_data: true, dashboard_link: dashboardLink })
+            } else {
+              setBrandInfo({ ...brand, dashboard_link: dashboardLink })
+            }
+            return
+          } catch (brandErr) {
+            const status = brandErr.response?.status
+            if (status === 403) {
+              setLinkDisabled(true)
+              setLoading(false)
+              return
+            }
+            if (status === 410) {
+              setLinkExpired(true)
+              setLoading(false)
+              return
+            }
+            throw brandErr
+          }
+        }
+
+        // Legacy fallback to client-based slug logic
+        let clientData = null
         try {
           const client = await clientAPI.getClientBySlug(slug)
           if (client && client.id) {
+            clientData = client
             // Check if link is expired (48 hours from created_at or updated_at)
             const linkTimestamp = client.updated_at || client.created_at
             if (linkTimestamp) {
@@ -107,14 +173,13 @@ function PublicReportingDashboard() {
             // Check if brand has no_data flag (graceful degradation from backend)
             if (brand && brand.no_data) {
               // Still set brandInfo so UI can render, but mark it as no data
-              setBrandInfo({ ...brand, no_data: true })
+              setBrandInfo({ ...brand, no_data: true, clientData })
             } else {
-              setBrandInfo(brand)
+              setBrandInfo({ ...brand, clientData })
             }
             return
           }
         } catch (clientErr) {
-          // Client not found, try brand (backward compatibility)
           console.log("Client not found by slug, trying brand...")
         }
 
@@ -169,8 +234,22 @@ function PublicReportingDashboard() {
             Link Expired
           </Typography>
           <Typography>
-            This shareable link has expired. Shareable links are valid for 48 hours from creation.
-            Please contact the report owner to generate a new link.
+            This shareable link has expired. Please contact the report owner to generate a new link.
+          </Typography>
+        </Alert>
+      </Container>
+    )
+  }
+
+  if (linkDisabled) {
+    return (
+      <Container maxWidth="lg" sx={{ py: 4 }}>
+        <Alert severity="warning" sx={{ borderRadius: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            Link Disabled
+          </Typography>
+          <Typography>
+            This shareable link is currently disabled. Please contact the report owner to enable it.
           </Typography>
         </Alert>
       </Container>
@@ -220,8 +299,13 @@ function PublicReportingDashboard() {
           color: brandTheme.palette.text.primary,
         }}
       >
-        {/* Pass slug to a modified ReportingDashboard that accepts slug prop */}
-        <ReportingDashboard publicSlug={slug} brandInfo={brandInfo} />
+        {/* Pass slug and date range to ReportingDashboard */}
+        <ReportingDashboard 
+          publicSlug={slug} 
+          brandInfo={brandInfo}
+          publicStartDate={effectiveStartDate || undefined}
+          publicEndDate={effectiveEndDate || undefined}
+        />
       </Box>
     </ThemeProvider>
   )
