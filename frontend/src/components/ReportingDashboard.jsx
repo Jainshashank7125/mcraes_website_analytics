@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef,useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import {
   Box,
@@ -118,6 +118,13 @@ const KPI_ORDER = [
   "google_ranking_change",
   "all_keywords_ranking",
   "keyword_ranking_change_and_volume",
+  "average_google_ranking",
+  "average_bing_ranking",
+  "average_search_volume",
+  "top_10_visibility_percentage",
+  "improving_keywords_count",
+  "declining_keywords_count",
+  "stable_keywords_count",
   // Scrunch KPIs
   // 'influencer_reach', 'scrunch_engagement_rate', 'total_interactions', 'cost_per_engagement', // COMMENTED OUT: Estimated KPIs (not 100% accurate from source)
   "total_citations",
@@ -197,6 +204,41 @@ const KPI_METADATA = {
     label: "Keyword Ranking Change and Volume",
     source: "AgencyAnalytics",
     icon: "BarChart",
+  },
+  average_google_ranking: {
+    label: "Avg Google Ranking",
+    source: "AgencyAnalytics",
+    icon: "Search",
+  },
+  average_bing_ranking: {
+    label: "Avg Bing Ranking",
+    source: "AgencyAnalytics",
+    icon: "Search",
+  },
+  average_search_volume: {
+    label: "Avg Search Volume",
+    source: "AgencyAnalytics",
+    icon: "Search",
+  },
+  top_10_visibility_percentage: {
+    label: "Top 10 Visibility %",
+    source: "AgencyAnalytics",
+    icon: "TrendingUp",
+  },
+  improving_keywords_count: {
+    label: "Improving Keywords",
+    source: "AgencyAnalytics",
+    icon: "TrendingUp",
+  },
+  declining_keywords_count: {
+    label: "Declining Keywords",
+    source: "AgencyAnalytics",
+    icon: "TrendingDown",
+  },
+  stable_keywords_count: {
+    label: "Stable Keywords",
+    source: "AgencyAnalytics",
+    icon: "Insights",
   },
   // Scrunch KPIs
   // 'influencer_reach': { label: 'Influencer Reach', source: 'Scrunch', icon: 'People' }, // COMMENTED OUT: Estimated KPI
@@ -319,6 +361,16 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
   const [publicVisibleSections, setPublicVisibleSections] = useState(null);
   const [publicSelectedCharts, setPublicSelectedCharts] = useState(null);
   const theme = useTheme();
+
+  // Derive client id for prompts analytics in public mode (dashboard link slug) or auth mode
+  const promptsClientId = useMemo(() => {
+    if (selectedClientId) return selectedClientId;
+    return (
+      publicBrandInfo?.dashboard_link?.client_id ||
+      publicBrandInfo?.clientData?.id ||
+      null
+    );
+  }, [selectedClientId, publicBrandInfo?.dashboard_link?.client_id, publicBrandInfo?.clientData?.id]);
 
   // Loading captions for public reporting page
   const loadingCaptions = [
@@ -763,8 +815,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
           // Generate URL with date range
           const baseUrl = window.location.origin;
           const urlParams = new URLSearchParams();
-          if (savedStartDate) urlParams.append('startDate', savedStartDate);
-          if (savedEndDate) urlParams.append('endDate', savedEndDate);
+          if (savedStartDate) urlParams.append('from', savedStartDate);
+          if (savedEndDate) urlParams.append('to', savedEndDate);
           const queryString = urlParams.toString();
           const url = `${baseUrl}/reporting/client/${selectedBrandSlug}${queryString ? `?${queryString}` : ''}`;
           setShareableUrl(url);
@@ -784,8 +836,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
           setShareDialogEndDate(endDate);
           const baseUrl = window.location.origin;
           const urlParams = new URLSearchParams();
-          if (startDate) urlParams.append('startDate', startDate);
-          if (endDate) urlParams.append('endDate', endDate);
+          if (startDate) urlParams.append('from', startDate);
+          if (endDate) urlParams.append('to', endDate);
           const queryString = urlParams.toString();
           const url = `${baseUrl}/reporting/client/${selectedBrandSlug}${queryString ? `?${queryString}` : ''}`;
           setShareableUrl(url);
@@ -797,8 +849,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
         setShareDialogEndDate(endDate);
         const baseUrl = window.location.origin;
         const urlParams = new URLSearchParams();
-        if (startDate) urlParams.append('startDate', startDate);
-        if (endDate) urlParams.append('endDate', endDate);
+        if (startDate) urlParams.append('from', startDate);
+        if (endDate) urlParams.append('to', endDate);
         const queryString = urlParams.toString();
         const url = `${baseUrl}/reporting/client/${selectedBrandSlug}${queryString ? `?${queryString}` : ''}`;
         setShareableUrl(url);
@@ -815,8 +867,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
       // Update URL immediately
       const baseUrl = window.location.origin;
       const urlParams = new URLSearchParams();
-      if (shareDialogStartDate) urlParams.append('startDate', shareDialogStartDate);
-      if (shareDialogEndDate) urlParams.append('endDate', shareDialogEndDate);
+      if (shareDialogStartDate) urlParams.append('from', shareDialogStartDate);
+      if (shareDialogEndDate) urlParams.append('to', shareDialogEndDate);
       const queryString = urlParams.toString();
       const url = `${baseUrl}/reporting/client/${selectedBrandSlug}${queryString ? `?${queryString}` : ''}`;
       setShareableUrl(url);
@@ -844,8 +896,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
       const baseUrl = window.location.origin;
       // Include date range in regenerated URL
       const urlParams = new URLSearchParams();
-      if (shareDialogStartDate) urlParams.append('startDate', shareDialogStartDate);
-      if (shareDialogEndDate) urlParams.append('endDate', shareDialogEndDate);
+      if (shareDialogStartDate) urlParams.append('from', shareDialogStartDate);
+      if (shareDialogEndDate) urlParams.append('to', shareDialogEndDate);
       const queryString = urlParams.toString();
       const newUrl = `${baseUrl}${result.shareable_url}${queryString ? `?${queryString}` : ''}`;
       setShareableUrl(newUrl);
@@ -4646,8 +4698,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
                           {/* Note: PromptsAnalyticsTable is always shown if section is visible - it's part of the Scrunch AI section */}
                           {(!isPublic || isChartVisible("top_performing_prompts") || shouldShowSectionKPIs("scrunch_ai")) && (
                             <PromptsAnalyticsTable
-                              clientId={selectedClientId}
-                              slug={publicSlug}
+                              clientId={promptsClientId}
+                              slug={!promptsClientId ? publicSlug : null}
                               startDate={startDate}
                               endDate={endDate}
                             />
@@ -4688,7 +4740,10 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
                 description="Keyword rankings, search volume, and performance metrics"
               >
                 <Box sx={{ mt: -3 }}>
-                  <KeywordsDashboard clientId={selectedClientId} />
+                  <KeywordsDashboard
+                    clientId={selectedClientId}
+                    selectedKPIs={isPublic ? publicKPISelections || selectedKPIs : new Set(KPI_ORDER)}
+                  />
                 </Box>
               </SectionContainer>
             )}
@@ -5430,7 +5485,13 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
                               {sectionKPIs.map((key) => {
                                 const metadata = KPI_METADATA[key];
                                 const kpi = dashboardData?.kpis?.[key];
-                                const isAvailable = !!kpi;
+                                // Auth view: always allow selecting KPIs (so user can configure public view)
+                                // Public view: allow selection if KPI exists or is one of our keyword/agency/scrunch KPIs
+                                const isKeywordSection = section.key === "keywords";
+                                const isAgencySection = section.key === "agency_analytics";
+                                const isScrunchSection = section.key === "scrunch_ai";
+                                const allowPublicOverride = isPublic && (isKeywordSection || isAgencySection || isScrunchSection);
+                                const isAvailable = !isPublic || !!kpi || allowPublicOverride;
 
                                 return (
                                   <FormControlLabel

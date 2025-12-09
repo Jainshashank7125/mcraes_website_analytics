@@ -705,6 +705,8 @@ export const keywordsAPI = {
     if (filters.tags) params.append('tags', filters.tags)
     if (filters.language) params.append('language', filters.language)
     if (filters.search) params.append('search', filters.search)
+    if (filters.start_date) params.append('start_date', filters.start_date)
+    if (filters.end_date) params.append('end_date', filters.end_date)
     if (filters.sort_by) params.append('sort_by', filters.sort_by)
     if (filters.sort_order) params.append('sort_order', filters.sort_order)
     if (filters.page) params.append('page', filters.page)

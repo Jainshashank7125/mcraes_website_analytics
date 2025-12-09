@@ -30,8 +30,9 @@ function PublicReportingDashboard() {
   const theme = useTheme()
   
   // Read date range from URL params, fallback to saved client dates
-  const urlStartDate = searchParams.get('startDate')
-  const urlEndDate = searchParams.get('endDate')
+  // Accept both new `from`/`to` params and legacy `startDate`/`endDate`
+  const urlStartDate = searchParams.get('from') || searchParams.get('startDate')
+  const urlEndDate = searchParams.get('to') || searchParams.get('endDate')
   
   // Use saved client dates if URL params are not provided
   const effectiveStartDate = useMemo(() => {
