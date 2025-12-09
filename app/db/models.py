@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, ARRAY, JSON, Enum, BigInteger, Numeric, Date
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, ARRAY, JSON, Enum, BigInteger, Numeric, Date, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -201,9 +201,32 @@ class Client(Base):
     version = Column(Integer, nullable=False, default=1, index=True)
     last_modified_by = Column(String, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, index=True)
+    report_start_date = Column(Date, nullable=True)
+    report_end_date = Column(Date, nullable=True)
     
     def __repr__(self):
         return f"<Client(id={self.id}, company_name='{self.company_name}', version={self.version}, is_active={self.is_active})>"
+
+
+class DashboardLink(Base):
+    """Shareable dashboard links per client"""
+    __tablename__ = "dashboard_links"
+    __table_args__ = (
+        UniqueConstraint('client_id', 'start_date', 'end_date', name='uq_dashboard_links_client_dates'),
+    )
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    slug = Column(String, unique=True, nullable=False, index=True)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    def __repr__(self):
+        return f"<DashboardLink(id={self.id}, client_id={self.client_id}, slug='{self.slug}', enabled={self.enabled})>"
 
 
 class ClientCampaign(Base):

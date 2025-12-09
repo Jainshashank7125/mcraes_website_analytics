@@ -574,6 +574,24 @@ export const clientAPI = {
     return response.data
   },
 
+  // Get dashboard link by slug (public)
+  getDashboardLinkBySlug: async (slug) => {
+    const response = await api.get(`/api/v1/data/dashboard-links/${slug}`)
+    return response.data
+  },
+
+  // List dashboard links for a client (admin)
+  listDashboardLinks: async (clientId) => {
+    const response = await api.get(`/api/v1/data/clients/${clientId}/dashboard-links`)
+    return response.data
+  },
+
+  // Create or update a dashboard link (admin)
+  upsertDashboardLink: async (clientId, payload) => {
+    const response = await api.post(`/api/v1/data/clients/${clientId}/dashboard-links`, payload)
+    return response.data
+  },
+
   // Update client mappings
   updateClientMappings: async (clientId, mappings) => {
     const response = await api.put(`/api/v1/data/clients/${clientId}/mappings`, mappings)
@@ -583,6 +601,12 @@ export const clientAPI = {
   // Update client theme
   updateClientTheme: async (clientId, theme) => {
     const response = await api.put(`/api/v1/data/clients/${clientId}/theme`, theme)
+    return response.data
+  },
+
+  // Update client report dates
+  updateClientReportDates: async (clientId, reportDates) => {
+    const response = await api.put(`/api/v1/data/clients/${clientId}/report-dates`, reportDates)
     return response.data
   },
 

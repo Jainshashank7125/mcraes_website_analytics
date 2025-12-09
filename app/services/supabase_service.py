@@ -3,14 +3,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, Table, MetaData, select, update, insert, delete, and_, or_, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.db.database import get_db
-from app.db.models import Brand, Prompt, Response, Citation, AuditLog, Client 
+from app.db.models import Brand, Prompt, Response, Citation, AuditLog, Client, DashboardLink
 from app.core.database import get_supabase_client
 import logging
 import re
 import unicodedata
 import uuid
 from urllib.parse import urlparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 logger = logging.getLogger(__name__)
 
@@ -1727,7 +1727,17 @@ class SupabaseService:
                 row = result.first()
             
             if row:
-                return dict(row._mapping)
+                snapshot = dict(row._mapping)
+                # Convert date objects to strings if needed (PostgreSQL DATE columns return date objects)
+                if isinstance(snapshot.get("period_start_date"), date):
+                    snapshot["period_start_date"] = snapshot["period_start_date"].strftime("%Y-%m-%d")
+                if isinstance(snapshot.get("period_end_date"), date):
+                    snapshot["period_end_date"] = snapshot["period_end_date"].strftime("%Y-%m-%d")
+                if isinstance(snapshot.get("prev_period_start_date"), date):
+                    snapshot["prev_period_start_date"] = snapshot["prev_period_start_date"].strftime("%Y-%m-%d")
+                if isinstance(snapshot.get("prev_period_end_date"), date):
+                    snapshot["prev_period_end_date"] = snapshot["prev_period_end_date"].strftime("%Y-%m-%d")
+                return snapshot
             return None
         except Exception as e:
             logger.error(f"Error getting latest GA4 KPI snapshot for brand {brand_id}, client {client_id}: {str(e)}")
@@ -1821,6 +1831,11 @@ class SupabaseService:
             
             if row:
                 snapshot = dict(row._mapping)
+                # Convert date objects to strings if needed (PostgreSQL DATE columns return date objects)
+                if isinstance(snapshot.get("period_start_date"), date):
+                    snapshot["period_start_date"] = snapshot["period_start_date"].strftime("%Y-%m-%d")
+                if isinstance(snapshot.get("period_end_date"), date):
+                    snapshot["period_end_date"] = snapshot["period_end_date"].strftime("%Y-%m-%d")
                 # Verify the snapshot's date range matches what we need (approximately 30 days)
                 snapshot_start = datetime.strptime(str(snapshot["period_start_date"]), "%Y-%m-%d")
                 snapshot_end = datetime.strptime(str(snapshot["period_end_date"]), "%Y-%m-%d")
@@ -2781,6 +2796,43 @@ class SupabaseService:
             logger.error(f"Error updating client theme: {str(e)}")
             return False
     
+    def update_client_report_dates(self, client_id: int, report_start_date: Optional[date] = None, report_end_date: Optional[date] = None, user_email: Optional[str] = None) -> bool:
+        """Update client report date range using SQLAlchemy Core (local PostgreSQL)"""
+        try:
+            table = self._get_table("clients")
+            
+            update_data = {
+                "updated_by": user_email,
+                "last_modified_by": user_email,
+                "updated_at": datetime.now()
+            }
+            
+            if report_start_date is not None:
+                update_data["report_start_date"] = report_start_date
+            if report_end_date is not None:
+                update_data["report_end_date"] = report_end_date
+            
+            # Increment version for optimistic locking
+            update_data["version"] = table.c.version + 1
+            
+            # Remove None values
+            clean_data = {k: v for k, v in update_data.items() if v is not None}
+            
+            update_stmt = update(table).where(table.c.id == client_id).values(**clean_data)
+            result = self.db.execute(update_stmt)
+            self.db.commit()
+            
+            if result.rowcount == 0:
+                logger.warning(f"No client found with ID {client_id} to update report dates")
+                return False
+            
+            logger.info(f"Updated client {client_id} report dates: start={report_start_date}, end={report_end_date}")
+            return True
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error updating client report dates: {str(e)}")
+            return False
+    
     def get_client_campaigns(self, client_id: int) -> List[Dict]:
         """Get all campaigns linked to a client using SQLAlchemy Core (local PostgreSQL)"""
         try:
@@ -2823,6 +2875,104 @@ class SupabaseService:
             logger.error(f"Error getting client campaigns: {str(e)}")
             return []
     
+    def list_dashboard_links_for_client(self, client_id: int) -> List[Dict]:
+        """List all dashboard links for a client ordered by creation time"""
+        try:
+            table = self._get_table("dashboard_links")
+            query = (
+                select(table)
+                .where(table.c.client_id == client_id)
+                .order_by(table.c.created_at.desc())
+            )
+            result = self.db.execute(query)
+            return [dict(row._mapping) for row in result]
+        except Exception as e:
+            logger.error(f"Error listing dashboard links for client {client_id}: {str(e)}")
+            return []
+
+    def get_dashboard_link_by_slug(self, slug: str) -> Optional[Dict]:
+        """Get a dashboard link by slug"""
+        try:
+            table = self._get_table("dashboard_links")
+            query = select(table).where(table.c.slug == slug).limit(1)
+            result = self.db.execute(query).first()
+            if result:
+                return dict(result._mapping)
+            return None
+        except Exception as e:
+            logger.error(f"Error getting dashboard link by slug {slug}: {str(e)}")
+            return None
+
+    def disable_dashboard_link(self, link_id: int, user_email: Optional[str] = None) -> bool:
+        """Disable a dashboard link"""
+        try:
+            table = self._get_table("dashboard_links")
+            update_stmt = (
+                update(table)
+                .where(table.c.id == link_id)
+                .values(enabled=False, updated_at=datetime.now())
+            )
+            result = self.db.execute(update_stmt)
+            self.db.commit()
+            return result.rowcount > 0
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error disabling dashboard link {link_id}: {str(e)}")
+            return False
+
+    def upsert_dashboard_link(
+        self,
+        client_id: int,
+        start_date: date,
+        end_date: date,
+        slug: Optional[str] = None,
+        enabled: bool = True,
+        expires_at: Optional[datetime] = None,
+        user_email: Optional[str] = None
+    ) -> Optional[Dict]:
+        """Create or update a dashboard link for a client based on date range"""
+        try:
+            table = self._get_table("dashboard_links")
+            link_slug = slug or self.generate_client_slug()
+            now = datetime.now()
+
+            link_data = {
+                "client_id": client_id,
+                "slug": link_slug,
+                "start_date": start_date,
+                "end_date": end_date,
+                "enabled": enabled,
+                "expires_at": expires_at,
+                "updated_at": now,
+            }
+
+            insert_stmt = pg_insert(table).values(
+                **link_data,
+                created_at=now
+            ).returning(table)
+
+            insert_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=['client_id', 'start_date', 'end_date'],
+                set_={
+                    "slug": insert_stmt.excluded.slug,
+                    "enabled": insert_stmt.excluded.enabled,
+                    "expires_at": insert_stmt.excluded.expires_at,
+                    "updated_at": insert_stmt.excluded.updated_at,
+                }
+            )
+
+            result = self.db.execute(insert_stmt)
+            self.db.commit()
+
+            row = result.fetchone()
+            if row:
+                return dict(row._mapping)
+            return None
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error upserting dashboard link for client {client_id}: {str(e)}")
+            return None
+
     # =====================================================
     # Agency Analytics Methods
     # =====================================================
