@@ -1681,88 +1681,141 @@ async def get_reporting_dashboard(
             
             if campaign_links:
                 campaign_ids = [link["campaign_id"] for link in campaign_links]
-                logger.info(f"Processing {len(campaign_ids)} campaigns: {campaign_ids}")
+                logger.info(f"Processing {len(campaign_ids)} campaigns: {campaign_ids} for date range: {start_date} to {end_date}")
                 
-                # Get keyword ranking summaries for all campaigns
+                # Use daily keyword rankings table with date range filtering (same approach as chart data)
                 # NOTE: Only using 100% accurate data from Agency Analytics source - no estimations
+                rankings_table = supabase._get_table("agency_analytics_keyword_rankings")
+                keywords_table = supabase._get_table("agency_analytics_keywords")
+                
+                # Build conditions for current period with date range filtering
+                ranking_conditions = [
+                    rankings_table.c.date >= start_date,
+                    rankings_table.c.date <= end_date,
+                    rankings_table.c.campaign_id.in_(campaign_ids),
+                    rankings_table.c.google_ranking != None,
+                    rankings_table.c.google_ranking > 0,
+                    rankings_table.c.google_ranking <= 100,  # Only top 100
+                    rankings_table.c.volume != None,
+                    rankings_table.c.volume > 0
+                ]
+                
+                # Aggregate rankings and volumes for current period
+                rankings_agg_query = (
+                    select(
+                        rankings_table.c.keyword_id.label("keyword_id"),
+                        func.avg(rankings_table.c.google_ranking).label("avg_ranking"),
+                        func.avg(rankings_table.c.volume).label("avg_volume"),
+                        func.count(rankings_table.c.id).label("row_count")
+                    )
+                    .where(and_(*ranking_conditions))
+                    .group_by(rankings_table.c.keyword_id)
+                )
+                rankings_agg = [dict(row._mapping) for row in db.execute(rankings_agg_query)]
+                
+                # Calculate totals for current period
                 total_rankings = 0
                 ranking_sum = 0
                 total_search_volume = 0
-                total_ranking_change = 0
-                ranking_change_count = 0
+                keyword_rankings_map = {}  # Track rankings per keyword for change calculation
                 
-                for campaign_id in campaign_ids:
-                    # Query keyword ranking summaries using SQLAlchemy Core
-                    summaries_table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
-                    query = select(summaries_table).where(summaries_table.c.campaign_id == campaign_id)
-                    result = supabase.db.execute(query)
-                    summaries = [dict(row._mapping) for row in result]
+                for row in rankings_agg:
+                    avg_rank = row.get("avg_ranking")
+                    if avg_rank is None or avg_rank <= 0:
+                        continue
+                    keyword_id = row.get("keyword_id")
+                    avg_volume = row.get("avg_volume") or 0
+                    row_count = row.get("row_count", 0)
                     
-                    logger.info(f"Found {len(summaries)} keyword summaries for campaign {campaign_id}")
-                    
-                    for summary in summaries:
-                        search_volume = summary.get("search_volume", 0) or 0
-                        ranking = summary.get("google_ranking") or summary.get("google_mobile_ranking") or 999
-                        
-                        if ranking <= 100:  # Only count keywords ranking in top 100
-                            # Calculate average ranking (100% from source data)
-                            ranking_sum += ranking
-                            total_rankings += 1
-                            
-                            # Track search volume (100% from source data)
-                            total_search_volume += search_volume
-                            
-                            # Track ranking change if available (100% from source data)
-                            ranking_change = summary.get("ranking_change")
-                            if ranking_change is not None:
-                                total_ranking_change += ranking_change
-                                ranking_change_count += 1
+                    ranking_sum += avg_rank * row_count  # Weighted sum for average calculation
+                    total_rankings += row_count
+                    # For search volume, use the average volume (since it's the same for all rows of a keyword)
+                    # We'll sum unique keyword volumes, not multiply by row_count
+                    total_search_volume += avg_volume
+                    keyword_rankings_map[keyword_id] = {
+                        "avg_ranking": float(avg_rank),
+                        "avg_volume": float(avg_volume),
+                        "row_count": row_count
+                    }
                 
                 # Calculate average keyword rank
                 avg_keyword_rank = (ranking_sum / total_rankings) if total_rankings > 0 else 0
                 
-                # Calculate average ranking change
-                avg_ranking_change = (total_ranking_change / ranking_change_count) if ranking_change_count > 0 else 0
+                logger.info(f"[Agency Analytics KPI] Current period ({start_date} to {end_date}): total_rankings={total_rankings}, avg_keyword_rank={avg_keyword_rank}, total_search_volume={total_search_volume}")
                 
-                logger.info(f"Agency Analytics KPI calculations: total_rankings={total_rankings}, avg_keyword_rank={avg_keyword_rank}, total_search_volume={total_search_volume}, avg_ranking_change={avg_ranking_change}")
+                # Calculate previous period (same duration as current period)
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                period_duration = (end_dt - start_dt).days + 1
+                prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
                 
-                # Get previous period data for change calculation
-                prev_start = (datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=60)).strftime("%Y-%m-%d")
-                prev_end = (datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+                logger.info(f"[Agency Analytics KPI] Previous period: {prev_start} to {prev_end} (same duration: {period_duration} days)")
                 
-                # Calculate previous period metrics for comparison
+                # Build conditions for previous period
+                prev_ranking_conditions = [
+                    rankings_table.c.date >= prev_start,
+                    rankings_table.c.date <= prev_end,
+                    rankings_table.c.campaign_id.in_(campaign_ids),
+                    rankings_table.c.google_ranking != None,
+                    rankings_table.c.google_ranking > 0,
+                    rankings_table.c.google_ranking <= 100,
+                    rankings_table.c.volume != None,
+                    rankings_table.c.volume > 0
+                ]
+                
+                # Aggregate rankings for previous period
+                prev_rankings_agg_query = (
+                    select(
+                        rankings_table.c.keyword_id.label("keyword_id"),
+                        func.avg(rankings_table.c.google_ranking).label("avg_ranking"),
+                        func.avg(rankings_table.c.volume).label("avg_volume"),
+                        func.count(rankings_table.c.id).label("row_count")
+                    )
+                    .where(and_(*prev_ranking_conditions))
+                    .group_by(rankings_table.c.keyword_id)
+                )
+                prev_rankings_agg = [dict(row._mapping) for row in db.execute(prev_rankings_agg_query)]
+                
+                # Calculate totals for previous period
                 prev_total_rankings = 0
                 prev_ranking_sum = 0
-                prev_total_ranking_change = 0
-                prev_ranking_change_count = 0
                 prev_total_search_volume = 0
+                prev_keyword_rankings_map = {}
                 
-                for campaign_id in campaign_ids:
-                    # Get previous period summaries - use the same approach, get all summaries
-                    # For comparison, we'll use the same summaries (they represent latest state)
-                    # In a real scenario, you might want to query historical daily rankings for previous period
-                    summaries_table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
-                    prev_summaries_query = select(summaries_table).where(
-                        summaries_table.c.campaign_id == campaign_id
-                    )
-                    prev_summaries_result = db.execute(prev_summaries_query)
-                    prev_summaries = [dict(row._mapping) for row in prev_summaries_result]
+                for row in prev_rankings_agg:
+                    avg_rank = row.get("avg_ranking")
+                    if avg_rank is None or avg_rank <= 0:
+                        continue
+                    keyword_id = row.get("keyword_id")
+                    avg_volume = row.get("avg_volume") or 0
+                    row_count = row.get("row_count", 0)
                     
-                    for summary in prev_summaries:
-                        ranking = summary.get("google_ranking") or summary.get("google_mobile_ranking") or 999
-                        if ranking <= 100:
-                            prev_ranking_sum += ranking
-                            prev_total_rankings += 1
-                        
-                        prev_total_search_volume += summary.get("search_volume", 0) or 0
-                        
-                        ranking_change = summary.get("ranking_change")
-                        if ranking_change is not None:
-                            prev_total_ranking_change += ranking_change
-                            prev_ranking_change_count += 1
+                    prev_ranking_sum += avg_rank * row_count
+                    prev_total_rankings += row_count
+                    # For search volume, use the average volume (since it's the same for all rows of a keyword)
+                    prev_total_search_volume += avg_volume
+                    prev_keyword_rankings_map[keyword_id] = {
+                        "avg_ranking": float(avg_rank),
+                        "avg_volume": float(avg_volume),
+                        "row_count": row_count
+                    }
                 
                 prev_avg_rank = (prev_ranking_sum / prev_total_rankings) if prev_total_rankings > 0 else 0
-                prev_avg_ranking_change = (prev_total_ranking_change / prev_ranking_change_count) if prev_ranking_change_count > 0 else 0
+                
+                logger.info(f"[Agency Analytics KPI] Previous period: total_rankings={prev_total_rankings}, avg_keyword_rank={prev_avg_rank}, total_search_volume={prev_total_search_volume}")
+                
+                # Calculate ranking change per keyword (for keywords present in both periods)
+                total_ranking_change = 0
+                ranking_change_count = 0
+                for keyword_id in set(keyword_rankings_map.keys()) & set(prev_keyword_rankings_map.keys()):
+                    current_rank = keyword_rankings_map[keyword_id]["avg_ranking"]
+                    prev_rank = prev_keyword_rankings_map[keyword_id]["avg_ranking"]
+                    ranking_change = prev_rank - current_rank  # Positive means improvement
+                    total_ranking_change += ranking_change
+                    ranking_change_count += 1
+                
+                avg_ranking_change = (total_ranking_change / ranking_change_count) if ranking_change_count > 0 else 0
                 
                 # Calculate changes
                 def calculate_change(current, previous):
@@ -1778,30 +1831,40 @@ async def get_reporting_dashboard(
                 avg_rank_change = calculate_change(avg_keyword_rank, prev_avg_rank)
                 search_volume_change = calculate_change(total_search_volume, prev_total_search_volume)
                 ranking_count_change = calculate_change(total_rankings, prev_total_rankings)
-                ranking_change_change = calculate_change(avg_ranking_change, prev_avg_ranking_change)
+                ranking_change_change = calculate_change(avg_ranking_change, 0) if ranking_change_count > 0 else 0
                 
-                # Collect all keywords with their rankings for "All Keywords ranking" KPI
+                logger.info(f"[Agency Analytics KPI] Changes: avg_rank_change={avg_rank_change}%, search_volume_change={search_volume_change}%, ranking_count_change={ranking_count_change}%")
+                
+                # Collect all keywords with their rankings for "All Keywords ranking" KPI (from current period)
                 all_keywords_rankings = []
-                for campaign_id in campaign_ids:
-                    # Get all summaries for the campaign - they represent the latest state
-                    summaries_table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
-                    summaries_query = select(summaries_table).where(
-                        summaries_table.c.campaign_id == campaign_id
-                    )
-                    summaries_result = db.execute(summaries_query)
-                    summaries = [dict(row._mapping) for row in summaries_result]
+                keyword_ids = list(keyword_rankings_map.keys())
+                keyword_phrase_map = {}
+                if keyword_ids:
+                    keywords_query = select(
+                        keywords_table.c.id,
+                        keywords_table.c.keyword_phrase
+                    ).where(keywords_table.c.id.in_(keyword_ids))
+                    for row in db.execute(keywords_query):
+                        keyword_phrase_map[row.id] = row.keyword_phrase
+                
+                for keyword_id, data in keyword_rankings_map.items():
+                    phrase = keyword_phrase_map.get(keyword_id) or f"Keyword {keyword_id}"
+                    avg_rank = data["avg_ranking"]
+                    avg_volume = data["avg_volume"]
                     
-                    for summary in summaries:
-                        keyword_phrase = summary.get("keyword_phrase") or f"Keyword {summary.get('keyword_id', 'N/A')}"
-                        ranking = summary.get("google_ranking") or summary.get("google_mobile_ranking")
-                        if ranking is not None and ranking <= 100:
-                            all_keywords_rankings.append({
-                                "keyword": keyword_phrase,
-                                "ranking": ranking,
-                                "search_volume": summary.get("search_volume", 0) or 0,
-                                "ranking_change": summary.get("ranking_change"),
-                                "keyword_id": summary.get("keyword_id")
-                            })
+                    # Calculate ranking change if available in previous period
+                    ranking_change = None
+                    if keyword_id in prev_keyword_rankings_map:
+                        prev_rank = prev_keyword_rankings_map[keyword_id]["avg_ranking"]
+                        ranking_change = prev_rank - avg_rank  # Positive means improvement
+                    
+                    all_keywords_rankings.append({
+                        "keyword": phrase,
+                        "ranking": round(avg_rank, 1),
+                        "search_volume": int(avg_volume),
+                        "ranking_change": round(ranking_change, 1) if ranking_change is not None else None,
+                        "keyword_id": keyword_id
+                    })
                 
                 # Sort by ranking (best first)
                 all_keywords_rankings.sort(key=lambda x: x["ranking"] if x["ranking"] else 999)

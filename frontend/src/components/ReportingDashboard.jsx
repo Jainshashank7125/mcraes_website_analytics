@@ -129,7 +129,7 @@ const KPI_ORDER = [
   "google_ranking",
   "google_ranking_change",
   "all_keywords_ranking",
-  "keyword_ranking_change_and_volume",
+  // "keyword_ranking_change_and_volume",
   "average_google_ranking",
   "average_bing_ranking",
   "average_search_volume",
@@ -212,11 +212,11 @@ const KPI_METADATA = {
     source: "AgencyAnalytics",
     icon: "List",
   },
-  keyword_ranking_change_and_volume: {
-    label: "Keyword Ranking Change and Volume",
-    source: "AgencyAnalytics",
-    icon: "BarChart",
-  },
+  // keyword_ranking_change_and_volume: {
+  //   label: "Keyword Ranking Change and Volume",
+  //   source: "AgencyAnalytics",
+  //   icon: "BarChart",
+  // },
   average_google_ranking: {
     label: "Avg Google Ranking",
     source: "AgencyAnalytics",

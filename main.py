@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
     # Shutdown (if needed)
 
 app = FastAPI(
-    title="McRAE's Website Analytics API",
+    title="MacRAE's Website Analytics API",
     description="API server to sync Scrunch AI data to Supabase",
     version="1.0.0",
     lifespan=lifespan
