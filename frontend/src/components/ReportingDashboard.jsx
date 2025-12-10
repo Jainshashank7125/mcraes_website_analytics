@@ -3605,7 +3605,7 @@ function ReportingDashboard({
                           </Grid>
 
                           {/* Conversions Comparison Chart */}
-                          {dashboardData.chart_data.ga4_daily_comparison.some(
+                          {/* {dashboardData.chart_data.ga4_daily_comparison.some(
                             (d) =>
                               d.current_conversions > 0 ||
                               d.previous_conversions > 0
@@ -3665,7 +3665,7 @@ function ReportingDashboard({
                                 />
                               </ChartCard>
                             </Grid>
-                          )}
+                          )} */}
 
                           {/* Revenue Comparison Chart */}
                           {dashboardData.chart_data.ga4_daily_comparison.some(

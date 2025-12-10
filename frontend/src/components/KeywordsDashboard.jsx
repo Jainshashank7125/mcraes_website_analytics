@@ -556,7 +556,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
           >
             <MenuItem value="volume">Volume</MenuItem>
             <MenuItem value="google_ranking">Google Ranking</MenuItem>
-            <MenuItem value="bing_ranking">Bing Ranking</MenuItem>
+            {/* <MenuItem value="bing_ranking">Bing Ranking</MenuItem> */}
             <MenuItem value="keyword_phrase">Keyword</MenuItem>
           </Select>
         </FormControl>
