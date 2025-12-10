@@ -21,6 +21,8 @@ async def sync_all_background(
     user_id: str,
     user_email: str,
     sync_mode: str = "complete",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     request = None
 ):
     """Background task to sync all Scrunch AI data"""
@@ -134,8 +136,12 @@ async def sync_all_background(
                 continue
             
             try:
-                logger.info(f"[Job {job_id}] Syncing responses for brand {brand_id_val}")
-                responses = await client.get_all_responses_paginated(brand_id=brand_id_val)
+                logger.info(f"[Job {job_id}] Syncing responses for brand {brand_id_val}" + (f" (date range: {start_date} to {end_date})" if start_date or end_date else ""))
+                responses = await client.get_all_responses_paginated(
+                    brand_id=brand_id_val,
+                    start_date=start_date,
+                    end_date=end_date
+                )
                 
                 if sync_job_service.is_cancelled(job_id):
                     logger.info(f"[Job {job_id}] Job cancelled after fetching responses for brand {brand_id_val}")
@@ -191,7 +197,9 @@ async def sync_all_background(
                 "total_responses": total_responses,
                 "prompts_by_brand": prompts_by_brand,
                 "responses_by_brand": responses_by_brand,
-                "job_id": job_id
+                "job_id": job_id,
+                "start_date": start_date,
+                "end_date": end_date
             },
             request=request,
             db=db
@@ -858,6 +866,8 @@ async def sync_agency_analytics_background(
     sync_mode: str = "complete",
     campaign_id: Optional[int] = None,
     auto_match_brands: bool = True,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     request = None
 ):
     """Background task to sync Agency Analytics data"""
@@ -1001,16 +1011,21 @@ async def sync_agency_analytics_background(
                 # Step 3a: Fetch campaign rankings
                 current_step_num += 1
                 progress = 10 + int((current_step_num / total_steps) * 80)
+                date_range_info = f" (date range: {start_date} to {end_date})" if start_date or end_date else ""
                 await sync_job_service.update_job_status(
                     job_id, "running", progress=progress,
-                    current_step=f"[{idx + 1}/{active_count}] Fetching rankings for: {company_name}..."
+                    current_step=f"[{idx + 1}/{active_count}] Fetching rankings for: {company_name}{date_range_info}..."
                 )
                 
                 if sync_job_service.is_cancelled(job_id):
                     logger.info(f"[Job {job_id}] Job cancelled before fetching rankings for {company_name}")
                     return
                 
-                rankings = await client.get_campaign_rankings(campaign_id_val)
+                rankings = await client.get_campaign_rankings(
+                    campaign_id_val,
+                    start_date=start_date,
+                    end_date=end_date
+                )
                 
                 if sync_job_service.is_cancelled(job_id):
                     logger.info(f"[Job {job_id}] Job cancelled after fetching rankings for {company_name}")
@@ -1074,7 +1089,11 @@ async def sync_agency_analytics_background(
                         keyword_phrase = keyword.get("keyword_phrase", "")
                         
                         try:
-                            keyword_rankings = await client.get_keyword_rankings(keyword_id)
+                            keyword_rankings = await client.get_keyword_rankings(
+                                keyword_id,
+                                start_date=start_date,
+                                end_date=end_date
+                            )
                             
                             if sync_job_service.is_cancelled(job_id):
                                 logger.info(f"[Job {job_id}] Job cancelled after fetching rankings for keyword {keyword_id}")
@@ -1237,7 +1256,9 @@ async def sync_agency_analytics_background(
                 "auto_match_brands": auto_match_brands,
                 "total_synced": total_synced,
                 "campaign_results": campaign_results,
-                "job_id": job_id
+                "job_id": job_id,
+                "start_date": start_date,
+                "end_date": end_date
             },
             request=request,
             db=db
