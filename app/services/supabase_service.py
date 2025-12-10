@@ -627,11 +627,22 @@ class SupabaseService:
         brand_id: Optional[int] = None,
         stage: Optional[str] = None,
         persona_id: Optional[int] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None
     ) -> Dict:
         """Get prompts with optional filters and pagination"""
         try:
+            from datetime import datetime as dt
+
+            def _parse_date(value: str, is_end: bool = False):
+                """Normalize date strings to timezone-aware boundaries."""
+                if "T" in value:
+                    return dt.fromisoformat(value.replace("Z", "+00:00"))
+                suffix = "23:59:59+00:00" if is_end else "00:00:00+00:00"
+                return dt.fromisoformat(f"{value}T{suffix}")
+
             query = self.db.query(Prompt)
             
             # Apply filters
@@ -641,6 +652,12 @@ class SupabaseService:
                 query = query.filter(Prompt.stage == stage)
             if persona_id:
                 query = query.filter(Prompt.persona_id == persona_id)
+            if start_date:
+                start_dt = _parse_date(start_date, is_end=False)
+                query = query.filter(Prompt.created_at >= start_dt)
+            if end_date:
+                end_dt = _parse_date(end_date, is_end=True)
+                query = query.filter(Prompt.created_at <= end_dt)
             
             # Get total count
             total_count = query.count()
@@ -690,6 +707,14 @@ class SupabaseService:
         """Get responses with optional filters and pagination"""
         try:
             from datetime import datetime as dt
+
+            def _parse_date(value: str, is_end: bool = False):
+                """Normalize date strings to timezone-aware boundaries."""
+                if "T" in value:
+                    return dt.fromisoformat(value.replace("Z", "+00:00"))
+                suffix = "23:59:59+00:00" if is_end else "00:00:00+00:00"
+                return dt.fromisoformat(f"{value}T{suffix}")
+
             # Query responses (citations is a JSON column, not a relationship)
             query = self.db.query(Response)
             
@@ -701,10 +726,10 @@ class SupabaseService:
             if prompt_id:
                 query = query.filter(Response.prompt_id == prompt_id)
             if start_date:
-                start_dt = dt.fromisoformat(start_date.replace('Z', '+00:00'))
+                start_dt = _parse_date(start_date, is_end=False)
                 query = query.filter(Response.created_at >= start_dt)
             if end_date:
-                end_dt = dt.fromisoformat(end_date.replace('Z', '+00:00'))
+                end_dt = _parse_date(end_date, is_end=True)
                 query = query.filter(Response.created_at <= end_dt)
             
             # Get total count (before pagination for accuracy)

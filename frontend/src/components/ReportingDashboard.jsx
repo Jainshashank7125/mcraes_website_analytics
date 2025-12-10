@@ -3900,50 +3900,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
                 )}
 
                 {/* Top Keywords Ranking - Bar Chart */}
-                {dashboardData.chart_data?.all_keywords_ranking &&
-                  dashboardData.chart_data.all_keywords_ranking.length > 0 && 
-                  isChartVisible("all_keywords_ranking") && (
-                    <ChartCard
-                      title="Top Keywords Ranking"
-                      badge={getBadgeLabel("AgencyAnalytics")}
-                      badgeColor={CHART_COLORS.agencyAnalytics.primary}
-                      height={500}
-                      animationDelay={0.2}
-                    >
-                      <BarChartEnhanced
-                              data={dashboardData.chart_data.all_keywords_ranking
-                                .slice(0, 15)
-                                .map((kw) => ({
-                                  keyword: kw.keyword || "Unknown",
-                                  rank: kw.google_rank || 0,
-                                  searchVolume: kw.search_volume || 0,
-                                }))}
-                                dataKey="keyword"
-                        horizontal={true}
-                        bars={[
-                          {
-                            dataKey: "rank",
-                            name: "Rank",
-                            color: CHART_COLORS.agencyAnalytics.primary,
-                          },
-                        ]}
-                                formatter={(value, name) => {
-                                  if (name === "rank")
-                                    return [`Position ${value}`, "Rank"];
-                                  if (name === "searchVolume")
-                            return [value.toLocaleString(), "Search Volume"];
-                                  return [value, name];
-                                }}
-                        margin={{
-                          top: 5,
-                          right: 30,
-                          left: 120,
-                          bottom: 5,
-                        }}
-                        height={400}
-                      />
-                    </ChartCard>
-                  )}
+                {/* Moved Top Keywords Ranking chart into Keywords section */}
               </Box>
             </SectionContainer>
           )}
@@ -4739,7 +4696,52 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
                 title="Keywords"
                 description="Keyword rankings, search volume, and performance metrics"
               >
-                <Box sx={{ mt: -3 }}>
+                <Box sx={{ mt: -3, display: "flex", flexDirection: "column", gap: 3 }}>
+                  {/* Top Keywords Ranking Chart */}
+                  {dashboardData?.chart_data?.all_keywords_ranking &&
+                    dashboardData.chart_data.all_keywords_ranking.length > 0 &&
+                    isChartVisible("all_keywords_ranking") && (
+                      <ChartCard
+                        title="Top Keywords Ranking"
+                        badge={getBadgeLabel("AgencyAnalytics")}
+                        badgeColor={CHART_COLORS.agencyAnalytics.primary}
+                        height={500}
+                        animationDelay={0.2}
+                      >
+                        <BarChartEnhanced
+                          data={dashboardData.chart_data.all_keywords_ranking.map((kw) => ({
+                            keyword: kw.keyword || "Unknown",
+                            avgRank: kw.average_ranking || 0,
+                            avgVolume: kw.average_search_volume || 0,
+                          }))}
+                          dataKey="keyword"
+                          horizontal={true}
+                          bars={[
+                            {
+                              dataKey: "avgRank",
+                              name: "Avg Google Ranking",
+                              color: CHART_COLORS.agencyAnalytics.primary,
+                            },
+                          ]}
+                          formatter={(value, name) => {
+                            if (name === "avgRank")
+                              return [`Position ${value.toFixed(1)}`, "Avg Google Ranking"];
+                            if (name === "avgVolume")
+                              return [value.toLocaleString(), "Avg Search Volume"];
+                            return [value, name];
+                          }}
+                          margin={{
+                            top: 5,
+                            right: 30,
+                            left: 120,
+                            bottom: 5,
+                          }}
+                          height={400}
+                        />
+                      </ChartCard>
+                    )}
+
+                  {/* Keywords Overview */}
                   <KeywordsDashboard
                     clientId={selectedClientId}
                     selectedKPIs={isPublic ? publicKPISelections || selectedKPIs : new Set(KPI_ORDER)}

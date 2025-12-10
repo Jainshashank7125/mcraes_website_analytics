@@ -50,12 +50,30 @@ async def get_prompts(
     client_id: Optional[int] = Query(None, description="Filter by client ID (maps to brand_id via scrunch_brand_id)"),
     stage: Optional[str] = Query(None, description="Filter by funnel stage"),
     persona_id: Optional[int] = Query(None, description="Filter by persona ID"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     limit: Optional[int] = Query(50, description="Number of records to return"),
     offset: Optional[int] = Query(0, description="Offset for pagination"),
     db: Session = Depends(get_db)
 ):
     """Get prompts from database. Supports both brand_id and client_id (client_id maps to brand_id via scrunch_brand_id)"""
     supabase = SupabaseService(db=db)
+    
+    # Validate date range if provided
+    if start_date and end_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+            if start_dt > end_dt:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid date range: start_date ({start_date}) must be before or equal to end_date ({end_date})"
+                )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date format. Use YYYY-MM-DD. Error: {str(e)}"
+            )
     
     # If client_id is provided, get the scrunch_brand_id from the client
     if client_id and not brand_id:
@@ -75,6 +93,8 @@ async def get_prompts(
         brand_id=brand_id,
         stage=stage,
         persona_id=persona_id,
+        start_date=start_date,
+        end_date=end_date,
         limit=limit,
         offset=offset
     )
@@ -3091,17 +3111,7 @@ async def get_reporting_dashboard(
             except Exception as e:
                 logger.warning(f"Error fetching GA4 chart data: {str(e)}")
         
-        # Get impressions vs clicks and top campaigns (Agency Analytics) using SQLAlchemy Core
-        try:
-            campaign_brands_table = supabase._get_table("agency_analytics_campaign_brands")
-            campaign_links_query = select(campaign_brands_table).where(
-                campaign_brands_table.c.brand_id == brand_id
-            )
-            campaign_links_result = db.execute(campaign_links_query)
-            campaign_links = [dict(row._mapping) for row in campaign_links_result]
-        except:
-            campaign_links = []
-        
+        # For chart data, reuse campaign_links derived above (client campaigns if client_id; brand links otherwise)
         if campaign_links:
             try:
                 campaign_ids = [link["campaign_id"] for link in campaign_links]
@@ -3121,43 +3131,68 @@ async def get_reporting_dashboard(
                 chart_data["top_campaigns"] = []  # Empty - requires estimations
                 
                 # Calculate keyword rankings performance metrics and collect all keywords
+                rankings_table = supabase._get_table("agency_analytics_keyword_rankings")
+                keywords_table = supabase._get_table("agency_analytics_keywords")
+
+                chart_all_keywords_rankings = []
                 chart_total_rankings = 0
                 chart_total_search_volume = 0
-                chart_all_keywords_rankings = []
-                
-                for campaign_id in campaign_ids:
-                    summaries_table = supabase._get_table("agency_analytics_keyword_ranking_summaries")
-                    summaries_query = select(summaries_table).where(
-                        and_(
-                            summaries_table.c.campaign_id == campaign_id,
-                            summaries_table.c.date >= start_date,
-                            summaries_table.c.date <= end_date
-                        )
+
+                # Aggregate avg ranking and avg volume per keyword across campaigns in date range
+                ranking_conditions = [
+                    rankings_table.c.date >= start_date,
+                    rankings_table.c.date <= end_date
+                ]
+                # Only consider rows with valid google_ranking > 0 to avoid zeros/nulls skewing averages
+                ranking_conditions.append(rankings_table.c.google_ranking != None)
+                ranking_conditions.append(rankings_table.c.google_ranking > 0)
+                # Require volume > 0 to align with keyword listing filters
+                ranking_conditions.append(rankings_table.c.volume != None)
+                ranking_conditions.append(rankings_table.c.volume > 0)
+                if campaign_ids:
+                    ranking_conditions.append(rankings_table.c.campaign_id.in_(campaign_ids))
+
+                rankings_agg_query = (
+                    select(
+                        rankings_table.c.keyword_id.label("keyword_id"),
+                        func.avg(rankings_table.c.google_ranking).label("avg_ranking"),
+                        func.avg(rankings_table.c.volume).label("avg_volume"),
+                        func.count(rankings_table.c.id).label("row_count")
                     )
-                    summaries_result = db.execute(summaries_query)
-                    campaign_summaries = [dict(row._mapping) for row in summaries_result]
-                    
-                    for summary in campaign_summaries:
-                        ranking = summary.get("google_ranking") or summary.get("google_mobile_ranking") or 999
-                        if ranking <= 100:
-                            chart_total_rankings += 1
-                        chart_total_search_volume += summary.get("search_volume", 0) or 0
-                        
-                        # Collect keyword data for "All Keywords ranking"
-                        keyword_phrase = summary.get("keyword_phrase") or f"Keyword {summary.get('keyword_id', 'N/A')}"
-                        if ranking is not None and ranking <= 100:
-                            chart_all_keywords_rankings.append({
-                                "keyword": keyword_phrase,
-                                "ranking": ranking,
-                                "search_volume": summary.get("search_volume", 0) or 0,
-                                "ranking_change": summary.get("ranking_change"),
-                                "keyword_id": summary.get("keyword_id")
-                            })
-                
-                # Sort by ranking (best first)
-                chart_all_keywords_rankings.sort(key=lambda x: x["ranking"] if x["ranking"] else 999)
-                
-                chart_data["all_keywords_ranking"] = chart_all_keywords_rankings
+                    .where(and_(*ranking_conditions))
+                    .group_by(rankings_table.c.keyword_id)
+                )
+                rankings_agg = [dict(row._mapping) for row in db.execute(rankings_agg_query)]
+
+                keyword_ids = [r["keyword_id"] for r in rankings_agg if r.get("keyword_id")]
+                keyword_phrase_map = {}
+                if keyword_ids:
+                    keywords_query = select(
+                        keywords_table.c.id,
+                        keywords_table.c.keyword_phrase
+                    ).where(keywords_table.c.id.in_(keyword_ids))
+                    for row in db.execute(keywords_query):
+                        keyword_phrase_map[row.id] = row.keyword_phrase
+
+                for row in rankings_agg:
+                    avg_rank = row.get("avg_ranking")
+                    if avg_rank is None or avg_rank <= 0:
+                        continue
+                    keyword_id = row.get("keyword_id")
+                    phrase = keyword_phrase_map.get(keyword_id) or f"Keyword {keyword_id}"
+                    avg_volume = row.get("avg_volume") or 0
+                    chart_total_rankings += row.get("row_count", 0)
+                    chart_total_search_volume += avg_volume or 0
+                    chart_all_keywords_rankings.append({
+                        "keyword": phrase,
+                        "average_ranking": float(avg_rank),
+                        "average_search_volume": float(avg_volume) if avg_volume is not None else 0,
+                        "keyword_id": keyword_id,
+                    })
+
+                # Sort by average ranking (best first) and keep top 10
+                chart_all_keywords_rankings.sort(key=lambda x: x["average_ranking"] if x["average_ranking"] is not None else 999)
+                chart_data["all_keywords_ranking"] = chart_all_keywords_rankings[:10]
                 chart_data["keyword_rankings_performance"] = {
                     "google_rankings": chart_total_rankings,
                     "google_rankings_change": 0,  # Would need historical comparison in chart section
@@ -3743,6 +3778,11 @@ async def get_scrunch_dashboard_data(
                 detail=f"Invalid date format. Use YYYY-MM-DD format. Error: {str(e)}"
             )
         
+        # Pre-compute timezone-aware bounds so all downstream queries consistently
+        # filter by the requested date range (inclusive)
+        start_ts = datetime.fromisoformat(f"{start_date}T00:00:00+00:00")
+        end_ts = datetime.fromisoformat(f"{end_date}T23:59:59+00:00")
+        
         # Import the Scrunch calculation logic from the main endpoint
         # This is a simplified version that only returns Scrunch data
         scrunch_kpis = {}
@@ -3756,8 +3796,10 @@ async def get_scrunch_dashboard_data(
             start_dt = datetime.strptime(start_date, "%Y-%m-%d")
             end_dt = datetime.strptime(end_date, "%Y-%m-%d")
             period_duration = (end_dt - start_dt).days + 1
-            prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-            prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+            prev_end_ts = start_ts - timedelta(seconds=1)
+            prev_start_ts = prev_end_ts - timedelta(days=period_duration - 1)
+            prev_start = prev_start_ts.date().strftime("%Y-%m-%d")
+            prev_end = prev_end_ts.date().strftime("%Y-%m-%d")
             
             # Get responses for this brand filtered by date range (current period) using SQLAlchemy
             from app.db.models import Response, Prompt
@@ -3773,8 +3815,8 @@ async def get_scrunch_dashboard_data(
             ).where(
                 and_(
                     Response.brand_id == actual_brand_id,
-                    Response.created_at >= datetime.fromisoformat(f"{start_date}T00:00:00+00:00"),
-                    Response.created_at <= datetime.fromisoformat(f"{end_date}T23:59:59+00:00")
+                    Response.created_at >= start_ts,
+                    Response.created_at <= end_ts
                 )
             )
             responses_result = db.execute(responses_query)
@@ -3795,8 +3837,8 @@ async def get_scrunch_dashboard_data(
             ).where(
                 and_(
                     Response.brand_id == actual_brand_id,
-                    Response.created_at >= datetime.fromisoformat(f"{prev_start}T00:00:00+00:00"),
-                    Response.created_at <= datetime.fromisoformat(f"{prev_end}T23:59:59+00:00")
+                    Response.created_at >= prev_start_ts,
+                    Response.created_at <= prev_end_ts
                 )
             )
             prev_responses_result = db.execute(prev_responses_query)
@@ -3811,7 +3853,13 @@ async def get_scrunch_dashboard_data(
                 Prompt.stage,
                 Prompt.topics,
                 Prompt.brand_id
-            ).where(Prompt.brand_id == actual_brand_id)
+            ).where(
+                and_(
+                    Prompt.brand_id == actual_brand_id,
+                    Prompt.created_at >= start_ts,
+                    Prompt.created_at <= end_ts
+                )
+            )
             prompts_result = db.execute(prompts_query)
             prompts = [dict(row._mapping) for row in prompts_result]
             
@@ -3820,10 +3868,22 @@ async def get_scrunch_dashboard_data(
             # Check if brand has any Scrunch data using SQLAlchemy
             has_any_scrunch_data = len(responses) > 0 or len(prompts) > 0
             if not has_any_scrunch_data:
-                any_responses_query = select(Response.id).where(Response.brand_id == brand_id).limit(1)
+                any_responses_query = select(Response.id).where(
+                    and_(
+                        Response.brand_id == brand_id,
+                        Response.created_at >= start_ts,
+                        Response.created_at <= end_ts
+                    )
+                ).limit(1)
                 any_responses_result = db.execute(any_responses_query)
                 any_responses = [dict(row._mapping) for row in any_responses_result]
-                any_prompts_query = select(Prompt.id).where(Prompt.brand_id == brand_id).limit(1)
+                any_prompts_query = select(Prompt.id).where(
+                    and_(
+                        Prompt.brand_id == brand_id,
+                        Prompt.created_at >= start_ts,
+                        Prompt.created_at <= end_ts
+                    )
+                ).limit(1)
                 any_prompts_result = db.execute(any_prompts_query)
                 any_prompts = [dict(row._mapping) for row in any_prompts_result]
                 if len(any_responses) > 0 or len(any_prompts) > 0:
@@ -6311,21 +6371,54 @@ async def get_client_keywords(
             
             filtered_keywords.append(kw)
         
-        # Sort keywords
+        # Sort keywords (use latest ranking fetched above)
         reverse_order = sort_order.lower() == "desc"
         if sort_by == "volume":
             filtered_keywords.sort(
-                key=lambda x: (x.get("agency_analytics_keyword_ranking_summaries", [{}])[0] if isinstance(x.get("agency_analytics_keyword_ranking_summaries"), list) else {}).get("search_volume", 0) or 0,
+                key=lambda x: supabase.db.execute(
+                    select(rankings_table.c.volume)
+                    .where(
+                        and_(
+                            rankings_table.c.keyword_id == x.get("id"),
+                            rankings_table.c.date >= start_date,
+                            rankings_table.c.date <= end_date,
+                        )
+                    )
+                    .order_by(rankings_table.c.date.desc())
+                    .limit(1)
+                ).scalar() or 0,
                 reverse=reverse_order
             )
         elif sort_by == "google_ranking":
             filtered_keywords.sort(
-                key=lambda x: (x.get("agency_analytics_keyword_ranking_summaries", [{}])[0] if isinstance(x.get("agency_analytics_keyword_ranking_summaries"), list) else {}).get("google_ranking") or 999,
+                key=lambda x: supabase.db.execute(
+                    select(rankings_table.c.google_ranking)
+                    .where(
+                        and_(
+                            rankings_table.c.keyword_id == x.get("id"),
+                            rankings_table.c.date >= start_date,
+                            rankings_table.c.date <= end_date,
+                        )
+                    )
+                    .order_by(rankings_table.c.date.desc())
+                    .limit(1)
+                ).scalar() or 999,
                 reverse=not reverse_order  # Lower ranking is better, so reverse logic
             )
         elif sort_by == "bing_ranking":
             filtered_keywords.sort(
-                key=lambda x: (x.get("agency_analytics_keyword_ranking_summaries", [{}])[0] if isinstance(x.get("agency_analytics_keyword_ranking_summaries"), list) else {}).get("bing_ranking") or 999,
+                key=lambda x: supabase.db.execute(
+                    select(rankings_table.c.bing_ranking)
+                    .where(
+                        and_(
+                            rankings_table.c.keyword_id == x.get("id"),
+                            rankings_table.c.date >= start_date,
+                            rankings_table.c.date <= end_date,
+                        )
+                    )
+                    .order_by(rankings_table.c.date.desc())
+                    .limit(1)
+                ).scalar() or 999,
                 reverse=not reverse_order
             )
         elif sort_by == "keyword_phrase":
@@ -6342,6 +6435,7 @@ async def get_client_keywords(
         bing_change_total = 0
         avg_google_list = []
         avg_volume_list = []
+        available_locations_set = set()
         
         for kw in filtered_keywords:
             # Latest ranking in range
@@ -6359,6 +6453,9 @@ async def get_client_keywords(
             ).fetchone()
             summary = dict(ranking_row._mapping) if ranking_row else {}
             volume = summary.get("volume", 0) or 0
+            loc = kw.get("search_location_formatted_name") or kw.get("search_location") or kw.get("search_location_country_code")
+            if loc:
+                available_locations_set.add(loc)
             
             if summary.get("google_ranking") is not None:
                 google_rankings_count += 1
@@ -6451,7 +6548,8 @@ async def get_client_keywords(
                 "bing_rankings_count": bing_rankings_count,
                 "bing_change_total": bing_change_total,
                 "average_google_ranking": round(sum(avg_google_list) / len(avg_google_list), 1) if avg_google_list else 0,
-                "average_search_volume": round(sum(avg_volume_list) / len(avg_volume_list), 1) if avg_volume_list else 0
+                "average_search_volume": round(sum(avg_volume_list) / len(avg_volume_list), 1) if avg_volume_list else 0,
+                "available_locations": sorted(available_locations_set)
             }
         }
     except HTTPException:
@@ -6981,28 +7079,14 @@ async def get_prompts_analytics(
             if not client:
                 raise HTTPException(status_code=404, detail="Client not found")
             resolved_client_id = client_id
-            if client.get("scrunch_brand_id"):
-                brand_id = client["scrunch_brand_id"]
-            else:
-                # No scrunch_brand_id mapping; cannot resolve prompts/responses
-                return {
-                    "items": [],
-                    "count": 0,
-                    "total_count": 0
-                }
+            # Prefer scrunch_brand_id; fallback to client.id so we still return data when mapping is missing
+            brand_id = client.get("scrunch_brand_id") or client.get("id")
         elif slug:
             # Try client by slug first
             client = supabase.get_client_by_slug(slug)
-            if client and client.get("scrunch_brand_id"):
-                brand_id = client["scrunch_brand_id"]
+            if client:
                 resolved_client_id = client.get("id")
-            elif client:
-                # No scrunch_brand_id mapping; cannot resolve prompts/responses
-                return {
-                    "items": [],
-                    "count": 0,
-                    "total_count": 0
-                }
+                brand_id = client.get("scrunch_brand_id") or client.get("id")
             else:
                 # Fall back to brand by slug using SQLAlchemy
                 brand = supabase.get_brand_by_slug(slug)
