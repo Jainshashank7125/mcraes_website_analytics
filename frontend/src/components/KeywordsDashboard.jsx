@@ -67,6 +67,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
   // State for filters and pagination
   const [search, setSearch] = useState("");
   const [locationCountry, setLocationCountry] = useState("");
+  const [availableLocations, setAvailableLocations] = useState([]);
   const [sortBy, setSortBy] = useState("volume");
   const [sortOrder, setSortOrder] = useState("desc");
   const [page, setPage] = useState(1);
@@ -101,7 +102,8 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
   // Build API filters object
   const apiFilters = {
     search: search || undefined,
-    location_country: locationCountry || filters.location_country || undefined,
+    // Fetch all locations; apply location filter client-side
+    location_country: undefined,
     location_region: filters.location_region || undefined,
     location_city: filters.location_city || undefined,
     campaign_id: filters.campaign_id || undefined,
@@ -273,10 +275,54 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
   };
   
   const keywords = keywordsData?.keywords || [];
-  const sortedKeywords = useMemo(
-    () => [...keywords].sort((a, b) => (b.search_volume || 0) - (a.search_volume || 0)),
-    [keywords]
-  );
+  const locationFilteredKeywords = useMemo(() => {
+    if (!locationCountry) return keywords;
+    const loc = locationCountry.toLowerCase();
+    return keywords.filter((k) => {
+      const locs = [
+        k.search_location_formatted_name,
+        k.search_location,
+        k.search_location_country_code,
+      ]
+        .filter(Boolean)
+        .map((x) => x.toLowerCase());
+      return locs.includes(loc);
+    });
+  }, [keywords, locationCountry]);
+
+  const sortedKeywords = useMemo(() => {
+    const arr = [...locationFilteredKeywords];
+    const order = sortOrder.toLowerCase();
+    const cmp = (a, b) => {
+      const valA =
+        sortBy === "google_ranking"
+          ? a.google_ranking ?? 999
+          : sortBy === "bing_ranking"
+          ? a.bing_ranking ?? 999
+          : sortBy === "keyword_phrase"
+          ? (a.keyword_phrase || "").toLowerCase()
+          : a.search_volume || 0; // default volume
+      const valB =
+        sortBy === "google_ranking"
+          ? b.google_ranking ?? 999
+          : sortBy === "bing_ranking"
+          ? b.bing_ranking ?? 999
+          : sortBy === "keyword_phrase"
+          ? (b.keyword_phrase || "").toLowerCase()
+          : b.search_volume || 0;
+
+      if (sortBy === "keyword_phrase") {
+        if (valA < valB) return -1;
+        if (valA > valB) return 1;
+        return 0;
+      }
+      return valA - valB;
+    };
+    arr.sort(cmp);
+    if (sortBy !== "keyword_phrase" && order === "desc") arr.reverse();
+    if (sortBy === "keyword_phrase" && order === "desc") arr.reverse();
+    return arr;
+  }, [locationFilteredKeywords, sortBy, sortOrder]);
   const pagination = {
     total: sortedKeywords.length,
     page,
@@ -285,6 +331,18 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
   };
   // Use summaryData from the dedicated summary endpoint, fallback to keywordsData summary
   const summary = summaryData || keywordsData?.summary || {};
+  useEffect(() => {
+    const locs =
+      keywordsData?.summary?.available_locations ||
+      summary?.available_locations ||
+      [];
+    if (Array.isArray(locs)) {
+      setAvailableLocations(locs);
+      if (locationCountry && !locs.includes(locationCountry)) {
+        setLocationCountry("");
+      }
+    }
+  }, [keywordsData?.summary?.available_locations, summary?.available_locations]);
 
   const fmt = (val, digits = 0) => {
     if (val === null || val === undefined) return "0";
@@ -476,7 +534,11 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
             }}
           >
             <MenuItem value="">All Locations</MenuItem>
-            {/* Location options would be populated from available data */}
+            {availableLocations.map((loc) => (
+              <MenuItem key={loc} value={loc}>
+                {loc}
+              </MenuItem>
+            ))}
           </Select>
         </FormControl>
         <FormControl sx={{ minWidth: 150 }}>
@@ -538,15 +600,6 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
                           sx={{ textTransform: "none", fontWeight: 600 }}
                         >
                           GOOGLE
-                          {sortBy === "google_ranking" && (sortOrder === "asc" ? " ↑" : " ↓")}
-                        </Button>
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          onClick={() => handleSort("google_ranking")}
-                          sx={{ textTransform: "none", fontWeight: 600 }}
-                        >
-                          GOOGLE CHANGE
                           {sortBy === "google_ranking" && (sortOrder === "asc" ? " ↑" : " ↓")}
                         </Button>
                       </TableCell>
