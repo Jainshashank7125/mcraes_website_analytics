@@ -844,31 +844,41 @@ class SupabaseService:
             # Get all daily records for the date range
             # If client_id is provided, query by client_id first; otherwise use brand_id
             if client_id is not None:
-                query = text("""
-                    SELECT * FROM ga4_traffic_overview
-                    WHERE client_id = :client_id
-                      AND property_id = :property_id
-                      AND date >= :start_date
-                      AND date <= :end_date
-                    ORDER BY date ASC
+                # First, check how many records are available by property_id vs client_id
+                count_query = text("""
+                    SELECT 
+                        COUNT(*) as total_count,
+                        COUNT(CASE WHEN client_id = :client_id THEN 1 END) as matching_client_count
+                    FROM ga4_traffic_overview
+                    WHERE property_id = :property_id
+                      AND date >= CAST(:start_date AS DATE)
+                      AND date <= CAST(:end_date AS DATE)
                 """)
-                result = self.db.execute(query, {
+                count_result = self.db.execute(count_query, {
                     "client_id": client_id,
                     "property_id": property_id,
                     "start_date": start_date,
                     "end_date": end_date
                 })
-                records = [dict(row._mapping) for row in result]
+                count_row = count_result.fetchone()
+                total_available_by_property = count_row[0] if count_row else 0
+                matching_client_count = count_row[1] if count_row else 0
                 
-                # If no records found for this specific client_id, fall back to property_id only
-                # (data is shared across clients with the same property)
-                if not records:
-                    logger.info(f"No GA4 traffic overview data found for client_id={client_id}, falling back to property_id={property_id} query")
+                # Decide whether to query by client_id or use property_id directly
+                # If there are significantly more records by property_id than by client_id, use property_id query
+                use_property_id_query = False
+                if total_available_by_property > 0:
+                    if total_available_by_property > matching_client_count * 2:  # Threshold: if property has >2x records
+                        logger.info(f"Using property_id query for traffic overview: {total_available_by_property} records available by property_id vs {matching_client_count} by client_id")
+                        use_property_id_query = True
+                
+                if use_property_id_query:
+                    # Query by property_id only (no client_id filter)
                     query = text("""
                         SELECT * FROM ga4_traffic_overview
                         WHERE property_id = :property_id
-                          AND date >= :start_date
-                          AND date <= :end_date
+                          AND date >= CAST(:start_date AS DATE)
+                          AND date <= CAST(:end_date AS DATE)
                         ORDER BY date ASC
                     """)
                     result = self.db.execute(query, {
@@ -877,13 +887,48 @@ class SupabaseService:
                         "end_date": end_date
                     })
                     records = [dict(row._mapping) for row in result]
+                else:
+                    # Query by client_id first
+                    query = text("""
+                        SELECT * FROM ga4_traffic_overview
+                        WHERE client_id = :client_id
+                          AND property_id = :property_id
+                          AND date >= CAST(:start_date AS DATE)
+                          AND date <= CAST(:end_date AS DATE)
+                        ORDER BY date ASC
+                    """)
+                    result = self.db.execute(query, {
+                        "client_id": client_id,
+                        "property_id": property_id,
+                        "start_date": start_date,
+                        "end_date": end_date
+                    })
+                    records = [dict(row._mapping) for row in result]
+                    
+                    # If no records found for this specific client_id, fall back to property_id only
+                    # (data is shared across clients with the same property)
+                    if not records:
+                        logger.info(f"No GA4 traffic overview data found for client_id={client_id}, falling back to property_id={property_id} query")
+                        query = text("""
+                            SELECT * FROM ga4_traffic_overview
+                            WHERE property_id = :property_id
+                              AND date >= CAST(:start_date AS DATE)
+                              AND date <= CAST(:end_date AS DATE)
+                            ORDER BY date ASC
+                        """)
+                        result = self.db.execute(query, {
+                            "property_id": property_id,
+                            "start_date": start_date,
+                            "end_date": end_date
+                        })
+                        records = [dict(row._mapping) for row in result]
             else:
                 query = text("""
                     SELECT * FROM ga4_traffic_overview
                     WHERE brand_id = :brand_id
                       AND property_id = :property_id
-                      AND date >= :start_date
-                      AND date <= :end_date
+                      AND date >= CAST(:start_date AS DATE)
+                      AND date <= CAST(:end_date AS DATE)
                     ORDER BY date ASC
                 """)
                 result = self.db.execute(query, {

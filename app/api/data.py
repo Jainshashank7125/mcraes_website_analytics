@@ -2110,35 +2110,122 @@ async def get_reporting_dashboard(
                     
                     # Get daily traffic overview records for current period using SQLAlchemy Core
                     # CLIENT-CENTRIC: Use client_id when available, otherwise use brand_id
+                    from sqlalchemy import text
+                    
                     traffic_table = supabase._get_table("ga4_traffic_overview")
+                    
+                    # First, run a debug query to see what's actually in the database
+                    if client_id:
+                        debug_query = text("""
+                            SELECT COUNT(*) as count, MIN(date) as min_date, MAX(date) as max_date, 
+                                   COUNT(DISTINCT client_id) as client_count, COUNT(DISTINCT property_id) as property_count,
+                                   COUNT(CASE WHEN client_id = :client_id THEN 1 END) as matching_client_count
+                            FROM ga4_traffic_overview 
+                            WHERE property_id = :property_id 
+                              AND date >= CAST(:start_date AS DATE)
+                              AND date <= CAST(:end_date AS DATE)
+                        """)
+                        debug_result = db.execute(debug_query, {
+                            "property_id": property_id,
+                            "client_id": client_id,
+                            "start_date": start_date,
+                            "end_date": end_date
+                        })
+                        debug_row = debug_result.fetchone()
+                        total_available_by_property = 0
+                        matching_client_count = 0
+                        if debug_row:
+                            total_available_by_property = debug_row[0]
+                            matching_client_count = debug_row[5]
+                            logger.info(f"[GA4 DAILY DATA] Debug query result: total_count={debug_row[0]}, min_date={debug_row[1]}, max_date={debug_row[2]}, client_count={debug_row[3]}, property_count={debug_row[4]}, matching_client_count={debug_row[5]}")
+                    
+                    # Use proper date comparison - convert string dates to date objects
+                    from sqlalchemy import cast, Date
+                    start_date_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+                    end_date_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+                    
+                    # Decide whether to query by client_id or use property_id directly
+                    # If there are significantly more records by property_id than by client_id, use property_id query
+                    # This handles cases where data is stored without client_id or multiple clients share the property
+                    use_property_id_query = False
+                    if client_id and total_available_by_property > 0:
+                        # If we have debug info and there are more records by property_id, use property_id query
+                        if total_available_by_property > matching_client_count * 2:  # Threshold: if property has >2x records
+                            logger.info(f"[GA4 DAILY DATA] Using property_id query: {total_available_by_property} records available by property_id vs {matching_client_count} by client_id")
+                            use_property_id_query = True
+                    
                     query_conditions = [
                         traffic_table.c.property_id == property_id,
-                        traffic_table.c.date >= start_date,
-                        traffic_table.c.date <= end_date
+                        cast(traffic_table.c.date, Date) >= start_date_dt,
+                        cast(traffic_table.c.date, Date) <= end_date_dt
                     ]
-                    if client_id:
+                    
+                    if use_property_id_query:
+                        # Query by property_id only (no client_id filter)
+                        logger.info(f"[GA4 DAILY DATA] Querying daily traffic records by property_id={property_id} (date_range={start_date} to {end_date})")
+                    elif client_id:
                         query_conditions.append(traffic_table.c.client_id == client_id)
                         logger.info(f"[GA4 DAILY DATA] Querying daily traffic records for client_id={client_id}, property_id={property_id}, date_range={start_date} to {end_date}")
                     else:
                         query_conditions.append(traffic_table.c.brand_id == brand_id)
                         logger.info(f"[GA4 DAILY DATA] Querying daily traffic records for brand_id={brand_id}, property_id={property_id}, date_range={start_date} to {end_date}")
+                    
                     daily_traffic_query = select(traffic_table).where(and_(*query_conditions)).order_by(traffic_table.c.date.asc())
                     daily_traffic_result = db.execute(daily_traffic_query)
                     daily_traffic_records = [dict(row._mapping) for row in daily_traffic_result]
                     logger.info(f"[GA4 DAILY DATA] Found {len(daily_traffic_records)} daily traffic records from database")
                     
-                    # If no records found for specific client_id, fall back to property_id only
-                    if not daily_traffic_records and client_id:
-                        logger.info(f"[GA4 DAILY DATA] No GA4 daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
+                    # Log sample records if found
+                    if daily_traffic_records:
+                        sample = daily_traffic_records[0]
+                        logger.info(f"[GA4 DAILY DATA] Sample record: date={sample.get('date')} (type: {type(sample.get('date'))}), users={sample.get('users')}, sessions={sample.get('sessions')}, client_id={sample.get('client_id')}, property_id={sample.get('property_id')}")
+                        # Log a few more samples
+                        for i, rec in enumerate(daily_traffic_records[:5]):
+                            logger.debug(f"[GA4 DAILY DATA] Record {i+1}: date={rec.get('date')}, users={rec.get('users')}, sessions={rec.get('sessions')}")
+                    
+                    # Fallback: If no records found for client_id OR if debug query shows more records available by property_id, use property_id query
+                    # This is because multiple clients can share the same GA4 property, and data might be stored without client_id
+                    use_fallback = False
+                    if client_id:
+                        if not daily_traffic_records:
+                            logger.info(f"[GA4 DAILY DATA] No GA4 daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
+                            use_fallback = True
+                        else:
+                            # Check if debug query showed more records available
+                            debug_query = text("""
+                                SELECT COUNT(*) as count
+                                FROM ga4_traffic_overview 
+                                WHERE property_id = :property_id 
+                                  AND date >= CAST(:start_date AS DATE)
+                                  AND date <= CAST(:end_date AS DATE)
+                            """)
+                            debug_result = db.execute(debug_query, {
+                                "property_id": property_id,
+                                "start_date": start_date,
+                                "end_date": end_date
+                            })
+                            debug_row = debug_result.fetchone()
+                            total_available = debug_row[0] if debug_row else 0
+                            
+                            if total_available > len(daily_traffic_records):
+                                logger.info(f"[GA4 DAILY DATA] Found {len(daily_traffic_records)} records for client_id={client_id}, but {total_available} records available for property_id={property_id}. Using property_id query to get all data.")
+                                use_fallback = True
+                    
+                    if use_fallback:
                         fallback_query_conditions = [
                             traffic_table.c.property_id == property_id,
-                            traffic_table.c.date >= start_date,
-                            traffic_table.c.date <= end_date
+                            cast(traffic_table.c.date, Date) >= start_date_dt,
+                            cast(traffic_table.c.date, Date) <= end_date_dt
                         ]
                         fallback_query = select(traffic_table).where(and_(*fallback_query_conditions)).order_by(traffic_table.c.date.asc())
                         fallback_result = db.execute(fallback_query)
                         daily_traffic_records = [dict(row._mapping) for row in fallback_result]
                         logger.info(f"[GA4 DAILY DATA] Fallback query found {len(daily_traffic_records)} daily traffic records")
+                        
+                        # Log sample from fallback
+                        if daily_traffic_records:
+                            sample = daily_traffic_records[0]
+                            logger.info(f"[GA4 DAILY DATA] Fallback sample record: date={sample.get('date')} (type: {type(sample.get('date'))}), users={sample.get('users')}, sessions={sample.get('sessions')}, client_id={sample.get('client_id')}, property_id={sample.get('property_id')}")
                     
                     matched_count = 0
                     unmatched_dates = []
@@ -2180,11 +2267,15 @@ async def get_reporting_dashboard(
                         logger.warning(f"[GA4 DAILY DATA] {len(unmatched_dates)} dates could not be matched: {unmatched_dates[:3]}...")
                     
                     # Get daily conversions - match to existing dates or create new entries
+                    from sqlalchemy import cast, Date
+                    start_date_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+                    end_date_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+                    
                     conversions_table = supabase._get_table("ga4_daily_conversions")
                     conv_query_conditions = [
                         conversions_table.c.property_id == property_id,
-                        conversions_table.c.date >= start_date,
-                        conversions_table.c.date <= end_date
+                        cast(conversions_table.c.date, Date) >= start_date_dt,
+                        cast(conversions_table.c.date, Date) <= end_date_dt
                     ]
                     if client_id:
                         conv_query_conditions.append(conversions_table.c.client_id == client_id)
@@ -2199,8 +2290,8 @@ async def get_reporting_dashboard(
                         logger.info(f"No GA4 daily conversions records found for client_id={client_id}, falling back to property_id={property_id} query")
                         fallback_conv_conditions = [
                             conversions_table.c.property_id == property_id,
-                            conversions_table.c.date >= start_date,
-                            conversions_table.c.date <= end_date
+                            cast(conversions_table.c.date, Date) >= start_date_dt,
+                            cast(conversions_table.c.date, Date) <= end_date_dt
                         ]
                         fallback_conv_query = select(conversions_table).where(and_(*fallback_conv_conditions))
                         fallback_conv_result = db.execute(fallback_conv_query)
@@ -2295,10 +2386,13 @@ async def get_reporting_dashboard(
                     
                     # Get previous period daily metrics using SQLAlchemy Core
                     # CLIENT-CENTRIC: Use client_id when available, otherwise use brand_id
+                    prev_start_dt = datetime.strptime(prev_start, "%Y-%m-%d").date()
+                    prev_end_dt = datetime.strptime(prev_end, "%Y-%m-%d").date()
+                    
                     prev_query_conditions = [
                         traffic_table.c.property_id == property_id,
-                        traffic_table.c.date >= prev_start,
-                        traffic_table.c.date <= prev_end
+                        cast(traffic_table.c.date, Date) >= prev_start_dt,
+                        cast(traffic_table.c.date, Date) <= prev_end_dt
                     ]
                     if client_id:
                         prev_query_conditions.append(traffic_table.c.client_id == client_id)
@@ -2313,8 +2407,8 @@ async def get_reporting_dashboard(
                         logger.info(f"No GA4 previous period daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
                         fallback_prev_query_conditions = [
                             traffic_table.c.property_id == property_id,
-                            traffic_table.c.date >= prev_start,
-                            traffic_table.c.date <= prev_end
+                            cast(traffic_table.c.date, Date) >= prev_start_dt,
+                            cast(traffic_table.c.date, Date) <= prev_end_dt
                         ]
                         fallback_prev_daily_traffic_query = select(traffic_table).where(and_(*fallback_prev_query_conditions)).order_by(traffic_table.c.date.asc())
                         fallback_prev_daily_traffic_result = db.execute(fallback_prev_daily_traffic_query)
@@ -2336,8 +2430,8 @@ async def get_reporting_dashboard(
                     # Get previous period conversions and revenue
                     prev_conv_query_conditions = [
                         conversions_table.c.property_id == property_id,
-                        conversions_table.c.date >= prev_start,
-                        conversions_table.c.date <= prev_end
+                        cast(conversions_table.c.date, Date) >= prev_start_dt,
+                        cast(conversions_table.c.date, Date) <= prev_end_dt
                     ]
                     if client_id:
                         prev_conv_query_conditions.append(conversions_table.c.client_id == client_id)
@@ -2353,8 +2447,8 @@ async def get_reporting_dashboard(
                         fallback_prev_conv_query_conditions = [
                             conversions_table.c.property_id == property_id,
                             conversions_table.c.brand_id == brand_id,
-                            conversions_table.c.date >= prev_start,
-                            conversions_table.c.date <= prev_end
+                            cast(conversions_table.c.date, Date) >= prev_start_dt,
+                            cast(conversions_table.c.date, Date) <= prev_end_dt
                         ]
                         fallback_prev_daily_conversions_query = select(conversions_table).where(and_(*fallback_prev_conv_query_conditions))
                         fallback_prev_daily_conversions_result = db.execute(fallback_prev_daily_conversions_query)
@@ -2382,8 +2476,8 @@ async def get_reporting_dashboard(
                     
                     prev_rev_query_conditions = [
                         revenue_table.c.property_id == property_id,
-                        revenue_table.c.date >= prev_start,
-                        revenue_table.c.date <= prev_end
+                        cast(revenue_table.c.date, Date) >= prev_start_dt,
+                        cast(revenue_table.c.date, Date) <= prev_end_dt
                     ]
                     if client_id:
                         prev_rev_query_conditions.append(revenue_table.c.client_id == client_id)
@@ -2399,8 +2493,8 @@ async def get_reporting_dashboard(
                         fallback_prev_rev_query_conditions = [
                             revenue_table.c.property_id == property_id,
                             revenue_table.c.brand_id == brand_id,
-                            revenue_table.c.date >= prev_start,
-                            revenue_table.c.date <= prev_end
+                            cast(revenue_table.c.date, Date) >= prev_start_dt,
+                            cast(revenue_table.c.date, Date) <= prev_end_dt
                         ]
                         fallback_prev_daily_revenue_query = select(revenue_table).where(and_(*fallback_prev_rev_query_conditions))
                         fallback_prev_daily_revenue_result = db.execute(fallback_prev_daily_revenue_query)
@@ -2963,35 +3057,96 @@ async def get_reporting_dashboard(
                     
                     # Get daily traffic overview records for current period using SQLAlchemy Core
                     # CLIENT-CENTRIC: Use client_id when available, otherwise use brand_id
+                    from sqlalchemy import text
+                    
                     traffic_table = supabase._get_table("ga4_traffic_overview")
+                    
+                    # First, run a debug query to see what's actually in the database
+                    if client_id:
+                        debug_query = text("""
+                            SELECT COUNT(*) as count, MIN(date) as min_date, MAX(date) as max_date, 
+                                   COUNT(DISTINCT client_id) as client_count, COUNT(DISTINCT property_id) as property_count,
+                                   COUNT(CASE WHEN client_id = :client_id THEN 1 END) as matching_client_count
+                            FROM ga4_traffic_overview 
+                            WHERE property_id = :property_id 
+                              AND date >= CAST(:start_date AS DATE)
+                              AND date <= CAST(:end_date AS DATE)
+                        """)
+                        debug_result = db.execute(debug_query, {
+                            "property_id": property_id,
+                            "client_id": client_id,
+                            "start_date": start_date,
+                            "end_date": end_date
+                        })
+                        debug_row = debug_result.fetchone()
+                        total_available_by_property = 0
+                        matching_client_count = 0
+                        if debug_row:
+                            total_available_by_property = debug_row[0]
+                            matching_client_count = debug_row[5]
+                            logger.info(f"[GA4 DAILY DATA] Debug query result: total_count={debug_row[0]}, min_date={debug_row[1]}, max_date={debug_row[2]}, client_count={debug_row[3]}, property_count={debug_row[4]}, matching_client_count={debug_row[5]}")
+                    
+                    # Use proper date comparison - convert string dates to date objects
+                    from sqlalchemy import cast, Date
+                    start_date_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+                    end_date_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+                    
+                    # Decide whether to query by client_id or use property_id directly
+                    # If there are significantly more records by property_id than by client_id, use property_id query
+                    # This handles cases where data is stored without client_id or multiple clients share the property
+                    use_property_id_query = False
+                    if client_id and total_available_by_property > 0:
+                        # If we have debug info and there are more records by property_id, use property_id query
+                        if total_available_by_property > matching_client_count * 2:  # Threshold: if property has >2x records
+                            logger.info(f"[GA4 DAILY DATA] Using property_id query: {total_available_by_property} records available by property_id vs {matching_client_count} by client_id")
+                            use_property_id_query = True
+                    
                     query_conditions = [
                         traffic_table.c.property_id == property_id,
-                        traffic_table.c.date >= start_date,
-                        traffic_table.c.date <= end_date
+                        cast(traffic_table.c.date, Date) >= start_date_dt,
+                        cast(traffic_table.c.date, Date) <= end_date_dt
                     ]
-                    if client_id:
+                    
+                    if use_property_id_query:
+                        # Query by property_id only (no client_id filter)
+                        logger.info(f"[GA4 DAILY DATA] Querying daily traffic records by property_id={property_id} (date_range={start_date} to {end_date})")
+                    elif client_id:
                         query_conditions.append(traffic_table.c.client_id == client_id)
                         logger.info(f"[GA4 DAILY DATA] Querying daily traffic records for client_id={client_id}, property_id={property_id}, date_range={start_date} to {end_date}")
                     else:
                         query_conditions.append(traffic_table.c.brand_id == brand_id)
                         logger.info(f"[GA4 DAILY DATA] Querying daily traffic records for brand_id={brand_id}, property_id={property_id}, date_range={start_date} to {end_date}")
+                    
                     daily_traffic_query = select(traffic_table).where(and_(*query_conditions)).order_by(traffic_table.c.date.asc())
                     daily_traffic_result = db.execute(daily_traffic_query)
                     daily_traffic_records = [dict(row._mapping) for row in daily_traffic_result]
                     logger.info(f"[GA4 DAILY DATA] Found {len(daily_traffic_records)} daily traffic records from database")
                     
-                    # Fallback: If no records found for client_id, query by property_id only
-                    if not daily_traffic_records and client_id:
+                    # Log sample records if found
+                    if daily_traffic_records:
+                        sample = daily_traffic_records[0]
+                        logger.info(f"[GA4 DAILY DATA] Sample record: date={sample.get('date')} (type: {type(sample.get('date'))}), users={sample.get('users')}, sessions={sample.get('sessions')}, client_id={sample.get('client_id')}, property_id={sample.get('property_id')}")
+                        # Log a few more samples
+                        for i, rec in enumerate(daily_traffic_records[:5]):
+                            logger.debug(f"[GA4 DAILY DATA] Record {i+1}: date={rec.get('date')}, users={rec.get('users')}, sessions={rec.get('sessions')}")
+                    
+                    # Fallback: If no records found for client_id and we didn't already use property_id query, try property_id only
+                    if not daily_traffic_records and client_id and not use_property_id_query:
                         logger.info(f"[GA4 DAILY DATA] No GA4 daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
                         fallback_query_conditions = [
                             traffic_table.c.property_id == property_id,
-                            traffic_table.c.date >= start_date,
-                            traffic_table.c.date <= end_date
+                            cast(traffic_table.c.date, Date) >= start_date_dt,
+                            cast(traffic_table.c.date, Date) <= end_date_dt
                         ]
                         fallback_daily_traffic_query = select(traffic_table).where(and_(*fallback_query_conditions)).order_by(traffic_table.c.date.asc())
                         fallback_daily_traffic_result = db.execute(fallback_daily_traffic_query)
                         daily_traffic_records = [dict(row._mapping) for row in fallback_daily_traffic_result]
                         logger.info(f"[GA4 DAILY DATA] Fallback query found {len(daily_traffic_records)} daily traffic records")
+                        
+                        # Log sample from fallback
+                        if daily_traffic_records:
+                            sample = daily_traffic_records[0]
+                            logger.info(f"[GA4 DAILY DATA] Fallback sample record: date={sample.get('date')} (type: {type(sample.get('date'))}), users={sample.get('users')}, sessions={sample.get('sessions')}, client_id={sample.get('client_id')}, property_id={sample.get('property_id')}")
                     
                     matched_count = 0
                     unmatched_dates = []
@@ -3036,8 +3191,8 @@ async def get_reporting_dashboard(
                     conversions_table = supabase._get_table("ga4_daily_conversions")
                     conv_query_conditions = [
                         conversions_table.c.property_id == property_id,
-                        conversions_table.c.date >= start_date,
-                        conversions_table.c.date <= end_date
+                        cast(conversions_table.c.date, Date) >= start_date_dt,
+                        cast(conversions_table.c.date, Date) <= end_date_dt
                     ]
                     if client_id:
                         conv_query_conditions.append(conversions_table.c.client_id == client_id)
@@ -3053,8 +3208,8 @@ async def get_reporting_dashboard(
                         fallback_conv_query_conditions = [
                             conversions_table.c.property_id == property_id,
                             conversions_table.c.brand_id == brand_id,
-                            conversions_table.c.date >= start_date,
-                            conversions_table.c.date <= end_date
+                            cast(conversions_table.c.date, Date) >= start_date_dt,
+                            cast(conversions_table.c.date, Date) <= end_date_dt
                         ]
                         fallback_daily_conversions_query = select(conversions_table).where(and_(*fallback_conv_query_conditions))
                         fallback_daily_conversions_result = db.execute(fallback_daily_conversions_query)
@@ -3063,10 +3218,23 @@ async def get_reporting_dashboard(
                     for record in daily_conversions_records:
                         date = record.get("date")
                         if date:
-                            if date not in daily_metrics:
+                            # Convert date to string format if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                                # Remove time component if present
+                                if ' ' in date_str:
+                                    date_str = date_str.split(' ')[0]
+                                # Ensure it's in YYYY-MM-DD format
+                                if len(date_str) == 8 and '-' not in date_str:
+                                    # Assume YYYYMMDD format, convert to YYYY-MM-DD
+                                    date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                            
+                            if date_str not in daily_metrics:
                                 # Create entry if it doesn't exist (shouldn't happen, but just in case)
-                                date_formatted = date.replace("-", "") if "-" in date else date
-                                daily_metrics[date] = {
+                                date_formatted = date_str.replace("-", "")
+                                daily_metrics[date_str] = {
                                     "date": date_formatted,
                                     "users": 0,
                                     "sessions": 0,
@@ -3074,14 +3242,14 @@ async def get_reporting_dashboard(
                                     "conversions": 0,
                                     "revenue": 0
                                 }
-                            daily_metrics[date]["conversions"] = record.get("total_conversions", 0)
+                            daily_metrics[date_str]["conversions"] = record.get("total_conversions", 0)
                     
                     # Get daily revenue - match to existing dates or create new entries
                     revenue_table = supabase._get_table("ga4_revenue")
                     rev_query_conditions = [
                         revenue_table.c.property_id == property_id,
-                        revenue_table.c.date >= start_date,
-                        revenue_table.c.date <= end_date
+                        cast(revenue_table.c.date, Date) >= start_date_dt,
+                        cast(revenue_table.c.date, Date) <= end_date_dt
                     ]
                     if client_id:
                         rev_query_conditions.append(revenue_table.c.client_id == client_id)
@@ -3097,8 +3265,8 @@ async def get_reporting_dashboard(
                         fallback_rev_query_conditions = [
                             revenue_table.c.property_id == property_id,
                             revenue_table.c.brand_id == brand_id,
-                            revenue_table.c.date >= start_date,
-                            revenue_table.c.date <= end_date
+                            cast(revenue_table.c.date, Date) >= start_date_dt,
+                            cast(revenue_table.c.date, Date) <= end_date_dt
                         ]
                         fallback_daily_revenue_query = select(revenue_table).where(and_(*fallback_rev_query_conditions))
                         fallback_daily_revenue_result = db.execute(fallback_daily_revenue_query)
@@ -3107,10 +3275,23 @@ async def get_reporting_dashboard(
                     for record in daily_revenue_records:
                         date = record.get("date")
                         if date:
-                            if date not in daily_metrics:
+                            # Convert date to string format if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                                # Remove time component if present
+                                if ' ' in date_str:
+                                    date_str = date_str.split(' ')[0]
+                                # Ensure it's in YYYY-MM-DD format
+                                if len(date_str) == 8 and '-' not in date_str:
+                                    # Assume YYYYMMDD format, convert to YYYY-MM-DD
+                                    date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                            
+                            if date_str not in daily_metrics:
                                 # Create entry if it doesn't exist (shouldn't happen, but just in case)
-                                date_formatted = date.replace("-", "") if "-" in date else date
-                                daily_metrics[date] = {
+                                date_formatted = date_str.replace("-", "")
+                                daily_metrics[date_str] = {
                                     "date": date_formatted,
                                     "users": 0,
                                     "sessions": 0,
@@ -3118,7 +3299,7 @@ async def get_reporting_dashboard(
                                     "conversions": 0,
                                     "revenue": 0
                                 }
-                            daily_metrics[date]["revenue"] = float(record.get("total_revenue", 0))
+                            daily_metrics[date_str]["revenue"] = float(record.get("total_revenue", 0))
                     
                     # Generate all dates for previous period first
                     prev_all_dates_map = {}
@@ -3141,10 +3322,13 @@ async def get_reporting_dashboard(
                     
                     # Get previous period daily metrics using SQLAlchemy Core
                     # CLIENT-CENTRIC: Use client_id when available, otherwise use brand_id
+                    prev_start_dt = datetime.strptime(prev_start, "%Y-%m-%d").date()
+                    prev_end_dt = datetime.strptime(prev_end, "%Y-%m-%d").date()
+                    
                     prev_query_conditions = [
                         traffic_table.c.property_id == property_id,
-                        traffic_table.c.date >= prev_start,
-                        traffic_table.c.date <= prev_end
+                        cast(traffic_table.c.date, Date) >= prev_start_dt,
+                        cast(traffic_table.c.date, Date) <= prev_end_dt
                     ]
                     if client_id:
                         prev_query_conditions.append(traffic_table.c.client_id == client_id)
@@ -3159,8 +3343,8 @@ async def get_reporting_dashboard(
                         logger.info(f"No GA4 previous period daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
                         fallback_prev_query_conditions = [
                             traffic_table.c.property_id == property_id,
-                            traffic_table.c.date >= prev_start,
-                            traffic_table.c.date <= prev_end
+                            cast(traffic_table.c.date, Date) >= prev_start_dt,
+                            cast(traffic_table.c.date, Date) <= prev_end_dt
                         ]
                         fallback_prev_daily_traffic_query = select(traffic_table).where(and_(*fallback_prev_query_conditions)).order_by(traffic_table.c.date.asc())
                         fallback_prev_daily_traffic_result = db.execute(fallback_prev_daily_traffic_query)
@@ -3182,8 +3366,8 @@ async def get_reporting_dashboard(
                     # Get previous period conversions and revenue
                     prev_conv_query_conditions = [
                         conversions_table.c.property_id == property_id,
-                        conversions_table.c.date >= prev_start,
-                        conversions_table.c.date <= prev_end
+                        cast(conversions_table.c.date, Date) >= prev_start_dt,
+                        cast(conversions_table.c.date, Date) <= prev_end_dt
                     ]
                     if client_id:
                         prev_conv_query_conditions.append(conversions_table.c.client_id == client_id)
@@ -3199,8 +3383,8 @@ async def get_reporting_dashboard(
                         fallback_prev_conv_query_conditions = [
                             conversions_table.c.property_id == property_id,
                             conversions_table.c.brand_id == brand_id,
-                            conversions_table.c.date >= prev_start,
-                            conversions_table.c.date <= prev_end
+                            cast(conversions_table.c.date, Date) >= prev_start_dt,
+                            cast(conversions_table.c.date, Date) <= prev_end_dt
                         ]
                         fallback_prev_daily_conversions_query = select(conversions_table).where(and_(*fallback_prev_conv_query_conditions))
                         fallback_prev_daily_conversions_result = db.execute(fallback_prev_daily_conversions_query)
@@ -3228,8 +3412,8 @@ async def get_reporting_dashboard(
                     
                     prev_rev_query_conditions = [
                         revenue_table.c.property_id == property_id,
-                        revenue_table.c.date >= prev_start,
-                        revenue_table.c.date <= prev_end
+                        cast(revenue_table.c.date, Date) >= prev_start_dt,
+                        cast(revenue_table.c.date, Date) <= prev_end_dt
                     ]
                     if client_id:
                         prev_rev_query_conditions.append(revenue_table.c.client_id == client_id)
@@ -3245,8 +3429,8 @@ async def get_reporting_dashboard(
                         fallback_prev_rev_query_conditions = [
                             revenue_table.c.property_id == property_id,
                             revenue_table.c.brand_id == brand_id,
-                            revenue_table.c.date >= prev_start,
-                            revenue_table.c.date <= prev_end
+                            cast(revenue_table.c.date, Date) >= prev_start_dt,
+                            cast(revenue_table.c.date, Date) <= prev_end_dt
                         ]
                         fallback_prev_daily_revenue_query = select(revenue_table).where(and_(*fallback_prev_rev_query_conditions))
                         fallback_prev_daily_revenue_result = db.execute(fallback_prev_daily_revenue_query)
