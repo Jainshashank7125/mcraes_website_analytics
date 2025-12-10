@@ -41,6 +41,7 @@ import {
 import { clientAPI, dataAPI, ga4API, agencyAnalyticsAPI } from '../services/api'
 import { useToast } from '../contexts/ToastContext'
 import { getErrorMessage } from '../utils/errorHandler'
+import { debugLog, debugError } from '../utils/debug'
 
 function ClientManagement({ open, onClose, client }) {
   const theme = useTheme()
@@ -159,7 +160,7 @@ function ClientManagement({ open, onClose, client }) {
             })
           }
         } catch (err) {
-          console.error('Error loading selected brand:', err)
+          debugError('Error loading selected brand:', err)
         }
       }
     } catch (err) {
@@ -199,9 +200,9 @@ function ClientManagement({ open, onClose, client }) {
     try {
       const limit = 50
       const offset = page * limit
-      console.log('Loading brands:', { searchTerm, page, offset, limit })
+      debugLog('Loading brands:', { searchTerm, page, offset, limit })
       const brandsResponse = await dataAPI.getBrands(limit, offset, searchTerm)
-      console.log('Brands response:', brandsResponse)
+      debugLog('Brands response:', brandsResponse)
       const newBrands = brandsResponse.items || []
       
       if (append) {
@@ -212,7 +213,7 @@ function ClientManagement({ open, onClose, client }) {
       
       setHasMoreBrands(newBrands.length === limit)
     } catch (err) {
-      console.error('Error loading brands:', err)
+      debugError('Error loading brands:', err)
       showError(getErrorMessage(err))
     } finally {
       setBrandsLoading(false)
@@ -224,9 +225,9 @@ function ClientManagement({ open, onClose, client }) {
     try {
       const pageSize = 50
       const pageNumber = page + 1 // API uses 1-indexed pages
-      console.log('Loading campaigns:', { searchTerm, page, pageNumber, pageSize })
+      debugLog('Loading campaigns:', { searchTerm, page, pageNumber, pageSize })
       const campaignsResponse = await agencyAnalyticsAPI.getCampaigns(pageNumber, pageSize, searchTerm)
-      console.log('Campaigns response:', campaignsResponse)
+      debugLog('Campaigns response:', campaignsResponse)
       const newCampaigns = campaignsResponse.items || []
       
       if (append) {
@@ -237,7 +238,7 @@ function ClientManagement({ open, onClose, client }) {
       
       setHasMoreCampaigns(newCampaigns.length === pageSize)
     } catch (err) {
-      console.error('Error loading campaigns:', err)
+      debugError('Error loading campaigns:', err)
       showError(getErrorMessage(err))
     } finally {
       setCampaignsLoading(false)

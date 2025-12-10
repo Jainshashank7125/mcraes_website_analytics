@@ -33,7 +33,7 @@ services:
       
       # OpenAI API Settings (optional)
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      
+      - VITE_DEBUG_LOG=true
       # Google Analytics 4 Settings (optional)
       - GA4_CREDENTIALS_PATH=${GA4_CREDENTIALS_PATH}  # Path to service account JSON file
     volumes:

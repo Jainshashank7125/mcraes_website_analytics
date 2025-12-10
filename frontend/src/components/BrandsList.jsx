@@ -27,6 +27,7 @@ import { motion } from 'framer-motion'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../hooks/queryKeys'
 import { dataAPI } from '../services/api'
+import { debugError } from '../utils/debug'
 
 function BrandsList() {
   const [page, setPage] = useState(0)
@@ -49,7 +50,7 @@ function BrandsList() {
   
   // Log error if any
   if (error) {
-    console.error('Error loading brands:', error)
+    debugError('Error loading brands:', error)
   }
 
   const brands = brandsData.items || []

@@ -79,6 +79,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { reportingAPI, syncAPI, clientAPI, openaiAPI } from "../services/api";
+import { debugLog, debugWarn, debugError } from "../utils/debug";
 import ScrunchVisualizations from "./reporting/charts/ScrunchVisualizations";
 // Import reusable components and utilities
 import ChartCard from "./reporting/ChartCard";
@@ -413,7 +414,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
             });
           }
         } catch (err) {
-          console.error("Error fetching client data:", err);
+          debugError("Error fetching client data:", err);
         }
       };
       fetchClientData();
@@ -483,7 +484,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
         }
       }
     } catch (err) {
-      console.error("Error loading KPI selections:", err);
+      debugError("Error loading KPI selections:", err);
       // Fallback to all KPIs and sections on error
       setSelectedKPIs(new Set(KPI_ORDER));
       setTempSelectedKPIs(new Set(KPI_ORDER));
@@ -513,7 +514,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
           clientIdToUse = client.id;
         }
       } catch (err) {
-        console.error("Error fetching client by slug for KPI selections:", err);
+        debugError("Error fetching client by slug for KPI selections:", err);
         return; // Can't load without client_id
       }
     }
@@ -522,7 +523,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
     
     try {
       const data = await reportingAPI.getKPISelectionsByClient(clientIdToUse);
-      console.log("Loaded public KPI selections:", data);
+      debugLog("Loaded public KPI selections:", data);
       if (data) {
         // Check if a selection was explicitly saved (updated_at exists means record exists in DB)
         const hasExplicitSelection = data.updated_at !== null && data.updated_at !== undefined;
@@ -546,16 +547,16 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
           // Selection was explicitly saved - use it (even if empty array means "show no sections")
           if (data.visible_sections && data.visible_sections.length > 0) {
             const sectionsSet = new Set(data.visible_sections);
-            console.log("Setting publicVisibleSections:", Array.from(sectionsSet));
+            debugLog("Setting publicVisibleSections:", Array.from(sectionsSet));
             setPublicVisibleSections(sectionsSet);
           } else {
             // Empty array with updated_at means admin explicitly deselected all sections
-            console.log("Empty visible_sections with updated_at, setting to empty Set (show no sections)");
+            debugLog("Empty visible_sections with updated_at, setting to empty Set (show no sections)");
             setPublicVisibleSections(new Set([]));
           }
         } else {
           // No selection saved yet - show all sections (default behavior)
-          console.log("No visible_sections saved (updated_at is null), setting to null (show all)");
+          debugLog("No visible_sections saved (updated_at is null), setting to null (show all)");
           setPublicVisibleSections(null);
         }
         
@@ -574,7 +575,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
         }
       }
     } catch (err) {
-      console.error("Error loading public KPI selections:", err);
+      debugError("Error loading public KPI selections:", err);
       // On error, show all KPIs, sections, and charts (default behavior)
       setPublicKPISelections(null);
       setPublicVisibleSections(null);
@@ -637,7 +638,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
             }
           } catch (clientErr) {
             // Client not found, try brand (backward compatibility)
-            console.log("Client not found by slug, trying brand...");
+            debugLog("Client not found by slug, trying brand...");
           }
           // Fallback to brand lookup for backward compatibility
           const brand = await reportingAPI.getBrandBySlug(publicSlug);
@@ -726,7 +727,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
       setLoadingClients(true);
       const data = await clientAPI.getClients(1, 25, searchTerm); // Get up to 50 clients based on search
       const clientsList = data.items || [];
-      console.log(
+      debugLog(
         "Loaded clients:",
         clientsList.map((c) => ({ id: c.id, name: c.company_name, url_slug: c.url_slug, scrunch_brand_id: c.scrunch_brand_id }))
       );
@@ -749,7 +750,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
         }
       }
     } catch (err) {
-      console.error("Error loading clients:", err);
+      debugError("Error loading clients:", err);
       setError(err.response?.data?.detail || "Failed to load clients");
     } finally {
       setLoadingClients(false);
@@ -843,7 +844,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
           setShareableUrl(url);
         }
       } catch (err) {
-        console.error("Error loading client data:", err);
+        debugError("Error loading client data:", err);
         // Fallback on error
         setShareDialogStartDate(startDate);
         setShareDialogEndDate(endDate);
@@ -880,8 +881,8 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
           report_start_date: shareDialogStartDate || null,
           report_end_date: shareDialogEndDate || null,
         });
-      } catch (err) {
-        console.error("Error saving report dates:", err);
+    } catch (err) {
+      debugError("Error saving report dates:", err);
         setError("Failed to save date range. URL updated but dates were not persisted.");
       }
     }
@@ -909,7 +910,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
         setClients(updatedClients.items || []);
       }
     } catch (err) {
-      console.error("Error regenerating link:", err);
+      debugError("Error regenerating link:", err);
       setError("Failed to regenerate link. Please try again.");
     } finally {
       setRegenerating(false);
@@ -922,7 +923,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.error("Failed to copy URL:", err);
+      debugError("Failed to copy URL:", err);
       setError("Failed to copy URL to clipboard");
     }
   };
@@ -962,7 +963,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
       setOverviewCacheKey(cacheKey);
       setExpandedMetricsSources(new Set()); // Reset expanded state when new overview is loaded
     } catch (err) {
-      console.error("Error generating overview:", err);
+      debugError("Error generating overview:", err);
       // Don't set error here - just log it, user can retry by clicking button
       setOverviewData(null);
       setOverviewCacheKey(null);
@@ -1032,7 +1033,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
       // Check if data has no_data flag (graceful degradation from backend)
       if (data && data.no_data) {
         // Set data with no_data flag so UI can show appropriate message
-        console.log(`No data available for slug/brand (graceful response)`);
+        debugLog(`No data available for slug/brand (graceful response)`);
         setDashboardData({
           ...data,
           kpis: data.kpis || {},
@@ -1041,7 +1042,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
         });
       } else if (data && (data.kpis || data.chart_data || data.diagnostics)) {
         const scrunchKPIs = data.kpis ? Object.keys(data.kpis).filter(k => data.kpis[k]?.source === "Scrunch") : [];
-        console.log(`Dashboard data loaded for brand ${selectedBrandId}:`, {
+        debugLog(`Dashboard data loaded for brand ${selectedBrandId}:`, {
           hasKPIs: !!data.kpis,
           kpiCount: data.kpis ? Object.keys(data.kpis).length : 0,
           scrunchKPICount: scrunchKPIs.length,
@@ -1072,11 +1073,11 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
         }
       } else {
         // No data available for this brand
-        console.warn(`No data available for brand ${selectedBrandId}`);
+        debugWarn(`No data available for brand ${selectedBrandId}`);
         setDashboardData({ no_data: true, kpis: {}, chart_data: {} });
       }
     } catch (err) {
-      console.error("Error loading dashboard data:", err);
+      debugError("Error loading dashboard data:", err);
       setDashboardData(null);
       // Don't set error here - let individual sections handle their own errors
     } finally {
@@ -1112,7 +1113,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
       // Check if data has no_data flag (graceful degradation from backend)
       if (data && data.no_data) {
         // Set data with no_data flag so UI can show appropriate message
-        console.log(`No Scrunch data available (graceful response)`);
+        debugLog(`No Scrunch data available (graceful response)`);
         setScrunchData({
           ...data,
           kpis: data.kpis || {},
@@ -1128,7 +1129,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
             (data.chart_data.scrunch_ai_insights &&
               data.chart_data.scrunch_ai_insights.length > 0));
 
-        console.log(`Scrunch data loaded for brand ${selectedBrandId}:`, {
+        debugLog(`Scrunch data loaded for brand ${selectedBrandId}:`, {
           hasKPIs,
           kpiCount: data.kpis ? Object.keys(data.kpis).length : 0,
           hasChartData,
@@ -1143,7 +1144,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
         setScrunchData({ no_data: true, kpis: {}, chart_data: {} });
       }
     } catch (err) {
-      console.error("Error loading Scrunch data:", err);
+      debugError("Error loading Scrunch data:", err);
       setScrunchData(null);
       // Don't set error - Scrunch section will handle its own display
     } finally {
@@ -1159,7 +1160,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
       const response = await syncAPI.getBrandAnalytics(selectedBrandId);
       setBrandAnalytics(response.global_analytics || null);
     } catch (err) {
-      console.error("Failed to load brand analytics:", err);
+      debugError("Failed to load brand analytics:", err);
       setBrandAnalytics(null);
     } finally {
       setLoadingAnalytics(false);
@@ -1607,15 +1608,15 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
         if (client && client.id) {
           clientIdToUse = client.id;
         }
-      } catch (err) {
-        console.error("Error fetching client by slug:", err);
+    } catch (err) {
+      debugError("Error fetching client by slug:", err);
       }
     }
     
     if (!clientIdToUse) {
       const errorMsg = "Cannot save KPI selections: No client selected. Please select a client first.";
       setError(errorMsg);
-      console.error("Cannot save KPI selections: No client_id available", {
+      debugError("Cannot save KPI selections: No client_id available", {
         selectedClientId,
         isPublic,
         publicSlug
@@ -1639,14 +1640,14 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
       setSelectedCharts(new Set(tempSelectedCharts));
       setShowKPISelector(false);
       setError(null); // Clear any previous errors
-      console.log("KPI, section, and chart selections saved successfully", {
+      debugLog("KPI, section, and chart selections saved successfully", {
         clientId: clientIdToUse,
         kpiCount: tempSelectedKPIs.size,
         sectionCount: tempVisibleSections.size,
         chartCount: tempSelectedCharts.size
       });
     } catch (err) {
-      console.error("Error saving KPI selections:", err);
+      debugError("Error saving KPI selections:", err);
       const errorMessage = err.response?.data?.detail || err.message || "Failed to save KPI and section selections. Please try again.";
       setError(errorMessage);
     }
@@ -3912,7 +3913,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
             {(() => {
               // Check section visibility first
               const sectionVisible = isSectionVisible("scrunch_ai");
-              console.log("Scrunch AI section visibility check:", {
+              debugLog("Scrunch AI section visibility check:", {
                 isPublic,
                 sectionVisible,
                 publicVisibleSections: publicVisibleSections ? Array.from(publicVisibleSections) : null,
@@ -3951,7 +3952,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
                 hasScrunchFromMain;
 
               // Debug logging
-              console.log("Scrunch section data check:", {
+              debugLog("Scrunch section data check:", {
                 loadingScrunch,
                 hasScrunchData,
                 hasScrunchChartData,
@@ -3993,7 +3994,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
                       )) {
                         scrunchKPIs = scrunchData.kpis || {};
                         scrunchChartData = scrunchData.chart_data || {};
-                        console.log(
+                        debugLog(
                           `Using Scrunch data from separate endpoint ${isPublic ? '(public mode)' : '(admin mode)'}:`,
                           {
                             kpiCount: Object.keys(scrunchKPIs).length,
@@ -4018,7 +4019,7 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
                             scrunchKPIs[k] = dashboardData.kpis[k];
                           });
                           scrunchChartData = dashboardData.chart_data || {};
-                          console.log(
+                          debugLog(
                             `Using Scrunch data from main endpoint ${isPublic ? '(public mode fallback)' : '(fallback)'}:`,
                             {
                               kpiCount: scrunchKeys.length,
@@ -4027,11 +4028,11 @@ function ReportingDashboard({ publicSlug, brandInfo: publicBrandInfo, publicStar
                             }
                           );
                         } else {
-                          console.warn("No Scrunch KPIs found in dashboardData.kpis. Available KPIs:", 
+                          debugWarn("No Scrunch KPIs found in dashboardData.kpis. Available KPIs:", 
                             dashboardData.kpis ? Object.keys(dashboardData.kpis) : []);
                         }
                       } else {
-                        console.warn("No dashboardData.kpis available");
+                        debugWarn("No dashboardData.kpis available");
                       }
 
                       // Check if scrunchData has no_data flag

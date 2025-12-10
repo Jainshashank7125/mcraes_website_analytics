@@ -3,6 +3,7 @@
  * Automatically refreshes access tokens every 3 hours (or slightly before expiration)
  */
 import { authAPI } from './api'
+import { debugLog, debugWarn, debugError } from '../utils/debug'
 
 const TOKEN_REFRESH_INTERVAL = 3 * 60 * 60 * 1000 // 3 hours in milliseconds
 const TOKEN_REFRESH_BUFFER = 5 * 60 * 1000 // Refresh 5 minutes before expiration
@@ -35,7 +36,7 @@ const refreshAccessToken = async () => {
   const refreshToken = localStorage.getItem('refresh_token')
   
   if (!refreshToken) {
-    console.warn('No refresh token available, cannot refresh access token')
+    debugWarn('No refresh token available, cannot refresh access token')
     stopTokenRefresh()
     return false
   }
@@ -60,14 +61,14 @@ const refreshAccessToken = async () => {
       localStorage.setItem('token_expires_at', expiresAt.toString())
     }
 
-    console.log('Access token refreshed successfully')
+    debugLog('Access token refreshed successfully')
     
     // Schedule next refresh
     scheduleTokenRefresh()
     
     return true
   } catch (error) {
-    console.error('Failed to refresh access token:', error)
+    debugError('Failed to refresh access token:', error)
     // Clear tokens on refresh failure
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
@@ -122,7 +123,7 @@ const scheduleTokenRefresh = () => {
     refreshAccessToken()
   }, TOKEN_REFRESH_INTERVAL)
 
-  console.log(`Token refresh scheduled in ${Math.round(refreshTime / 1000 / 60)} minutes`)
+  debugLog(`Token refresh scheduled in ${Math.round(refreshTime / 1000 / 60)} minutes`)
 }
 
 /**
@@ -134,7 +135,7 @@ export const startTokenRefresh = () => {
   const refreshToken = localStorage.getItem('refresh_token')
   
   if (!accessToken || !refreshToken) {
-    console.warn('No tokens available, cannot start token refresh')
+    debugWarn('No tokens available, cannot start token refresh')
     return
   }
 
@@ -160,7 +161,7 @@ export const stopTokenRefresh = () => {
     clearInterval(refreshIntervalId)
     refreshIntervalId = null
   }
-  console.log('Token refresh stopped')
+  debugLog('Token refresh stopped')
 }
 
 /**

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react'
 import { authAPI } from '../services/api'
+import { debugError } from '../utils/debug'
 import { getErrorMessage } from '../utils/errorHandler'
 import { startTokenRefresh, stopTokenRefresh, isTokenExpired } from '../services/tokenRefresh'
 
@@ -190,7 +191,7 @@ export const AuthProvider = ({ children }) => {
     try {
       await authAPI.signout()
     } catch (error) {
-      console.error('Signout error:', error)
+      debugError('Signout error:', error)
     } finally {
       setUser(null)
       setIsAuthenticated(false)

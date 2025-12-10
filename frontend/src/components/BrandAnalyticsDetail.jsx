@@ -36,6 +36,7 @@ import {
   BarChart as BarChartIcon
 } from '@mui/icons-material'
 import { syncAPI, ga4API, agencyAnalyticsAPI } from '../services/api'
+import { debugError } from '../utils/debug'
 
 function BrandAnalyticsDetail({ brandId, brand, onBack }) {
   const [analytics, setAnalytics] = useState(null)
@@ -67,7 +68,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
       setGa4Error(null)
       
       const ga4Response = await ga4API.getBrandAnalytics(brandIdToUse).catch((err) => {
-        console.error('Error fetching GA4 data:', err)
+        debugError('Error fetching GA4 data:', err)
         // Return a structured error response instead of null
         return {
           ga4_configured: false,
@@ -86,7 +87,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
         setGa4Error(null)
       }
     } catch (err) {
-      console.error('Error loading GA4 data:', err)
+      debugError('Error loading GA4 data:', err)
       const errorMessage = err.response?.data?.detail || err.message || 'Failed to load GA4 data'
       setGa4Error(errorMessage)
       setGa4Data(null)
@@ -104,7 +105,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
       const response = await agencyAnalyticsAPI.getBrandCampaigns(brandIdToUse)
       setAgencyAnalyticsCampaigns(response.campaigns || [])
     } catch (err) {
-      console.error('Error loading Agency Analytics campaigns:', err)
+      debugError('Error loading Agency Analytics campaigns:', err)
       setAgencyAnalyticsCampaigns([])
     } finally {
       setAgencyAnalyticsLoading(false)
@@ -132,15 +133,15 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
       
       const [analyticsResponse, promptsResponse, responsesResponse] = await Promise.all([
         syncAPI.getBrandAnalytics(brandIdToUse).catch((err) => {
-          console.error('Error fetching analytics:', err)
+          debugError('Error fetching analytics:', err)
           return null
         }),
         syncAPI.getPrompts({ brand_id: brandIdToUse, limit: 200 }).catch((err) => {
-          console.error('Error fetching prompts:', err)
+          debugError('Error fetching prompts:', err)
           return { items: [] }
         }),
         syncAPI.getResponses({ brand_id: brandIdToUse, limit: 1000 }).catch((err) => {
-          console.error('Error fetching responses:', err)
+          debugError('Error fetching responses:', err)
           return { items: [] }
         })
       ])
@@ -155,7 +156,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
       // Load GA4 data if brand has GA4 property ID
       loadGA4Data(brandIdToUse)
     } catch (err) {
-      console.error('Error in loadData:', err)
+      debugError('Error in loadData:', err)
       setError(err.response?.data?.detail || err.message || 'Failed to load analytics')
     } finally {
       setLoading(false)

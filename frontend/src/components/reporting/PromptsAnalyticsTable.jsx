@@ -25,6 +25,7 @@ import {
 import { Search as SearchIcon } from "@mui/icons-material";
 import { motion } from "framer-motion";
 import { reportingAPI } from "../../services/api";
+import { debugError } from "../../utils/debug";
 import Sparkline from "./Sparkline";
 
 const GROUP_BY_OPTIONS = [
@@ -67,7 +68,7 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
       );
       setData(result);
     } catch (err) {
-      console.error("Error fetching prompts analytics:", err);
+      debugError("Error fetching prompts analytics:", err);
       setError(err.message || "Failed to fetch data");
       setData(null);
     } finally {

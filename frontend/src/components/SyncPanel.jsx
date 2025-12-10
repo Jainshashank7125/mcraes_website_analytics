@@ -25,6 +25,7 @@ import { syncAPI } from '../services/api'
 import { useToast } from '../contexts/ToastContext'
 import { useSyncStatus } from '../contexts/SyncStatusContext'
 import { getErrorMessage } from '../utils/errorHandler'
+import { debugError } from '../utils/debug'
 
 function SyncPanel() {
   const [syncing, setSyncing] = useState(null)
@@ -70,7 +71,7 @@ function SyncPanel() {
           }
         }
       } catch (err) {
-        console.error('Error checking job status:', err)
+        debugError('Error checking job status:', err)
         // On error, stop polling to avoid infinite retries
         clearInterval(interval)
         setSyncing(null)

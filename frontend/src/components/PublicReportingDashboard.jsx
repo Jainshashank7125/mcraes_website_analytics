@@ -18,6 +18,7 @@ import { motion } from 'framer-motion'
 import { reportingAPI, clientAPI } from '../services/api'
 import ReportingDashboard from './ReportingDashboard'
 import { theme as baseTheme } from '../theme'
+import { debugError, debugLog } from '../utils/debug'
 
 function PublicReportingDashboard() {
   const { slug } = useParams()
@@ -181,7 +182,7 @@ function PublicReportingDashboard() {
             return
           }
         } catch (clientErr) {
-          console.log("Client not found by slug, trying brand...")
+          debugLog("Client not found by slug, trying brand...")
         }
 
         // Fallback to brand lookup for backward compatibility
@@ -195,7 +196,7 @@ function PublicReportingDashboard() {
           setBrandInfo(brand)
         }
       } catch (err) {
-        console.error('Error fetching brand:', err)
+        debugError('Error fetching brand:', err)
         // Only set error for actual errors, not for graceful "no data" responses
         if (err.response?.status !== 200) {
           setError(err.response?.data?.detail || err.message || 'Failed to load brand')

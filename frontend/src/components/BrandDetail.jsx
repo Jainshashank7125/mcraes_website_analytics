@@ -33,6 +33,7 @@ import {
   Language as LanguageIcon
 } from '@mui/icons-material'
 import { syncAPI } from '../services/api'
+import { debugError } from '../utils/debug'
 
 function BrandDetail({ brand, analytics, onBack }) {
   const [tabValue, setTabValue] = useState(0)
@@ -56,7 +57,7 @@ function BrandDetail({ brand, analytics, onBack }) {
       const result = await syncAPI.getPrompts({ brand_id: brandId, limit: 100 })
       setPrompts(Array.isArray(result) ? result : result.items || [])
     } catch (err) {
-      console.error('Failed to load prompts:', err)
+      debugError('Failed to load prompts:', err)
     } finally {
       setLoading(false)
     }
@@ -69,7 +70,7 @@ function BrandDetail({ brand, analytics, onBack }) {
       const result = await syncAPI.getResponses({ brand_id: brandId, limit: 100 })
       setResponses(Array.isArray(result) ? result : result.items || [])
     } catch (err) {
-      console.error('Failed to load responses:', err)
+      debugError('Failed to load responses:', err)
     } finally {
       setLoading(false)
     }

@@ -20,6 +20,7 @@ import {
 } from '@mui/material'
 import { Refresh as RefreshIcon } from '@mui/icons-material'
 import { syncAPI } from '../services/api'
+import { debugError } from '../utils/debug'
 
 function BrandAnalytics() {
   const [analytics, setAnalytics] = useState(null)
@@ -44,7 +45,7 @@ function BrandAnalytics() {
       const brandsData = response.items || response || []
       setBrands(brandsData)
     } catch (err) {
-      console.error('Failed to load brands:', err)
+      debugError('Failed to load brands:', err)
     }
   }
 

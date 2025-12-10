@@ -28,6 +28,7 @@ import {
   Analytics as AnalyticsIcon
 } from '@mui/icons-material'
 import { agencyAnalyticsAPI } from '../services/api'
+import { debugError } from '../utils/debug'
 
 function AgencyAnalytics() {
   const [campaigns, setCampaigns] = useState([])
@@ -106,7 +107,7 @@ function AgencyAnalytics() {
         }
       }
     } catch (err) {
-      console.error('Error loading campaigns:', err)
+      debugError('Error loading campaigns:', err)
       setError(err.response?.data?.detail || 'Failed to load campaigns')
       setCampaigns([])
     } finally {
@@ -158,7 +159,7 @@ function AgencyAnalytics() {
       setKeywordRankings(response.summaries || [])
       setKeywordRankingsTotalCount(response.total_count || 0)
     } catch (err) {
-      console.error('Failed to load keyword rankings:', err)
+      debugError('Failed to load keyword rankings:', err)
       setKeywordRankings([])
     } finally {
       setIsFetchingKeywords(false)
@@ -195,7 +196,7 @@ function AgencyAnalytics() {
       const response = await agencyAnalyticsAPI.getCampaignBrandLinks()
       setCampaignLinks(response.links || [])
     } catch (err) {
-      console.error('Failed to load campaign links:', err)
+      debugError('Failed to load campaign links:', err)
     }
   }
 
@@ -346,7 +347,7 @@ function AgencyAnalytics() {
                     agencyAnalyticsAPI.getCampaigns(nextPage, campaignPageSize, campaignSearchTerm).then((response) => {
                       setCampaigns((prev) => [...prev, ...(response.items || [])])
                     }).catch((err) => {
-                      console.error('Error loading more campaigns:', err)
+                      debugError('Error loading more campaigns:', err)
                     })
                   }
                 }
