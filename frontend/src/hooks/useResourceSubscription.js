@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useWebSocket } from '../contexts/WebSocketContext'
 import { useToast } from '../contexts/ToastContext'
+import { debugLog } from '../utils/debug'
 
 /**
  * Hook for subscribing to resource updates via WebSocket
@@ -41,7 +42,7 @@ export const useResourceSubscription = (resourceType, resourceId, options = {}) 
 
     if (sendMessage(message)) {
       subscriptionRef.current = true
-      console.log(`Subscribed to ${resourceType}:${resourceId}`)
+      debugLog(`Subscribed to ${resourceType}:${resourceId}`)
     }
   }, [isConnected, resourceType, resourceId, sendMessage])
 
@@ -62,7 +63,7 @@ export const useResourceSubscription = (resourceType, resourceId, options = {}) 
 
     if (sendMessage(message)) {
       subscriptionRef.current = false
-      console.log(`Unsubscribed from ${resourceType}:${resourceId}`)
+      debugLog(`Unsubscribed from ${resourceType}:${resourceId}`)
     }
   }, [isConnected, resourceType, resourceId, sendMessage])
 

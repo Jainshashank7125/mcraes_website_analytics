@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { syncAPI } from '../services/api'
 import { useAuth } from './AuthContext'
+import { debugError } from '../utils/debug'
 
 const SyncStatusContext = createContext()
 
@@ -59,7 +60,7 @@ export const SyncStatusProvider = ({ children }) => {
     } catch (error) {
       // Silently fail if 403 (not authenticated) or other errors
       if (error.response?.status !== 403) {
-        console.error('Error polling sync jobs:', error)
+        debugError('Error polling sync jobs:', error)
       }
       setPolling(false)
       setActiveJobs([])

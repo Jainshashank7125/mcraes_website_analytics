@@ -21,6 +21,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSyncStatus } from '../contexts/SyncStatusContext'
 import { syncAPI } from '../services/api'
+import { debugError } from '../utils/debug'
 
 function SyncStatusIndicator() {
   const { activeJobs, refreshJobs, removeJob } = useSyncStatus()
@@ -40,7 +41,7 @@ function SyncStatusIndicator() {
       // Refresh to get updated status
       refreshJobs()
     } catch (error) {
-      console.error(`Error cancelling job ${jobId}:`, error)
+      debugError(`Error cancelling job ${jobId}:`, error)
       // Still remove from cancelling set
     } finally {
       setCancellingJobs(prev => {
@@ -92,7 +93,7 @@ function SyncStatusIndicator() {
             }
           }
         } catch (err) {
-          console.error(`Error fetching job ${job.job_id}:`, err)
+          debugError(`Error fetching job ${job.job_id}:`, err)
         }
       }
       

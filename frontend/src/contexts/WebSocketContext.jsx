@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react'
 import { useAuth } from './AuthContext'
+import { debugLog, debugError, debugWarn } from '../utils/debug'
 
 const WebSocketContext = createContext(null)
 
@@ -49,7 +50,7 @@ export const WebSocketProvider = ({ children }) => {
       const ws = new WebSocket(url)
 
       ws.onopen = () => {
-        console.log('WebSocket connected')
+        debugLog('WebSocket connected')
         setIsConnected(true)
         setConnectionError(null)
         reconnectAttempts.current = 0
@@ -63,21 +64,21 @@ export const WebSocketProvider = ({ children }) => {
             try {
               handler(message)
             } catch (error) {
-              console.error('Error in message handler:', error)
+              debugError('Error in message handler:', error)
             }
           })
         } catch (error) {
-          console.error('Error parsing WebSocket message:', error)
+          debugError('Error parsing WebSocket message:', error)
         }
       }
 
       ws.onerror = (error) => {
-        console.error('WebSocket error:', error)
+        debugError('WebSocket error:', error)
         setConnectionError('WebSocket connection error')
       }
 
       ws.onclose = (event) => {
-        console.log('WebSocket disconnected', event.code, event.reason)
+        debugLog('WebSocket disconnected', event.code, event.reason)
         setIsConnected(false)
         wsRef.current = null
 
@@ -85,7 +86,7 @@ export const WebSocketProvider = ({ children }) => {
         if (event.code !== 1000 && isAuthenticated && reconnectAttempts.current < maxReconnectAttempts) {
           reconnectAttempts.current += 1
           reconnectTimeoutRef.current = setTimeout(() => {
-            console.log(`Reconnecting WebSocket (attempt ${reconnectAttempts.current}/${maxReconnectAttempts})...`)
+            debugLog(`Reconnecting WebSocket (attempt ${reconnectAttempts.current}/${maxReconnectAttempts})...`)
             connect()
           }, reconnectDelay * reconnectAttempts.current) // Exponential backoff
         }
@@ -93,7 +94,7 @@ export const WebSocketProvider = ({ children }) => {
 
       wsRef.current = ws
     } catch (error) {
-      console.error('Failed to create WebSocket connection:', error)
+      debugError('Failed to create WebSocket connection:', error)
       setConnectionError(error.message)
     }
   }, [isAuthenticated, getWebSocketUrl])
@@ -118,7 +119,7 @@ export const WebSocketProvider = ({ children }) => {
       wsRef.current.send(JSON.stringify(message))
       return true
     } else {
-      console.warn('WebSocket is not connected')
+      debugWarn('WebSocket is not connected')
       return false
     }
   }, [])

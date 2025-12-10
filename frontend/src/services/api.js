@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { debugError } from '../utils/debug'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -980,7 +981,7 @@ export const authAPI = {
       await api.post('/api/v1/auth/v2/signout')
     } catch (error) {
       // Even if API call fails, clear local storage
-      console.error('Signout error:', error)
+      debugError('Signout error:', error)
     } finally {
       localStorage.removeItem('access_token')
       localStorage.removeItem('refresh_token')

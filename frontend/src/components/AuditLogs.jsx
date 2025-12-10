@@ -32,6 +32,7 @@ import {
   Warning as WarningIcon,
 } from '@mui/icons-material'
 import { auditAPI } from '../services/api'
+import { debugError } from '../utils/debug'
 
 const ACTION_LABELS = {
   login: 'Login',
@@ -88,7 +89,7 @@ function AuditLogs() {
       setLogs(response.items || [])
       setTotalCount(response.total || 0)
     } catch (err) {
-      console.error('Error loading audit logs:', err)
+      debugError('Error loading audit logs:', err)
       setError(err.response?.data?.detail || 'Failed to load audit logs')
       setLogs([])
     } finally {

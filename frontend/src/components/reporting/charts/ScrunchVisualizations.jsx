@@ -8,6 +8,7 @@ import LineChart from './LineChart'
 import ChartCard from '../ChartCard'
 import { CHART_COLORS } from '../constants'
 import { reportingAPI } from '../../../services/api'
+import { debugError } from '../../../utils/debug'
 
 /**
  * Scrunch AI Visualizations Component
@@ -97,7 +98,7 @@ export default function ScrunchVisualizations({ brandId, startDate, endDate }) {
           timeSeries: timeSeriesData.status === 'fulfilled' ? processTimeSeriesData(timeSeriesData.value) : null
         })
       } catch (err) {
-        console.error('Error fetching Scrunch visualizations:', err)
+        debugError('Error fetching Scrunch visualizations:', err)
         // Don't show error if Query API is not available - just show empty state
         if (err.response?.status === 404 || err.response?.status === 403) {
           setError(null) // Query API might not be enabled for this brand

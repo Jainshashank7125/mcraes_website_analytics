@@ -45,6 +45,7 @@ import {
 } from '@mui/icons-material'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { clientAPI } from '../services/api'
+import { debugError } from '../utils/debug'
 import { queryKeys } from '../hooks/queryKeys'
 import ClientManagement from './ClientManagement'
 
@@ -193,7 +194,7 @@ function ClientsList() {
       setDeleteDialogOpen(false)
       setClientToDelete(null)
     } catch (error) {
-      console.error('Failed to delete client:', error)
+      debugError('Failed to delete client:', error)
       // You might want to show an error toast here
     } finally {
       setDeleting(false)
