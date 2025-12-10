@@ -286,9 +286,11 @@ export const syncAPI = {
   },
 
   // Analytics endpoints
-  getBrandAnalytics: async (brandId = null) => {
+  getBrandAnalytics: async (brandId = null, startDate = null, endDate = null) => {
     const params = new URLSearchParams()
     if (brandId) params.append('brand_id', brandId)
+    if (startDate) params.append('start_date', startDate)
+    if (endDate) params.append('end_date', endDate)
     
     const response = await api.get(`/api/v1/data/analytics/brands?${params.toString()}`)
     return response.data
