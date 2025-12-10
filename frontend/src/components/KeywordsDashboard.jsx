@@ -47,7 +47,7 @@ import StackedBarChart from "./reporting/charts/StackedBarChart";
 import ChartCard from "./reporting/ChartCard";
 import { formatDateForAxis } from "./reporting/hooks/useChartData";
 
-export default function KeywordsDashboard({ clientId, selectedKPIs }) {
+export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: propStartDate, endDate: propEndDate }) {
   const theme = useTheme();
   const selectedKPISet = selectedKPIs instanceof Set ? selectedKPIs : new Set(selectedKPIs || []);
   const showKPI = (key) => {
@@ -68,8 +68,8 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
   const [search, setSearch] = useState("");
   const [locationCountry, setLocationCountry] = useState("");
   const [availableLocations, setAvailableLocations] = useState([]);
-  const [sortBy, setSortBy] = useState("volume");
-  const [sortOrder, setSortOrder] = useState("desc");
+  const [sortBy, setSortBy] = useState("google_ranking");
+  const [sortOrder, setSortOrder] = useState("asc");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [selectedKeywords, setSelectedKeywords] = useState(new Set());
@@ -95,9 +95,9 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
     language: "",
   });
   
-  // Date range for chart (last 30 days)
-  const endDate = new Date().toISOString().split('T')[0];
-  const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+  // Date range - use props if provided, otherwise default to last 30 days
+  const endDate = propEndDate || new Date().toISOString().split('T')[0];
+  const startDate = propStartDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
   
   // Build API filters object
   const apiFilters = {
@@ -120,9 +120,9 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
     language: filters.language || undefined,
     start_date: startDate,
     end_date: endDate,
-    // Fetch all rows and sort client-side by volume
-    sort_by: "volume",
-    sort_order: "desc",
+    // Fetch all rows; sort client-side (default by google_ranking asc)
+    sort_by: "google_ranking",
+    sort_order: "asc",
     page: 1,
     page_size: 10000,
   };
@@ -158,8 +158,11 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
     data: summaryData,
     isLoading: summaryLoading,
   } = useQuery({
-    queryKey: queryKeys.keywords.clientSummary(clientId, {}),
-    queryFn: () => keywordsAPI.getClientKeywordSummary(clientId, {}),
+    queryKey: queryKeys.keywords.clientSummary(clientId, { start_date: startDate, end_date: endDate }),
+    queryFn: () => keywordsAPI.getClientKeywordSummary(clientId, {
+      start_date: startDate,
+      end_date: endDate,
+    }),
     enabled: !!clientId,
   });
   
@@ -276,9 +279,12 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
   
   const keywords = keywordsData?.keywords || [];
   const locationFilteredKeywords = useMemo(() => {
-    if (!locationCountry) return keywords;
+    const ranked = keywords.filter(
+      (k) => k.google_ranking !== null && k.google_ranking !== undefined && k.google_ranking > 0
+    );
+    if (!locationCountry) return ranked;
     const loc = locationCountry.toLowerCase();
-    return keywords.filter((k) => {
+    return ranked.filter((k) => {
       const locs = [
         k.search_location_formatted_name,
         k.search_location,
@@ -354,7 +360,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
   return (
     <Box>
       {/* Header */}
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+      {/* <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Button
           variant="outlined"
           startIcon={<FilterListIcon />}
@@ -377,7 +383,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
             />
           )}
         </Button>
-      </Box>
+      </Box> */}
       
       {/* KPI Summary Cards */}
       <Grid container spacing={2} mb={3}>
@@ -578,11 +584,11 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
                   <TableHead>
                     <TableRow>
                       <TableCell padding="checkbox">
-                        <Checkbox
+                        {/* <Checkbox
                           indeterminate={selectedKeywords.size > 0 && selectedKeywords.size < keywords.length}
                           checked={keywords.length > 0 && selectedKeywords.size === keywords.length}
                           onChange={handleSelectAll}
-                        />
+                        /> */}
                       </TableCell>
                       <TableCell padding="checkbox"></TableCell>
                       <TableCell>
@@ -603,7 +609,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
                           {sortBy === "google_ranking" && (sortOrder === "asc" ? " ↑" : " ↓")}
                         </Button>
                       </TableCell>
-                      <TableCell>
+                      {/* <TableCell>
                         <Button
                           onClick={() => handleSort("bing_ranking")}
                           sx={{ textTransform: "none", fontWeight: 600 }}
@@ -611,7 +617,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
                           BING
                           {sortBy === "bing_ranking" && (sortOrder === "asc" ? " ↑" : " ↓")}
                         </Button>
-                      </TableCell>
+                      </TableCell> */}
                       <TableCell>
                         <Button
                           onClick={() => handleSort("volume")}
@@ -630,13 +636,13 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
                       .map((keyword) => (
                       <TableRow key={keyword.keyword_id} hover>
                         <TableCell padding="checkbox">
-                          <Checkbox
+                          {/* <Checkbox
                             checked={selectedKeywords.has(keyword.keyword_id)}
                             onChange={() => handleSelectKeyword(keyword.keyword_id)}
-                          />
+                          /> */}
                         </TableCell>
                         <TableCell padding="checkbox">
-                          <IconButton
+                          {/* <IconButton
                             size="small"
                             onClick={(e) => handleToggleFavorite(keyword.keyword_id, e)}
                           >
@@ -645,11 +651,11 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
                             ) : (
                               <StarBorderIcon />
                             )}
-                          </IconButton>
+                          </IconButton> */}
                         </TableCell>
                         <TableCell>{keyword.keyword_phrase || ""}</TableCell>
                         <TableCell>{formatRanking(keyword.google_ranking)}</TableCell>
-                        <TableCell>
+                        {/* <TableCell>
                           <Chip
                             label={formatChange(keyword.google_change)}
                             size="small"
@@ -657,7 +663,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs }) {
                             sx={{ minWidth: 60 }}
                           />
                         </TableCell>
-                        <TableCell>{formatRanking(keyword.bing_ranking)}</TableCell>
+                        <TableCell>{formatRanking(keyword.bing_ranking)}</TableCell> */}
                         <TableCell>{keyword.search_volume || 0}</TableCell>
                         <TableCell>{keyword.search_location_formatted_name || ""}</TableCell>
                       </TableRow>

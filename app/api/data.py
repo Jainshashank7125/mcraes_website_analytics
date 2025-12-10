@@ -6239,13 +6239,28 @@ async def get_client_keywords(
                 }
             }
         
-        # Resolve date range (default last 30 days if not provided)
+        # Resolve and validate date range (accept aliases, default last 30 days)
         start_date = start_date or from_date
         end_date = end_date or to_date
+
+        today = datetime.utcnow().date()
         if not end_date:
-            end_date = datetime.now().strftime("%Y-%m-%d")
+            end_date = today.isoformat()
         if not start_date:
-            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+            start_date = (today - timedelta(days=30)).isoformat()
+
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format, expected YYYY-MM-DD")
+
+        if start_dt > end_dt:
+            raise HTTPException(status_code=400, detail="start_date cannot be after end_date")
+
+        # Normalize to ISO strings for downstream queries
+        start_date = start_dt.isoformat()
+        end_date = end_dt.isoformat()
         try:
             start_dt = datetime.strptime(start_date, "%Y-%m-%d")
             end_dt = datetime.strptime(end_date, "%Y-%m-%d")
@@ -6564,6 +6579,8 @@ async def get_client_keyword_rankings_over_time(
     client_id: int,
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
     campaign_id: Optional[int] = Query(None, description="Filter by campaign ID"),
     location_country: Optional[str] = Query(None, description="Filter by country code"),
     group_by: Optional[str] = Query("day", description="Group by: day, week, month"),
@@ -6579,11 +6596,28 @@ async def get_client_keyword_rankings_over_time(
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
-        # Default to last 30 days if not provided
+        # Resolve and validate date range (accept aliases and default last 30 days)
+        start_date = start_date or from_date
+        end_date = end_date or to_date
+
+        today = datetime.utcnow().date()
         if not end_date:
-            end_date = datetime.now().strftime("%Y-%m-%d")
+            end_date = today.isoformat()
         if not start_date:
-            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+            start_date = (today - timedelta(days=30)).isoformat()
+
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format, expected YYYY-MM-DD")
+
+        if start_dt > end_dt:
+            raise HTTPException(status_code=400, detail="start_date cannot be after end_date")
+
+        # Normalize to ISO strings for downstream queries
+        start_date = start_dt.isoformat()
+        end_date = end_dt.isoformat()
         
         # Get campaign IDs for this client using SQLAlchemy
         client_campaigns = supabase.get_client_campaigns(client_id)
@@ -7069,30 +7103,40 @@ async def get_prompts_analytics(
 ):
     """Get aggregated prompts and responses analytics by different dimensions"""
     try:
+        logger.debug(f"get_prompts_analytics called with: group_by={group_by}, client_id={client_id}, slug={slug}, "
+                    f"search={search}, start_date={start_date}, end_date={end_date}, limit={limit}, offset={offset}")
+        
         supabase = SupabaseService(db=db)
         brand_id = None
         resolved_client_id = None
         
         # Resolve brand_id from client_id or slug using SQLAlchemy
         if client_id:
+            logger.debug(f"Resolving brand_id from client_id: {client_id}")
             client = supabase.get_client_by_id(client_id)
             if not client:
+                logger.debug(f"Client not found for client_id: {client_id}")
                 raise HTTPException(status_code=404, detail="Client not found")
             resolved_client_id = client_id
             # Prefer scrunch_brand_id; fallback to client.id so we still return data when mapping is missing
             brand_id = client.get("scrunch_brand_id") or client.get("id")
+            logger.debug(f"Resolved brand_id={brand_id} from client_id={client_id} (scrunch_brand_id={client.get('scrunch_brand_id')})")
         elif slug:
+            logger.debug(f"Resolving brand_id from slug: {slug}")
             # Try client by slug first
             client = supabase.get_client_by_slug(slug)
             if client:
                 resolved_client_id = client.get("id")
                 brand_id = client.get("scrunch_brand_id") or client.get("id")
+                logger.debug(f"Resolved brand_id={brand_id} from client slug={slug} (client_id={resolved_client_id})")
             else:
                 # Fall back to brand by slug using SQLAlchemy
                 brand = supabase.get_brand_by_slug(slug)
                 if brand:
                     brand_id = brand["id"]
+                    logger.debug(f"Resolved brand_id={brand_id} from brand slug={slug}")
                 else:
+                    logger.debug(f"No client or brand found for slug: {slug}")
                     return {
                         "items": [],
                         "count": 0,
@@ -7100,11 +7144,14 @@ async def get_prompts_analytics(
                     }
         
         if not brand_id:
+            logger.debug("No brand_id resolved, returning empty result")
             return {
                 "items": [],
                 "count": 0,
                 "total_count": 0
             }
+        
+        logger.debug(f"Using brand_id={brand_id} for analytics query")
         
         # Get prompts and responses using SQLAlchemy
         from app.db.models import Prompt, Response
@@ -7116,8 +7163,34 @@ async def get_prompts_analytics(
             prompts_conditions.append(Prompt.created_at <= datetime.fromisoformat(f"{end_date}T23:59:59+00:00"))
         
         prompts_query = select(Prompt).where(and_(*prompts_conditions))
-        prompts_result = db.execute(prompts_query)
-        prompts = [dict(row._mapping) for row in prompts_result]
+        prompts_result = db.scalars(prompts_query).all()
+        # Convert ORM objects to dicts
+        prompts = [
+            {
+                "id": p.id,
+                "brand_id": p.brand_id,
+                "text": p.text,
+                "stage": p.stage,
+                "persona_id": p.persona_id,
+                "persona_name": p.persona_name,
+                "platforms": p.platforms,
+                "tags": p.tags,
+                "topics": p.topics,
+                "created_at": p.created_at
+            }
+            for p in prompts_result
+        ]
+        logger.debug(f"Fetched {len(prompts)} prompts for brand_id={brand_id}")
+        
+        # Debug: Check sample prompt structure
+        if prompts:
+            sample_prompt = prompts[0]
+            logger.debug(f"Sample prompt keys: {list(sample_prompt.keys())}")
+            logger.debug(f"Sample prompt text value: {repr(sample_prompt.get('text', 'NOT_FOUND'))}")
+            logger.debug(f"Sample prompt text type: {type(sample_prompt.get('text'))}")
+            # Count prompts with text
+            prompts_with_text = sum(1 for p in prompts if p.get("text"))
+            logger.debug(f"Prompts with non-empty text: {prompts_with_text} out of {len(prompts)}")
         
         responses_conditions = [Response.brand_id == brand_id]
         if start_date:
@@ -7126,8 +7199,34 @@ async def get_prompts_analytics(
             responses_conditions.append(Response.created_at <= datetime.fromisoformat(f"{end_date}T23:59:59+00:00"))
         
         responses_query = select(Response).where(and_(*responses_conditions))
-        responses_result = db.execute(responses_query)
-        responses = [dict(row._mapping) for row in responses_result]
+        responses_result = db.scalars(responses_query).all()
+        # Convert ORM objects to dicts
+        responses = [
+            {
+                "id": r.id,
+                "brand_id": r.brand_id,
+                "prompt_id": r.prompt_id,
+                "prompt": r.prompt,
+                "response_text": r.response_text,
+                "platform": r.platform,
+                "country": r.country,
+                "persona_id": r.persona_id,
+                "persona_name": r.persona_name,
+                "stage": r.stage,
+                "branded": r.branded,
+                "tags": r.tags,
+                "key_topics": r.key_topics,
+                "brand_present": r.brand_present,
+                "brand_sentiment": r.brand_sentiment,
+                "brand_position": r.brand_position,
+                "competitors_present": r.competitors_present,
+                "competitors": r.competitors,
+                "created_at": r.created_at,
+                "citations": r.citations
+            }
+            for r in responses_result
+        ]
+        logger.debug(f"Fetched {len(responses)} responses for brand_id={brand_id}")
         
         # Get previous period data for change calculation
         prev_responses = []
@@ -7139,6 +7238,8 @@ async def get_prompts_analytics(
                 prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
                 prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
                 
+                logger.debug(f"Fetching previous period data: prev_start={prev_start}, prev_end={prev_end} (period_duration={period_duration} days)")
+                
                 prev_responses_query = select(Response).where(
                     and_(
                         Response.brand_id == brand_id,
@@ -7146,13 +7247,41 @@ async def get_prompts_analytics(
                         Response.created_at <= datetime.fromisoformat(f"{prev_end}T23:59:59+00:00")
                     )
                 )
-                prev_responses_result = db.execute(prev_responses_query)
-                prev_responses = [dict(row._mapping) for row in prev_responses_result]
-            except:
+                prev_responses_result = db.scalars(prev_responses_query).all()
+                # Convert ORM objects to dicts
+                prev_responses = [
+                    {
+                        "id": r.id,
+                        "brand_id": r.brand_id,
+                        "prompt_id": r.prompt_id,
+                        "prompt": r.prompt,
+                        "response_text": r.response_text,
+                        "platform": r.platform,
+                        "country": r.country,
+                        "persona_id": r.persona_id,
+                        "persona_name": r.persona_name,
+                        "stage": r.stage,
+                        "branded": r.branded,
+                        "tags": r.tags,
+                        "key_topics": r.key_topics,
+                        "brand_present": r.brand_present,
+                        "brand_sentiment": r.brand_sentiment,
+                        "brand_position": r.brand_position,
+                        "competitors_present": r.competitors_present,
+                        "competitors": r.competitors,
+                        "created_at": r.created_at,
+                        "citations": r.citations
+                    }
+                    for r in prev_responses_result
+                ]
+                logger.debug(f"Fetched {len(prev_responses)} previous period responses")
+            except Exception as e:
+                logger.debug(f"Error fetching previous period data: {str(e)}")
                 pass
         
         # Group data based on group_by parameter
         grouped_data = {}
+        logger.debug(f"Grouping data by: {group_by}")
         
         if group_by == "tags":
             # Group by tags
@@ -7180,29 +7309,55 @@ async def get_prompts_analytics(
         
         elif group_by == "prompt_variants":
             # Group by prompt text + platform + persona
+            # First, collect all unique prompt texts and their prompt IDs
+            logger.debug(f"Starting prompt_variants grouping with {len(prompts)} prompts and {len(responses)} responses")
+            
+            # Build a map of prompt_text -> list of prompt_ids with that text
+            prompt_text_to_ids = {}
             for prompt in prompts:
                 prompt_text = prompt.get("text", "")
-                # Get responses for this prompt to get platform/persona combinations
-                prompt_responses = [r for r in responses if r.get("prompt_id") == prompt.get("id")]
-                if not prompt_responses:
+                prompt_id = prompt.get("id")
+                if prompt_text:
+                    if prompt_text not in prompt_text_to_ids:
+                        prompt_text_to_ids[prompt_text] = []
+                    prompt_text_to_ids[prompt_text].append(prompt_id)
+            
+            logger.debug(f"Found {len(prompt_text_to_ids)} unique prompt texts")
+            
+            # Now group responses by prompt_text + platform + persona
+            # This ensures all prompts with the same text are grouped together
+            for prompt_text, prompt_ids in prompt_text_to_ids.items():
+                # Get all responses for any prompt with this text
+                text_responses = [r for r in responses if r.get("prompt_id") in prompt_ids]
+                
+                if not text_responses:
                     # If no responses, still create a variant
                     key = f"{prompt_text}|||unknown|||unknown"
                     if key not in grouped_data:
-                        grouped_data[key] = {"prompts": [prompt], "prompt_ids": {prompt["id"]}}
+                        # Find all prompts with this text
+                        matching_prompts = [p for p in prompts if p.get("text") == prompt_text]
+                        grouped_data[key] = {"prompts": matching_prompts, "prompt_ids": set(prompt_ids)}
                 else:
                     # Group by platform + persona combinations
                     variant_map = {}
-                    for resp in prompt_responses:
-                        platform = resp.get("platform", "unknown")
-                        persona = resp.get("persona_name", "unknown")
+                    for resp in text_responses:
+                        # Normalize None values to "unknown" for consistent grouping
+                        platform = resp.get("platform") if resp.get("platform") is not None else "unknown"
+                        persona = resp.get("persona_name") if resp.get("persona_name") is not None else "unknown"
                         variant_key = f"{prompt_text}|||{platform}|||{persona}"
                         if variant_key not in variant_map:
                             variant_map[variant_key] = []
                         variant_map[variant_key].append(resp)
                     
+                    # Create groups for each variant
                     for variant_key in variant_map:
                         if variant_key not in grouped_data:
-                            grouped_data[variant_key] = {"prompts": [prompt], "prompt_ids": {prompt["id"]}}
+                            # Find all prompts with this text
+                            matching_prompts = [p for p in prompts if p.get("text") == prompt_text]
+                            grouped_data[variant_key] = {"prompts": matching_prompts, "prompt_ids": set(prompt_ids)}
+            
+            total_responses_in_groups = sum(len([r for r in responses if r.get("prompt_id") in group_info["prompt_ids"]]) for group_info in grouped_data.values())
+            logger.debug(f"prompt_variants grouping complete: created {len(grouped_data)} groups, total responses in groups: {total_responses_in_groups}")
         
         elif group_by == "stage":
             # Group by stage
@@ -7216,17 +7371,25 @@ async def get_prompts_analytics(
         
         elif group_by == "seed_prompts":
             # Group by unique prompt text
+            logger.debug(f"Starting seed_prompts grouping with {len(prompts)} prompts")
+            prompts_without_text = 0
             for prompt in prompts:
                 prompt_text = prompt.get("text", "")
+                if not prompt_text:
+                    prompts_without_text += 1
+                    logger.debug(f"Prompt id={prompt.get('id')} has empty text field")
                 if prompt_text:
                     if prompt_text not in grouped_data:
                         grouped_data[prompt_text] = {"prompts": [], "prompt_ids": set()}
                     if prompt["id"] not in grouped_data[prompt_text]["prompt_ids"]:
                         grouped_data[prompt_text]["prompts"].append(prompt)
                         grouped_data[prompt_text]["prompt_ids"].add(prompt["id"])
+            logger.debug(f"seed_prompts grouping complete: {len(grouped_data)} groups created, {prompts_without_text} prompts without text")
         
         else:
             raise HTTPException(status_code=400, detail=f"Invalid group_by parameter: {group_by}")
+        
+        logger.debug(f"Grouped data into {len(grouped_data)} groups")
         
         # Calculate metrics for each group
         items = []
@@ -7238,21 +7401,29 @@ async def get_prompts_analytics(
                 parts = group_key.split("|||")
                 if len(parts) >= 3:
                     prompt_text, platform, persona = parts[0], parts[1], parts[2]
+                    
+                    # Debug: Check how many responses match prompt_ids before platform/persona filtering
+                    responses_matching_prompt_ids = [r for r in responses if r.get("prompt_id") in prompt_ids]
+                    logger.debug(f"prompt_variants pre-filter: group_key={group_key[:50]}..., prompt_ids={prompt_ids[:5] if len(prompt_ids) > 5 else prompt_ids} (showing first 5), {len(responses_matching_prompt_ids)} responses match prompt_ids")
+                    
+                    # Filter responses - normalize None values to "unknown" for comparison (same as grouping)
                     group_responses = [
                         r for r in responses 
                         if r.get("prompt_id") in prompt_ids 
-                        and r.get("platform", "unknown") == platform
-                        and r.get("persona_name", "unknown") == persona
+                        and (r.get("platform") if r.get("platform") is not None else "unknown") == platform
+                        and (r.get("persona_name") if r.get("persona_name") is not None else "unknown") == persona
                     ]
                     group_prev_responses = [
                         r for r in prev_responses 
                         if r.get("prompt_id") in prompt_ids 
-                        and r.get("platform", "unknown") == platform
-                        and r.get("persona_name", "unknown") == persona
+                        and (r.get("platform") if r.get("platform") is not None else "unknown") == platform
+                        and (r.get("persona_name") if r.get("persona_name") is not None else "unknown") == persona
                     ]
+                    logger.debug(f"prompt_variants filtering: platform={platform}, persona={persona}, found {len(group_responses)} responses after platform/persona filter")
                 else:
                     group_responses = [r for r in responses if r.get("prompt_id") in prompt_ids]
                     group_prev_responses = [r for r in prev_responses if r.get("prompt_id") in prompt_ids]
+                    logger.debug(f"prompt_variants filtering (invalid key format): prompt_ids={prompt_ids}, found {len(group_responses)} responses")
             else:
                 group_responses = [r for r in responses if r.get("prompt_id") in prompt_ids]
                 group_prev_responses = [r for r in prev_responses if r.get("prompt_id") in prompt_ids]
@@ -7266,12 +7437,15 @@ async def get_prompts_analytics(
                     if len(parts) >= 3:
                         prompt_text, platform, persona = parts[0], parts[1], parts[2]
                         if search_lower not in prompt_text.lower() and search_lower not in platform.lower() and search_lower not in persona.lower():
+                            logger.debug(f"Skipping group_key={group_key} (doesn't match search: {search})")
                             continue
                 else:
                     if search_lower not in group_key.lower():
+                        logger.debug(f"Skipping group_key={group_key} (doesn't match search: {search})")
                         continue
             
             # Calculate metrics
+            logger.debug(f"Calculating metrics for group_key={group_key}: {len(group_responses)} responses, {len(group_prev_responses)} prev responses")
             presence_metrics = calculate_presence_metrics(group_responses)
             citation_metrics = calculate_citation_metrics(group_responses)
             competitors = extract_competitors(group_responses)
@@ -7328,14 +7502,18 @@ async def get_prompts_analytics(
         # Apply search filter for non-variant groups (already filtered above for variants)
         if search and search.strip() and group_by != "prompt_variants":
             search_lower = search.strip().lower()
+            items_before_search = len(items)
             items = [item for item in items if search_lower in item["display_name"].lower()]
+            logger.debug(f"Applied search filter: {items_before_search} -> {len(items)} items")
         
         # Sort by responses count descending
         items.sort(key=lambda x: x["responses_count"], reverse=True)
+        logger.debug(f"Sorted {len(items)} items by responses_count")
         
         # Apply pagination
         total_count = len(items)
         paginated_items = items[offset:offset + limit] if limit else items[offset:]
+        logger.debug(f"Applied pagination: offset={offset}, limit={limit}, total_count={total_count}, returning {len(paginated_items)} items")
         
         return {
             "items": paginated_items,

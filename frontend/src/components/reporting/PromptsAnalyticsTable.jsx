@@ -21,6 +21,14 @@ import {
   useTheme,
   InputAdornment,
   CircularProgress,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  List,
+  ListItem,
+  ListItemText,
 } from "@mui/material";
 import { Search as SearchIcon } from "@mui/icons-material";
 import { motion } from "framer-motion";
@@ -45,6 +53,9 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [competitorsDialogOpen, setCompetitorsDialogOpen] = useState(false);
+  const [selectedCompetitors, setSelectedCompetitors] = useState([]);
+  const [selectedItemName, setSelectedItemName] = useState("");
 
   useEffect(() => {
     fetchData();
@@ -93,6 +104,18 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
   const handleRowsPerPageChange = (event) => {
     setRowsPerPage(parseInt(event.target.value, 10));
     setPage(0);
+  };
+
+  const handleShowMoreCompetitors = (competitors, itemName) => {
+    setSelectedCompetitors(competitors);
+    setSelectedItemName(itemName);
+    setCompetitorsDialogOpen(true);
+  };
+
+  const handleCloseCompetitorsDialog = () => {
+    setCompetitorsDialogOpen(false);
+    setSelectedCompetitors([]);
+    setSelectedItemName("");
   };
 
   const formatChangeIndicator = (change) => {
@@ -208,6 +231,7 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
                         }}
                       >
                         <TableCell
+                          align="left"
                           sx={{
                             fontWeight: 700,
                             fontSize: "11px",
@@ -220,6 +244,7 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
                           {getColumnHeader()}
                         </TableCell>
                         <TableCell
+                          align="center"
                           sx={{
                             fontWeight: 700,
                             fontSize: "11px",
@@ -232,6 +257,7 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
                           Data
                         </TableCell>
                         <TableCell
+                          align="center"
                           sx={{
                             fontWeight: 700,
                             fontSize: "11px",
@@ -244,6 +270,7 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
                           Presence
                         </TableCell>
                         <TableCell
+                          align="center"
                           sx={{
                             fontWeight: 700,
                             fontSize: "11px",
@@ -256,6 +283,7 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
                           Citations
                         </TableCell>
                         <TableCell
+                          align="center"
                           sx={{
                             fontWeight: 700,
                             fontSize: "11px",
@@ -281,7 +309,7 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
                             },
                           }}
                         >
-                          <TableCell sx={{ py: 2 }}>
+                          <TableCell align="left" sx={{ py: 2 }}>
                             <Box>
                               <Typography
                                 variant="body2"
@@ -334,7 +362,7 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
                               )}
                             </Box>
                           </TableCell>
-                          <TableCell sx={{ py: 2 }}>
+                          <TableCell align="center" sx={{ py: 2 }}>
                             <Box>
                               <Typography
                                 variant="body2"
@@ -357,15 +385,16 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
                               </Typography>
                             </Box>
                           </TableCell>
-                          <TableCell sx={{ py: 2 }}>
+                          <TableCell align="center" sx={{ py: 2 }}>
                             <Box
                               sx={{
                                 display: "flex",
                                 alignItems: "center",
+                                justifyContent: "center",
                                 gap: 1,
                               }}
                             >
-                              <Sparkline
+                              {/* <Sparkline
                                 data={item.presence_sparkline || []}
                                 color={
                                   item.presence_change > 0
@@ -376,7 +405,7 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
                                 }
                                 width={100}
                                 height={30}
-                              />
+                              /> */}
                               <Box>
                                 <Typography
                                   variant="body2"
@@ -388,25 +417,26 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
                                 >
                                   {item.presence_percentage?.toFixed(1) || 0}%
                                 </Typography>
-                                <Typography
+                                {/* <Typography
                                   variant="caption"
                                   color={getChangeColor(item.presence_change)}
                                   sx={{ fontSize: "0.75rem" }}
                                 >
                                   {formatChangeIndicator(item.presence_change)}
-                                </Typography>
+                                </Typography> */}
                               </Box>
                             </Box>
                           </TableCell>
-                          <TableCell sx={{ py: 2 }}>
+                          <TableCell align="center" sx={{ py: 2 }}>
                             <Box
                               sx={{
                                 display: "flex",
                                 alignItems: "center",
+                                justifyContent: "center",
                                 gap: 1,
                               }}
                             >
-                              <Sparkline
+                              {/* <Sparkline
                                 data={item.citations_sparkline || []}
                                 color={
                                   item.citations_change > 0
@@ -417,7 +447,7 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
                                 }
                                 width={100}
                                 height={30}
-                              />
+                              /> */}
                               <Box>
                                 <Typography
                                   variant="body2"
@@ -429,17 +459,17 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
                                 >
                                   {item.citations_count?.toLocaleString() || 0}
                                 </Typography>
-                                <Typography
+                                {/* <Typography
                                   variant="caption"
                                   color={getChangeColor(item.citations_change)}
                                   sx={{ fontSize: "0.75rem" }}
                                 >
                                   {formatChangeIndicator(item.citations_change)}
-                                </Typography>
+                                </Typography> */}
                               </Box>
                             </Box>
                           </TableCell>
-                          <TableCell sx={{ py: 2 }}>
+                          <TableCell align="center" sx={{ py: 2 }}>
                             {item.competitors && item.competitors.length > 0 ? (
                               <Box>
                                 {item.competitors.slice(0, 3).map((comp, idx) => (
@@ -458,8 +488,21 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
                                 {item.competitors.length > 3 && (
                                   <Typography
                                     variant="caption"
-                                    color="text.secondary"
-                                    sx={{ fontSize: "0.75rem" }}
+                                    component="button"
+                                    onClick={() => handleShowMoreCompetitors(item.competitors, item.display_name)}
+                                    sx={{
+                                      fontSize: "0.75rem",
+                                      color: "primary.main",
+                                      cursor: "pointer",
+                                      textDecoration: "underline",
+                                      background: "none",
+                                      border: "none",
+                                      padding: 0,
+                                      font: "inherit",
+                                      "&:hover": {
+                                        color: "primary.dark",
+                                      },
+                                    }}
                                   >
                                     +{item.competitors.length - 3} more
                                   </Typography>
@@ -524,6 +567,53 @@ const PromptsAnalyticsTable = ({ clientId, slug, startDate, endDate }) => {
           </CardContent>
         </Card>
       </motion.div>
+
+      {/* Competitors Dialog */}
+      <Dialog
+        open={competitorsDialogOpen}
+        onClose={handleCloseCompetitorsDialog}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          All Competitors - {selectedItemName && selectedItemName.length > 50
+            ? selectedItemName.substring(0, 50) + "..."
+            : selectedItemName}
+        </DialogTitle>
+        <DialogContent>
+          <List>
+            {selectedCompetitors.map((comp, idx) => (
+              <ListItem
+                key={idx}
+                sx={{
+                  borderBottom: `1px solid ${theme.palette.divider}`,
+                  "&:last-child": {
+                    borderBottom: "none",
+                  },
+                }}
+              >
+                <ListItemText
+                  primary={
+                    <Typography variant="body2" fontWeight={600}>
+                      {comp.name}
+                    </Typography>
+                  }
+                  secondary={
+                    <Typography variant="caption" color="text.secondary">
+                      {comp.percentage}% presence
+                    </Typography>
+                  }
+                />
+              </ListItem>
+            ))}
+          </List>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseCompetitorsDialog} color="primary">
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
