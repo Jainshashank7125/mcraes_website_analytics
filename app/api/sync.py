@@ -172,17 +172,45 @@ async def sync_responses(
     brand_id: Optional[int] = Query(None, description="Sync responses for specific brand ID (if not provided, syncs all brands)"),
     platform: Optional[str] = Query(None, description="Filter by AI platform"),
     prompt_id: Optional[int] = Query(None, description="Filter by prompt ID"),
-    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). If not provided, syncs all historical responses."),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). If not provided, syncs all historical responses."),
     request: Request = None,
     current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
-    """Sync responses from Scrunch AI to local PostgreSQL database for all brands or a specific brand"""
+    """
+    Sync responses from Scrunch AI to local PostgreSQL database for all brands or a specific brand.
+    
+    - **brand_id**: Optional specific brand ID to sync. If not provided, syncs all brands.
+    - **platform**: Optional filter by AI platform
+    - **prompt_id**: Optional filter by prompt ID
+    - **start_date**: Optional start date (YYYY-MM-DD). If not provided, syncs all historical responses.
+    - **end_date**: Optional end date (YYYY-MM-DD). If not provided, syncs all historical responses.
+    """
     from app.db.models import AuditLogAction
     
     client = ScrunchAPIClient()
     supabase = SupabaseService(db=db)
+    
+    # Validate date format if provided
+    if start_date:
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("start_date must be in YYYY-MM-DD format")
+    
+    if end_date:
+        try:
+            datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("end_date must be in YYYY-MM-DD format")
+    
+    # Validate date range
+    if start_date and end_date:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        if start_dt > end_dt:
+            raise ValueError("start_date must be before or equal to end_date")
     
     try:
         total_count = 0
@@ -274,13 +302,44 @@ async def sync_responses(
 @handle_api_errors(context="syncing all data")
 async def sync_all(
     sync_mode: str = Query("complete", description="Sync mode: 'new' (only missing items) or 'complete' (all items)"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD) for syncing responses. If not provided, syncs all historical responses."),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD) for syncing responses. If not provided, syncs all historical responses."),
     request: Request = None,
     current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
-    """Start async sync of all Scrunch AI data. Returns immediately with job ID."""
+    """
+    Start async sync of all Scrunch AI data (brands, prompts, and responses). 
+    Returns immediately with job ID.
+    
+    - **sync_mode**: 'new' (only missing items) or 'complete' (all items)
+    - **start_date**: Optional start date (YYYY-MM-DD) for filtering responses. If not provided, syncs all historical responses.
+    - **end_date**: Optional end date (YYYY-MM-DD) for filtering responses. If not provided, syncs all historical responses.
+    
+    Note: Date parameters only apply to responses sync. Brands and prompts are always synced completely.
+    """
     if sync_mode not in ["new", "complete"]:
         raise ValueError("sync_mode must be 'new' or 'complete'")
+    
+    # Validate date format if provided
+    if start_date:
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("start_date must be in YYYY-MM-DD format")
+    
+    if end_date:
+        try:
+            datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("end_date must be in YYYY-MM-DD format")
+    
+    # Validate date range
+    if start_date and end_date:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        if start_dt > end_dt:
+            raise ValueError("start_date must be before or equal to end_date")
     
     # Create job with database session
     from app.services.sync_job_service import SyncJobService
@@ -289,19 +348,28 @@ async def sync_all(
         sync_type="sync_all",
         user_id=current_user["id"],
         user_email=current_user["email"],
-        parameters={"sync_mode": sync_mode}
+        parameters={
+            "sync_mode": sync_mode,
+            "start_date": start_date,
+            "end_date": end_date
+        }
     )
     
     # Start background task (will create its own database session)
     sync_job_service.run_background_task(
-        sync_all_background(job_id, current_user["id"], current_user["email"], sync_mode, request),
+        sync_all_background(job_id, current_user["id"], current_user["email"], sync_mode, start_date, end_date, request),
         job_id
     )
     
     return {
         "status": "started",
         "message": "Sync job started. Use the job_id to check status.",
-        "job_id": job_id
+        "job_id": job_id,
+        "parameters": {
+            "sync_mode": sync_mode,
+            "start_date": start_date,
+            "end_date": end_date
+        }
     }
 @router.get("/sync/status")
 @handle_api_errors(context="fetching sync status")
@@ -320,13 +388,46 @@ async def sync_agency_analytics(
     sync_mode: str = Query("complete", description="Sync mode: 'new' (only missing campaigns) or 'complete' (all campaigns)"),
     campaign_id: Optional[int] = Query(None, description="Sync specific campaign (if not provided, syncs all campaigns)"),
     auto_match_brands: bool = Query(True, description="Automatically match campaigns to brands by URL"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD) for syncing keyword rankings. If not provided, syncs all historical data."),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD) for syncing keyword rankings. If not provided, syncs all historical data."),
     request: Request = None,
     current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
-    """Start async sync of Agency Analytics data. Returns immediately with job ID."""
+    """
+    Start async sync of Agency Analytics data (campaigns, campaign links, and keyword rankings). 
+    Returns immediately with job ID.
+    
+    - **sync_mode**: 'new' (only missing campaigns) or 'complete' (all campaigns)
+    - **campaign_id**: Optional specific campaign ID to sync. If not provided, syncs all campaigns.
+    - **auto_match_brands**: Automatically match campaigns to brands by URL
+    - **start_date**: Optional start date (YYYY-MM-DD) for filtering keyword rankings. If not provided, syncs all historical data.
+    - **end_date**: Optional end date (YYYY-MM-DD) for filtering keyword rankings. If not provided, syncs all historical data.
+    
+    Note: Date parameters only apply to keyword rankings sync. Campaigns and campaign links are always synced completely.
+    """
     if sync_mode not in ["new", "complete"]:
         raise ValueError("sync_mode must be 'new' or 'complete'")
+    
+    # Validate date format if provided
+    if start_date:
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("start_date must be in YYYY-MM-DD format")
+    
+    if end_date:
+        try:
+            datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("end_date must be in YYYY-MM-DD format")
+    
+    # Validate date range
+    if start_date and end_date:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        if start_dt > end_dt:
+            raise ValueError("start_date must be before or equal to end_date")
     
     # Create job with database session
     from app.services.sync_job_service import SyncJobService
@@ -338,20 +439,29 @@ async def sync_agency_analytics(
         parameters={
             "sync_mode": sync_mode,
             "campaign_id": campaign_id,
-            "auto_match_brands": auto_match_brands
+            "auto_match_brands": auto_match_brands,
+            "start_date": start_date,
+            "end_date": end_date
         }
     )
     
     # Start background task (will create its own database session)
     sync_job_service.run_background_task(
-        sync_agency_analytics_background(job_id, current_user["id"], current_user["email"], sync_mode, campaign_id, auto_match_brands, request),
+        sync_agency_analytics_background(job_id, current_user["id"], current_user["email"], sync_mode, campaign_id, auto_match_brands, start_date, end_date, request),
         job_id
     )
     
     return {
         "status": "started",
         "message": "Agency Analytics sync job started. Use the job_id to check status.",
-        "job_id": job_id
+        "job_id": job_id,
+        "parameters": {
+            "sync_mode": sync_mode,
+            "campaign_id": campaign_id,
+            "auto_match_brands": auto_match_brands,
+            "start_date": start_date,
+            "end_date": end_date
+        }
     }
 
 # =====================================================
@@ -361,16 +471,44 @@ async def sync_agency_analytics(
 async def sync_ga4(
     sync_mode: str = Query("complete", description="Sync mode: 'new' (only clients without GA4 data) or 'complete' (all clients with GA4)"),
     client_id: Optional[int] = Query(None, description="Sync GA4 data for specific client ID (if not provided, syncs all clients with GA4 configured)"),
-    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD), defaults to 30 days ago"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD), defaults to today"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD), defaults to 30 days ago if not provided"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD), defaults to today if not provided"),
     sync_realtime: bool = Query(True, description="Whether to sync realtime data"),
     request: Request = None,
     current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
-    """Start async sync of GA4 data. Returns immediately with job ID. Now uses client_id instead of brand_id."""
+    """
+    Start async sync of GA4 data. Returns immediately with job ID. Uses client_id instead of brand_id.
+    
+    - **sync_mode**: 'new' (only clients without GA4 data) or 'complete' (all clients with GA4)
+    - **client_id**: Optional specific client ID to sync. If not provided, syncs all clients with GA4 configured.
+    - **start_date**: Optional start date (YYYY-MM-DD). If not provided, defaults to 30 days ago.
+    - **end_date**: Optional end date (YYYY-MM-DD). If not provided, defaults to today.
+    - **sync_realtime**: Whether to sync realtime data
+    """
     if sync_mode not in ["new", "complete"]:
         raise ValueError("sync_mode must be 'new' or 'complete'")
+    
+    # Validate date format if provided
+    if start_date:
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("start_date must be in YYYY-MM-DD format")
+    
+    if end_date:
+        try:
+            datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("end_date must be in YYYY-MM-DD format")
+    
+    # Validate date range
+    if start_date and end_date:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        if start_dt > end_dt:
+            raise ValueError("start_date must be before or equal to end_date")
     
     # Create job with database session
     from app.services.sync_job_service import SyncJobService

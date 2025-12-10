@@ -2118,15 +2118,18 @@ async def get_reporting_dashboard(
                     ]
                     if client_id:
                         query_conditions.append(traffic_table.c.client_id == client_id)
+                        logger.info(f"[GA4 DAILY DATA] Querying daily traffic records for client_id={client_id}, property_id={property_id}, date_range={start_date} to {end_date}")
                     else:
                         query_conditions.append(traffic_table.c.brand_id == brand_id)
+                        logger.info(f"[GA4 DAILY DATA] Querying daily traffic records for brand_id={brand_id}, property_id={property_id}, date_range={start_date} to {end_date}")
                     daily_traffic_query = select(traffic_table).where(and_(*query_conditions)).order_by(traffic_table.c.date.asc())
                     daily_traffic_result = db.execute(daily_traffic_query)
                     daily_traffic_records = [dict(row._mapping) for row in daily_traffic_result]
+                    logger.info(f"[GA4 DAILY DATA] Found {len(daily_traffic_records)} daily traffic records from database")
                     
                     # If no records found for specific client_id, fall back to property_id only
                     if not daily_traffic_records and client_id:
-                        logger.info(f"No GA4 daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
+                        logger.info(f"[GA4 DAILY DATA] No GA4 daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
                         fallback_query_conditions = [
                             traffic_table.c.property_id == property_id,
                             traffic_table.c.date >= start_date,
@@ -2135,19 +2138,46 @@ async def get_reporting_dashboard(
                         fallback_query = select(traffic_table).where(and_(*fallback_query_conditions)).order_by(traffic_table.c.date.asc())
                         fallback_result = db.execute(fallback_query)
                         daily_traffic_records = [dict(row._mapping) for row in fallback_result]
+                        logger.info(f"[GA4 DAILY DATA] Fallback query found {len(daily_traffic_records)} daily traffic records")
                     
+                    matched_count = 0
+                    unmatched_dates = []
                     for record in daily_traffic_records:
                         date = record.get("date")
                         if date:
-                            # Convert date to string if it's a date object
+                            # Convert date to string format if it's a date object
+                            original_date = date
                             if hasattr(date, 'strftime'):
                                 date_str = date.strftime("%Y-%m-%d")
+                                logger.debug(f"[GA4 DAILY DATA] Converted date object {date} to string {date_str}")
                             else:
                                 date_str = str(date)
+                                # Remove time component if present
+                                if ' ' in date_str:
+                                    date_str = date_str.split(' ')[0]
+                                    logger.debug(f"[GA4 DAILY DATA] Removed time component from date string: {date_str}")
+                                # Ensure it's in YYYY-MM-DD format
+                                if len(date_str) == 8 and '-' not in date_str:
+                                    # Assume YYYYMMDD format, convert to YYYY-MM-DD
+                                    date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                                    logger.debug(f"[GA4 DAILY DATA] Converted YYYYMMDD format to YYYY-MM-DD: {date_str}")
+                            
                             if date_str in daily_metrics:
-                                daily_metrics[date_str]["users"] = record.get("users", 0)
-                                daily_metrics[date_str]["sessions"] = record.get("sessions", 0)
-                                daily_metrics[date_str]["new_users"] = record.get("new_users", 0)
+                                users_val = record.get("users", 0)
+                                sessions_val = record.get("sessions", 0)
+                                new_users_val = record.get("new_users", 0)
+                                daily_metrics[date_str]["users"] = users_val
+                                daily_metrics[date_str]["sessions"] = sessions_val
+                                daily_metrics[date_str]["new_users"] = new_users_val
+                                matched_count += 1
+                                logger.debug(f"[GA4 DAILY DATA] Matched date {date_str}: users={users_val}, sessions={sessions_val}, new_users={new_users_val}")
+                            else:
+                                unmatched_dates.append((original_date, date_str))
+                                logger.warning(f"[GA4 DAILY DATA] Date {date_str} (from {original_date}) not found in daily_metrics keys. Available keys: {list(daily_metrics.keys())[:5]}...")
+                    
+                    logger.info(f"[GA4 DAILY DATA] Successfully matched {matched_count}/{len(daily_traffic_records)} daily traffic records to daily_metrics")
+                    if unmatched_dates:
+                        logger.warning(f"[GA4 DAILY DATA] {len(unmatched_dates)} dates could not be matched: {unmatched_dates[:3]}...")
                     
                     # Get daily conversions - match to existing dates or create new entries
                     conversions_table = supabase._get_table("ga4_daily_conversions")
@@ -2398,11 +2428,22 @@ async def get_reporting_dashboard(
                     
                     logger.info(f"[GA4 STORED DATA] Loaded {len(daily_metrics)} daily metrics records for current period, {len(prev_daily_metrics)} for previous period")
                     
+                    # Log summary of daily_metrics data before building chart
+                    non_zero_dates = [date for date, data in daily_metrics.items() if data.get("users", 0) > 0 or data.get("sessions", 0) > 0]
+                    total_users_in_metrics = sum(data.get("users", 0) for data in daily_metrics.values())
+                    total_sessions_in_metrics = sum(data.get("sessions", 0) for data in daily_metrics.values())
+                    logger.info(f"[GA4 DAILY DATA] Summary before building chart: {len(non_zero_dates)} dates with non-zero data out of {len(daily_metrics)} total dates")
+                    logger.info(f"[GA4 DAILY DATA] Total users in daily_metrics: {total_users_in_metrics}, Total sessions: {total_sessions_in_metrics}")
+                    if non_zero_dates:
+                        sample_data = daily_metrics[non_zero_dates[0]]
+                        logger.info(f"[GA4 DAILY DATA] Sample data for {non_zero_dates[0]}: users={sample_data.get('users')}, sessions={sample_data.get('sessions')}, new_users={sample_data.get('new_users')}")
+                    
                     # Combine current and previous period data
                     if daily_metrics:
                         ga4_daily_comparison = []
                         prev_data_list = sorted(prev_daily_metrics.items())
                         current_dates = sorted(daily_metrics.keys())
+                        logger.info(f"[GA4 DAILY DATA] Building ga4_daily_comparison with {len(current_dates)} current dates and {len(prev_data_list)} previous period dates")
                         
                         for idx, date_str in enumerate(current_dates):
                             current = daily_metrics[date_str]
@@ -2410,7 +2451,7 @@ async def get_reporting_dashboard(
                             prev_idx = idx if idx < len(prev_data_list) else len(prev_data_list) - 1
                             previous = prev_data_list[prev_idx][1] if prev_data_list else {}
                             
-                            ga4_daily_comparison.append({
+                            comparison_entry = {
                                 "date": current["date"],  # Already in YYYYMMDD format
                                 "current_users": current["users"],
                                 "previous_users": previous.get("users", 0),
@@ -2422,9 +2463,22 @@ async def get_reporting_dashboard(
                                 "previous_conversions": previous.get("conversions", 0),
                                 "current_revenue": current["revenue"],
                                 "previous_revenue": previous.get("revenue", 0)
-                            })
+                            }
+                            ga4_daily_comparison.append(comparison_entry)
+                            
+                            # Log first few entries and any entries with data for debugging
+                            if idx < 3 or current["users"] > 0 or current["sessions"] > 0:
+                                logger.debug(f"[GA4 DAILY DATA] Comparison entry for {date_str} ({current['date']}): current_users={current['users']}, current_sessions={current['sessions']}, current_new_users={current['new_users']}")
                         
                         chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                        logger.info(f"[GA4 DAILY DATA] Created ga4_daily_comparison with {len(ga4_daily_comparison)} entries")
+                        
+                        # Log summary of comparison data
+                        entries_with_data = [e for e in ga4_daily_comparison if e.get("current_users", 0) > 0 or e.get("current_sessions", 0) > 0]
+                        total_chart_users = sum(e.get("current_users", 0) for e in ga4_daily_comparison)
+                        total_chart_sessions = sum(e.get("current_sessions", 0) for e in ga4_daily_comparison)
+                        logger.info(f"[GA4 DAILY DATA] {len(entries_with_data)}/{len(ga4_daily_comparison)} comparison entries have non-zero data")
+                        logger.info(f"[GA4 DAILY DATA] Total users in chart: {total_chart_users}, Total sessions: {total_chart_sessions}")
                         
                         # Keep backward compatibility - users_over_time (all days in range)
                         users_over_time = []
@@ -2434,26 +2488,83 @@ async def get_reporting_dashboard(
                                 "users": daily_metrics[date_str]["users"]
                             })
                         chart_data["users_over_time"] = users_over_time
+                        logger.info(f"[GA4 DAILY DATA] Created users_over_time with {len(users_over_time)} entries")
+                        
+                        # Log summary of users_over_time
+                        users_with_data = [e for e in users_over_time if e.get("users", 0) > 0]
+                        total_users_over_time = sum(e.get("users", 0) for e in users_over_time)
+                        logger.info(f"[GA4 DAILY DATA] {len(users_with_data)}/{len(users_over_time)} users_over_time entries have non-zero users. Total: {total_users_over_time}")
                     else:
-                        chart_data["ga4_daily_comparison"] = []
-                        chart_data["users_over_time"] = []
+                        # Even if no data found, generate chart data with zeros for all dates in range
+                        # This ensures charts show up even when no data is synced yet
+                        logger.warning(f"[GA4 DAILY DATA] daily_metrics is empty, generating zero-filled chart data for {start_date} to {end_date}")
+                        ga4_daily_comparison = []
+                        users_over_time = []
+                        current_date = start_dt
+                        while current_date <= end_dt:
+                            date_str = current_date.strftime("%Y-%m-%d")
+                            date_formatted = current_date.strftime("%Y%m%d")
+                            ga4_daily_comparison.append({
+                                "date": date_formatted,
+                                "current_users": 0,
+                                "previous_users": 0,
+                                "current_sessions": 0,
+                                "previous_sessions": 0,
+                                "current_new_users": 0,
+                                "previous_new_users": 0,
+                                "current_conversions": 0,
+                                "previous_conversions": 0,
+                                "current_revenue": 0,
+                                "previous_revenue": 0
+                            })
+                            users_over_time.append({
+                                "date": date_formatted,
+                                "users": 0
+                            })
+                            current_date += timedelta(days=1)
+                        chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                        chart_data["users_over_time"] = users_over_time
+                        logger.info(f"[GA4 DAILY DATA] Generated zero-filled chart data: {len(ga4_daily_comparison)} entries")
                 except Exception as e:
                     logger.warning(f"[GA4 STORED DATA] Could not fetch daily metrics from stored data: {str(e)}")
-                    chart_data["ga4_daily_comparison"] = []
-                    chart_data["users_over_time"] = []
+                    # Generate empty chart data with zeros for all dates even on error
+                    ga4_daily_comparison = []
+                    users_over_time = []
+                    try:
+                        current_date = start_dt
+                        while current_date <= end_dt:
+                            date_formatted = current_date.strftime("%Y%m%d")
+                            ga4_daily_comparison.append({
+                                "date": date_formatted,
+                                "current_users": 0,
+                                "previous_users": 0,
+                                "current_sessions": 0,
+                                "previous_sessions": 0,
+                                "current_new_users": 0,
+                                "previous_new_users": 0,
+                                "current_conversions": 0,
+                                "previous_conversions": 0,
+                                "current_revenue": 0,
+                                "previous_revenue": 0
+                            })
+                            users_over_time.append({
+                                "date": date_formatted,
+                                "users": 0
+                            })
+                            current_date += timedelta(days=1)
+                    except:
+                        pass
+                    chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                    chart_data["users_over_time"] = users_over_time
+                    logger.warning(f"[GA4 DAILY DATA] Generated zero-filled chart data due to error: {len(ga4_daily_comparison)} entries")
             except Exception as e:
                 logger.warning(f"Error fetching GA4 chart data: {str(e)}")
         
         # Get impressions vs clicks and top campaigns (Agency Analytics) using SQLAlchemy Core
-        try:
-            campaign_brands_table = supabase._get_table("agency_analytics_campaign_brands")
-            campaign_links_query = select(campaign_brands_table).where(
-                campaign_brands_table.c.brand_id == brand_id
-            )
-            campaign_links_result = db.execute(campaign_links_query)
-            campaign_links = [dict(row._mapping) for row in campaign_links_result]
-        except:
-            campaign_links = []
+        # NOTE: Do NOT overwrite campaign_links here - it's already set correctly above (client-based if client_id, brand-based otherwise)
+        # The campaign_links variable is already populated in the Agency Analytics KPIs section above
+        # This section was incorrectly overwriting it with brand-based links, causing wrong data to be returned
+        # Keep the existing campaign_links that were set based on client_id or brand_id above
         
         # Note: campaign_links is checked but not used here
         # The actual Scrunch metrics calculation happens later in the function
@@ -2860,15 +2971,18 @@ async def get_reporting_dashboard(
                     ]
                     if client_id:
                         query_conditions.append(traffic_table.c.client_id == client_id)
+                        logger.info(f"[GA4 DAILY DATA] Querying daily traffic records for client_id={client_id}, property_id={property_id}, date_range={start_date} to {end_date}")
                     else:
                         query_conditions.append(traffic_table.c.brand_id == brand_id)
+                        logger.info(f"[GA4 DAILY DATA] Querying daily traffic records for brand_id={brand_id}, property_id={property_id}, date_range={start_date} to {end_date}")
                     daily_traffic_query = select(traffic_table).where(and_(*query_conditions)).order_by(traffic_table.c.date.asc())
                     daily_traffic_result = db.execute(daily_traffic_query)
                     daily_traffic_records = [dict(row._mapping) for row in daily_traffic_result]
+                    logger.info(f"[GA4 DAILY DATA] Found {len(daily_traffic_records)} daily traffic records from database")
                     
                     # Fallback: If no records found for client_id, query by property_id only
                     if not daily_traffic_records and client_id:
-                        logger.info(f"No GA4 daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
+                        logger.info(f"[GA4 DAILY DATA] No GA4 daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
                         fallback_query_conditions = [
                             traffic_table.c.property_id == property_id,
                             traffic_table.c.date >= start_date,
@@ -2877,13 +2991,46 @@ async def get_reporting_dashboard(
                         fallback_daily_traffic_query = select(traffic_table).where(and_(*fallback_query_conditions)).order_by(traffic_table.c.date.asc())
                         fallback_daily_traffic_result = db.execute(fallback_daily_traffic_query)
                         daily_traffic_records = [dict(row._mapping) for row in fallback_daily_traffic_result]
+                        logger.info(f"[GA4 DAILY DATA] Fallback query found {len(daily_traffic_records)} daily traffic records")
                     
+                    matched_count = 0
+                    unmatched_dates = []
                     for record in daily_traffic_records:
                         date = record.get("date")
-                        if date and date in daily_metrics:
-                            daily_metrics[date]["users"] = record.get("users", 0)
-                            daily_metrics[date]["sessions"] = record.get("sessions", 0)
-                            daily_metrics[date]["new_users"] = record.get("new_users", 0)
+                        if date:
+                            # Convert date to string format if it's a date object
+                            original_date = date
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                                logger.debug(f"[GA4 DAILY DATA] Converted date object {date} to string {date_str}")
+                            else:
+                                date_str = str(date)
+                                # Remove time component if present
+                                if ' ' in date_str:
+                                    date_str = date_str.split(' ')[0]
+                                    logger.debug(f"[GA4 DAILY DATA] Removed time component from date string: {date_str}")
+                                # Ensure it's in YYYY-MM-DD format
+                                if len(date_str) == 8 and '-' not in date_str:
+                                    # Assume YYYYMMDD format, convert to YYYY-MM-DD
+                                    date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                                    logger.debug(f"[GA4 DAILY DATA] Converted YYYYMMDD format to YYYY-MM-DD: {date_str}")
+                            
+                            if date_str in daily_metrics:
+                                users_val = record.get("users", 0)
+                                sessions_val = record.get("sessions", 0)
+                                new_users_val = record.get("new_users", 0)
+                                daily_metrics[date_str]["users"] = users_val
+                                daily_metrics[date_str]["sessions"] = sessions_val
+                                daily_metrics[date_str]["new_users"] = new_users_val
+                                matched_count += 1
+                                logger.debug(f"[GA4 DAILY DATA] Matched date {date_str}: users={users_val}, sessions={sessions_val}, new_users={new_users_val}")
+                            else:
+                                unmatched_dates.append((original_date, date_str))
+                                logger.warning(f"[GA4 DAILY DATA] Date {date_str} (from {original_date}) not found in daily_metrics keys. Available keys: {list(daily_metrics.keys())[:5]}...")
+                    
+                    logger.info(f"[GA4 DAILY DATA] Successfully matched {matched_count}/{len(daily_traffic_records)} daily traffic records to daily_metrics")
+                    if unmatched_dates:
+                        logger.warning(f"[GA4 DAILY DATA] {len(unmatched_dates)} dates could not be matched: {unmatched_dates[:3]}...")
                     
                     # Get daily conversions - match to existing dates or create new entries
                     conversions_table = supabase._get_table("ga4_daily_conversions")
@@ -3127,11 +3274,22 @@ async def get_reporting_dashboard(
                     
                     logger.info(f"[GA4 STORED DATA] Loaded {len(daily_metrics)} daily metrics records for current period, {len(prev_daily_metrics)} for previous period")
                     
+                    # Log summary of daily_metrics data before building chart
+                    non_zero_dates = [date for date, data in daily_metrics.items() if data.get("users", 0) > 0 or data.get("sessions", 0) > 0]
+                    total_users_in_metrics = sum(data.get("users", 0) for data in daily_metrics.values())
+                    total_sessions_in_metrics = sum(data.get("sessions", 0) for data in daily_metrics.values())
+                    logger.info(f"[GA4 DAILY DATA] Summary before building chart: {len(non_zero_dates)} dates with non-zero data out of {len(daily_metrics)} total dates")
+                    logger.info(f"[GA4 DAILY DATA] Total users in daily_metrics: {total_users_in_metrics}, Total sessions: {total_sessions_in_metrics}")
+                    if non_zero_dates:
+                        sample_data = daily_metrics[non_zero_dates[0]]
+                        logger.info(f"[GA4 DAILY DATA] Sample data for {non_zero_dates[0]}: users={sample_data.get('users')}, sessions={sample_data.get('sessions')}, new_users={sample_data.get('new_users')}")
+                    
                     # Combine current and previous period data
                     if daily_metrics:
                         ga4_daily_comparison = []
                         prev_data_list = sorted(prev_daily_metrics.items())
                         current_dates = sorted(daily_metrics.keys())
+                        logger.info(f"[GA4 DAILY DATA] Building ga4_daily_comparison with {len(current_dates)} current dates and {len(prev_data_list)} previous period dates")
                         
                         for idx, date_str in enumerate(current_dates):
                             current = daily_metrics[date_str]
@@ -3139,7 +3297,7 @@ async def get_reporting_dashboard(
                             prev_idx = idx if idx < len(prev_data_list) else len(prev_data_list) - 1
                             previous = prev_data_list[prev_idx][1] if prev_data_list else {}
                             
-                            ga4_daily_comparison.append({
+                            comparison_entry = {
                                 "date": current["date"],  # Already in YYYYMMDD format
                                 "current_users": current["users"],
                                 "previous_users": previous.get("users", 0),
@@ -3151,9 +3309,22 @@ async def get_reporting_dashboard(
                                 "previous_conversions": previous.get("conversions", 0),
                                 "current_revenue": current["revenue"],
                                 "previous_revenue": previous.get("revenue", 0)
-                            })
+                            }
+                            ga4_daily_comparison.append(comparison_entry)
+                            
+                            # Log first few entries and any entries with data for debugging
+                            if idx < 3 or current["users"] > 0 or current["sessions"] > 0:
+                                logger.debug(f"[GA4 DAILY DATA] Comparison entry for {date_str} ({current['date']}): current_users={current['users']}, current_sessions={current['sessions']}, current_new_users={current['new_users']}")
                         
                         chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                        logger.info(f"[GA4 DAILY DATA] Created ga4_daily_comparison with {len(ga4_daily_comparison)} entries")
+                        
+                        # Log summary of comparison data
+                        entries_with_data = [e for e in ga4_daily_comparison if e.get("current_users", 0) > 0 or e.get("current_sessions", 0) > 0]
+                        total_chart_users = sum(e.get("current_users", 0) for e in ga4_daily_comparison)
+                        total_chart_sessions = sum(e.get("current_sessions", 0) for e in ga4_daily_comparison)
+                        logger.info(f"[GA4 DAILY DATA] {len(entries_with_data)}/{len(ga4_daily_comparison)} comparison entries have non-zero data")
+                        logger.info(f"[GA4 DAILY DATA] Total users in chart: {total_chart_users}, Total sessions: {total_chart_sessions}")
                         
                         # Keep backward compatibility - users_over_time (all days in range)
                         users_over_time = []
@@ -3163,14 +3334,72 @@ async def get_reporting_dashboard(
                                 "users": daily_metrics[date_str]["users"]
                             })
                         chart_data["users_over_time"] = users_over_time
+                        logger.info(f"[GA4 DAILY DATA] Created users_over_time with {len(users_over_time)} entries")
+                        
+                        # Log summary of users_over_time
+                        users_with_data = [e for e in users_over_time if e.get("users", 0) > 0]
+                        total_users_over_time = sum(e.get("users", 0) for e in users_over_time)
+                        logger.info(f"[GA4 DAILY DATA] {len(users_with_data)}/{len(users_over_time)} users_over_time entries have non-zero users. Total: {total_users_over_time}")
                     else:
-                        chart_data["ga4_daily_comparison"] = []
-                        chart_data["users_over_time"] = []
+                        # Even if no data found, generate chart data with zeros for all dates in range
+                        # This ensures charts show up even when no data is synced yet
+                        ga4_daily_comparison = []
+                        users_over_time = []
+                        current_date = start_dt
+                        while current_date <= end_dt:
+                            date_str = current_date.strftime("%Y-%m-%d")
+                            date_formatted = current_date.strftime("%Y%m%d")
+                            ga4_daily_comparison.append({
+                                "date": date_formatted,
+                                "current_users": 0,
+                                "previous_users": 0,
+                                "current_sessions": 0,
+                                "previous_sessions": 0,
+                                "current_new_users": 0,
+                                "previous_new_users": 0,
+                                "current_conversions": 0,
+                                "previous_conversions": 0,
+                                "current_revenue": 0,
+                                "previous_revenue": 0
+                            })
+                            users_over_time.append({
+                                "date": date_formatted,
+                                "users": 0
+                            })
+                            current_date += timedelta(days=1)
+                        chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                        chart_data["users_over_time"] = users_over_time
                 except Exception as e:
                     logger.warning(f"[GA4 STORED DATA] Could not fetch daily metrics from stored data: {str(e)}")
-                    chart_data["ga4_daily_comparison"] = []
-                    chart_data["users_over_time"] = []
-                    chart_data["ga4_daily_comparison"] = []
+                    # Generate empty chart data with zeros for all dates even on error
+                    ga4_daily_comparison = []
+                    users_over_time = []
+                    try:
+                        current_date = start_dt
+                        while current_date <= end_dt:
+                            date_formatted = current_date.strftime("%Y%m%d")
+                            ga4_daily_comparison.append({
+                                "date": date_formatted,
+                                "current_users": 0,
+                                "previous_users": 0,
+                                "current_sessions": 0,
+                                "previous_sessions": 0,
+                                "current_new_users": 0,
+                                "previous_new_users": 0,
+                                "current_conversions": 0,
+                                "previous_conversions": 0,
+                                "current_revenue": 0,
+                                "previous_revenue": 0
+                            })
+                            users_over_time.append({
+                                "date": date_formatted,
+                                "users": 0
+                            })
+                            current_date += timedelta(days=1)
+                    except:
+                        pass
+                    chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                    chart_data["users_over_time"] = users_over_time
             except Exception as e:
                 logger.warning(f"Error fetching GA4 chart data: {str(e)}")
         
@@ -3289,8 +3518,12 @@ async def get_reporting_dashboard(
             brand_name = None
             ga4_configured = False
         
+        # Determine the actual brand_id to return in response
+        # When client_id is provided, use scrunch_brand_id from client, otherwise use path parameter brand_id
+        actual_brand_id = scrunch_brand_id if client_id and scrunch_brand_id else brand_id
+        
         response_payload = {
-            "brand_id": brand_id,
+            "brand_id": actual_brand_id,
             "client_id": client_id if client_id else None,
             "brand_name": brand_name,
             "client_name": client.get("company_name") if client else None,

@@ -201,14 +201,30 @@ class AgencyAnalyticsClient:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None
     ) -> List[Dict]:
-        """Get campaign rankings data (last 30 days by default)"""
+        """
+        Get campaign rankings data.
+        
+        Args:
+            campaign_id: Campaign ID
+            start_date: Optional start date (YYYY-MM-DD). If not provided, defaults to first day of current month.
+            end_date: Optional end date (YYYY-MM-DD). If not provided, defaults to today.
+        
+        Returns:
+            List of campaign ranking records
+        """
         try:
-            # Default to last 30 days
+            # Default to current month if dates not provided
             if not end_date:
                 end_date = datetime.now().strftime("%Y-%m-%d")
             if not start_date:
-                # Get last 30 days
-                start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+                # First day of current month
+                start_date = datetime.now().replace(day=1).strftime("%Y-%m-%d")
+            
+            filters = [
+                {"campaign_id": {"$equals_comparison": campaign_id}},
+                {"end_date": {"$lessthanorequal_comparison": end_date}},
+                {"start_date": {"$greaterthanorequal_comparison": start_date}}
+            ]
             
             body = {
                 "provider": "agency-analytics-v2",
@@ -230,11 +246,7 @@ class AgencyAnalyticsClient:
                     "competition",
                     "field_status"
                 ],
-                "filters": [
-                    {"end_date": {"$lessthanorequal_comparison": end_date}},
-                    {"start_date": {"$greaterthanorequal_comparison": start_date}},
-                    {"campaign_id": {"$equals_comparison": campaign_id}}
-                ],
+                "filters": filters,
                 "group_by": ["date"],
                 "sort": {"date": "asc"},
                 "offset": 0,
@@ -471,14 +483,30 @@ class AgencyAnalyticsClient:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None
     ) -> List[Dict]:
-        """Get keyword rankings data (last 30 days by default)"""
+        """
+        Get keyword rankings data.
+        
+        Args:
+            keyword_id: Keyword ID
+            start_date: Optional start date (YYYY-MM-DD). If not provided, defaults to first day of current month.
+            end_date: Optional end date (YYYY-MM-DD). If not provided, defaults to today.
+        
+        Returns:
+            List of keyword ranking records
+        """
         try:
-            # Default to last 30 days if not provided
+            # Default to current month if dates not provided
             if not end_date:
                 end_date = datetime.now().strftime("%Y-%m-%d")
             if not start_date:
-                # Get last 30 days
-                start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+                # First day of current month
+                start_date = datetime.now().replace(day=1).strftime("%Y-%m-%d")
+            
+            filters = [
+                {"keyword_id": {"$equals_comparison": keyword_id}},
+                {"end_date": {"$lessthanorequal_comparison": end_date}},
+                {"start_date": {"$greaterthanorequal_comparison": start_date}}
+            ]
             
             body = {
                 "provider": "agency-analytics-v2",
@@ -498,11 +526,7 @@ class AgencyAnalyticsClient:
                     "competition",
                     "field_status"
                 ],
-                "filters": [
-                    {"end_date": {"$lessthanorequal_comparison": end_date}},
-                    {"start_date": {"$greaterthanorequal_comparison": start_date}},
-                    {"keyword_id": {"$equals_comparison": keyword_id}}
-                ],
+                "filters": filters,
                 "group_by": ["date"],
                 "sort": [{"date": "asc"}],  # Use array format to match API playground
                 "offset": 0,
