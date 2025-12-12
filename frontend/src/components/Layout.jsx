@@ -104,7 +104,8 @@ function Layout({ children }) {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          px: 2,
+          // px: 2,
+          padding: 4,
         }}
       >
         <Box 
@@ -117,8 +118,8 @@ function Layout({ children }) {
         >
           <Box
             component="img"
-            src="https://kvrnlsosagpwiuqzifva.supabase.co/storage/v1/object/public/brand-logos/1631325584055.jpeg"
-            alt="McRAE Analytics"
+            src="https://dvmakvtrtjvffceujlfm.supabase.co/storage/v1/object/public/brand-logos/logo-macraes-transparent.png"
+            alt="MacRAE'S"
             sx={{
               maxHeight: 100,
               maxWidth: 200,

@@ -377,6 +377,7 @@ function ReportingDashboard({
   const [selectedClientReportTitle, setSelectedClientReportTitle] =
     useState(null); // Store custom report title
   const [selectedClientLogoUrl, setSelectedClientLogoUrl] = useState(null); // Store client logo URL
+  const [selectedClientName, setSelectedClientName] = useState(null); // Store client name for default title
   const [showOverviewDialog, setShowOverviewDialog] = useState(false);
   const [overviewData, setOverviewData] = useState(null);
   const [loadingOverview, setLoadingOverview] = useState(false);
@@ -769,9 +770,10 @@ function ReportingDashboard({
               if (client.scrunch_brand_id) {
                 setSelectedBrandId(client.scrunch_brand_id);
               }
-              // Store report_title and logo_url for public view
+              // Store report_title, logo_url, and company_name for public view
               setSelectedClientReportTitle(client.report_title || null);
               setSelectedClientLogoUrl(client.logo_url || null);
+              setSelectedClientName(client.company_name || null);
               return;
             }
           } catch (clientErr) {
@@ -948,9 +950,10 @@ function ReportingDashboard({
         } else {
           setSelectedBrandId(null);
         }
-        // Update report_title and logo_url from client
+        // Update report_title, logo_url, and company_name from client
         setSelectedClientReportTitle(selectedClient.report_title || null);
         setSelectedClientLogoUrl(selectedClient.logo_url || null);
+        setSelectedClientName(selectedClient.company_name || null);
       }
     }
   }, [selectedClientId, clients]);
@@ -1530,7 +1533,7 @@ function ReportingDashboard({
         case "AgencyAnalytics":
           return "SEO Performance";
         case "Scrunch":
-          return "Brand Intelligence";
+          return "AI Visibility";
         default:
           return source;
       }
@@ -2141,58 +2144,76 @@ function ReportingDashboard({
           justifyContent="space-between"
           alignItems="center"
           mb={2}
+          position="relative"
         >
-          <Box display="flex" alignItems="center" gap={2} flex={1}>
-            {/* MacRAS Logo - Always show in header */}
-            <Box
-              component="img"
-              src="https://kvrnlsosagpwiuqzifva.supabase.co/storage/v1/object/public/brand-logos/1631325584055.jpeg"
-              alt="MacRAS"
-              sx={{
-                maxHeight: 48,
-                maxWidth: 180,
-                height: "auto",
-                width: "auto",
-                objectFit: "contain",
-                borderRadius: 1,
-              }}
-            />
-            {/* Main heading - use custom report title if available, otherwise default */}
-            <Typography
-              variant="h4"
-              fontWeight={700}
-              sx={{
-                fontSize: "1.75rem",
-                letterSpacing: "-0.02em",
-                color: "text.primary",
-                flex: 1,
-              }}
-            >
-              {selectedClientReportTitle || "MacRAES Reporting Dashboard"}
-            </Typography>
-            {/* Show client logo if available */}
-            {(selectedClientLogoUrl ||
-              (isPublic && publicBrandInfo?.logo_url)) && (
-              <Box
-                component="img"
-                src={selectedClientLogoUrl || publicBrandInfo.logo_url}
-                alt={
-                  isPublic
-                    ? `${publicBrandInfo?.name || "Client"} logo`
-                    : "Client logo"
+          {/* MacRAS Logo - Left side */}
+          <Box
+            component="img"
+            src="https://dvmakvtrtjvffceujlfm.supabase.co/storage/v1/object/public/brand-logos/logo-macraes-transparent.png"
+            alt="MacRAE'S"
+            sx={{
+              maxHeight: isPublic ? 500 : 48,
+              maxWidth: isPublic ? 1000 : 600,
+              height: "auto",
+              width: "auto",
+              objectFit: "contain",
+              borderRadius: 1,
+              flexShrink: 0,
+            }}
+          />
+
+          {/* Main heading - Centered client business name */}
+          <Typography
+            variant="h4"
+            fontWeight={700}
+            sx={{
+              fontSize: "1.75rem",
+              letterSpacing: "-0.02em",
+              color: "text.primary",
+              position: "absolute",
+              left: "50%",
+              transform: "translateX(-50%)",
+              textAlign: "center",
+            }}
+          >
+            {(() => {
+              // First priority: custom report title
+              if (selectedClientReportTitle) {
+                return selectedClientReportTitle;
+              }
+
+              // Second priority: stored client name
+              if (selectedClientName) {
+                return selectedClientName;
+              }
+
+              // Third priority: client name from clients array (authenticated view)
+              if (selectedClientId && clients.length > 0) {
+                const selectedClient = clients.find(
+                  (c) => c.id === selectedClientId
+                );
+                if (selectedClient?.company_name) {
+                  return selectedClient.company_name;
                 }
-                sx={{
-                  maxHeight: 48,
-                  maxWidth: 180,
-                  height: "auto",
-                  width: "auto",
-                  objectFit: "contain",
-                  borderRadius: 1,
-                }}
-              />
-            )}
-          </Box>
-          <Box display="flex" gap={1.5}>
+              }
+
+              // Fourth priority: client name from publicBrandInfo (public view)
+              if (isPublic && publicBrandInfo) {
+                if (publicBrandInfo.clientData?.company_name) {
+                  return publicBrandInfo.clientData.company_name;
+                }
+                if (publicBrandInfo.name) {
+                  return publicBrandInfo.name;
+                }
+              }
+
+              // Fallback: default title
+              return "MacRAE'S Reporting Dashboard";
+            })()}
+          </Typography>
+
+          {/* Buttons - Right side */}
+          <Box display="flex" gap={1.5} sx={{ flexShrink: 0 }}>
             <Button
               variant="contained"
               size="small"
@@ -2422,7 +2443,12 @@ function ReportingDashboard({
                 {!dashboardData.diagnostics.ga4_configured && (
                   <li>
                     <Typography variant="body2">
-                      <strong>{isPublic ? "Website Analytics" : "GA4"}:</strong>{" "}
+                      <strong>
+                        {isPublic
+                          ? "Website Analytics - Acquisition & User Behavior Insights"
+                          : "GA4"}
+                        :
+                      </strong>{" "}
                       {isPublic
                         ? "Website analytics data is not available."
                         : "No GA4 property ID configured. Configure it in the brands table or use the GA4 sync endpoint."}
@@ -2480,8 +2506,12 @@ function ReportingDashboard({
               (shouldShowSectionCharts("ga4") &&
                 dashboardData?.chart_data?.ga4_traffic_overview)) && (
               <SectionContainer
-                title={isPublic ? "Website Analytics" : "Google Analytics 4"}
-                description="Website traffic and engagement metrics"
+                title={
+                  isPublic
+                    ? "Website Analytics "
+                    : "Google Analytics 4"
+                }
+                description="Acquisition & User Behavior Insights"
                 loading={loading}
               >
                 {/* GA4 Charts and Visualizations */}
@@ -3740,7 +3770,7 @@ function ReportingDashboard({
                     isChartVisible("ga4_top_pages") && (
                       <ChartCard
                         title="Top Performing Pages"
-                        badge="GA4"
+                        badge="Analytics"
                         badgeColor={CHART_COLORS.ga4.primary}
                         height={500}
                         animationDelay={0.9}
@@ -4151,7 +4181,7 @@ function ReportingDashboard({
                           <Grid item xs={12} sm={6} md={4}>
                             <ChartCard
                               title="Bounce Rate"
-                              badge="GA4"
+                              badge="Analytics"
                               badgeColor={CHART_COLORS.ga4.primary}
                               height="100%"
                               animationDelay={1.3}
@@ -4226,7 +4256,7 @@ function ReportingDashboard({
                     <Grid item xs={12} sm={6} md={4}>
                       <ChartCard
                         title="Engagement Rate"
-                        badge="GA4"
+                        badge="Analytics"
                         badgeColor={CHART_COLORS.ga4.primary}
                         height="100%"
                         animationDelay={1.35}
@@ -4425,8 +4455,12 @@ function ReportingDashboard({
               return shouldShow;
             })() && (
               <SectionContainer
-                title={isPublic ? "Brand Intelligence" : "Scrunch AI"}
-                description="AI platform presence and engagement metrics"
+                title={
+                  isPublic
+                    ? "AI Visibility"
+                    : "Scrunch AI"
+                }
+                description="AI Search Presence & Competitor Insights"
                 loading={loadingScrunch}
               >
                 {/* Use scrunchData if available, otherwise fall back to dashboardData */}
@@ -4827,7 +4861,7 @@ function ReportingDashboard({
                                         letterSpacing: "-0.01em",
                                       }}
                                     >
-                                      Scrunch AI Insights
+                                      AI Search Presence & Competitor Insights{" "}
                                     </Typography>
                                   </Box>
                                   <TableContainer>
@@ -5145,7 +5179,7 @@ function ReportingDashboard({
                 })()}
 
                 {/* New Query API Visualizations - Separate component that fetches its own data */}
-                {isSectionVisible("advanced_analytics") && selectedBrandId && (
+                {/* {isSectionVisible("advanced_analytics") && selectedBrandId && (
                   <Box sx={{ mb: 4, mt: 4 }}>
                     <Typography
                       variant="h6"
@@ -5164,7 +5198,7 @@ function ReportingDashboard({
                       endDate={endDate}
                     />
                   </Box>
-                )}
+                )} */}
 
                 {/* Brand Analytics Charts Section */}
                 {isSectionVisible("brand_analytics") &&
@@ -5714,12 +5748,12 @@ function ReportingDashboard({
               (shouldShowSectionKPIs("keywords") ||
                 shouldShowSectionCharts("keywords")) && (
                 <SectionContainer
-                  title={isPublic ? "Keywords" : "Agency Analytics"}
-                  description={
+                  title={
                     isPublic
-                      ? "Keyword rankings, search volume, and performance metrics"
-                      : "Agency analytics data  for the selected client"
+                      ? "Organic Visibility"
+                      : "Agency Analytics"
                   }
+                  description="Keyword Ranking Trends, Growth & Position Insights"
                 >
                   <Box
                     sx={{
@@ -6718,10 +6752,10 @@ function ReportingDashboard({
                             >
                               {isPublic
                                 ? source === "GA4"
-                                  ? "Website Analytics"
+                                  ? "Website Analytics - Acquisition & User Behavior Insights"
                                   : source === "AgencyAnalytics"
                                   ? "SEO Performance"
-                                  : "Brand Intelligence"
+                                  : "AI Visibility - AI Search Presence & Competitor Insights"
                                 : source === "GA4"
                                 ? "Google Analytics 4"
                                 : source === "AgencyAnalytics"

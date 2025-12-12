@@ -12,11 +12,20 @@ let refreshIntervalId = null
 let refreshTimeoutId = null
 
 /**
+ * Get the appropriate storage (localStorage or sessionStorage) based on remember_me preference
+ */
+const getStorage = () => {
+  const rememberMe = localStorage.getItem('remember_me') === 'true'
+  return rememberMe ? localStorage : sessionStorage
+}
+
+/**
  * Calculate when the token should be refreshed (3 hours from now, minus buffer)
  */
 const calculateRefreshTime = () => {
   const now = Date.now()
-  const expiresAt = localStorage.getItem('token_expires_at')
+  const storage = getStorage()
+  const expiresAt = storage.getItem('token_expires_at') || localStorage.getItem('token_expires_at')
   
   if (expiresAt) {
     const expiresTime = parseInt(expiresAt, 10)
@@ -33,7 +42,8 @@ const calculateRefreshTime = () => {
  * Refresh the access token using the refresh token
  */
 const refreshAccessToken = async () => {
-  const refreshToken = localStorage.getItem('refresh_token')
+  const storage = getStorage()
+  const refreshToken = storage.getItem('refresh_token') || localStorage.getItem('refresh_token')
   
   if (!refreshToken) {
     debugWarn('No refresh token available, cannot refresh access token')
@@ -45,20 +55,20 @@ const refreshAccessToken = async () => {
     const response = await authAPI.refreshToken(refreshToken)
     const { access_token, refresh_token: newRefreshToken, expires_in } = response
 
-    // Update tokens in localStorage
-    localStorage.setItem('access_token', access_token)
+    // Update tokens in the appropriate storage
+    storage.setItem('access_token', access_token)
     if (newRefreshToken) {
-      localStorage.setItem('refresh_token', newRefreshToken)
+      storage.setItem('refresh_token', newRefreshToken)
     }
 
     // Calculate and store expiration time
     if (expires_in) {
       const expiresAt = Date.now() + (expires_in * 1000)
-      localStorage.setItem('token_expires_at', expiresAt.toString())
+      storage.setItem('token_expires_at', expiresAt.toString())
     } else {
       // Default to 3 hours if expires_in not provided
       const expiresAt = Date.now() + TOKEN_REFRESH_INTERVAL
-      localStorage.setItem('token_expires_at', expiresAt.toString())
+      storage.setItem('token_expires_at', expiresAt.toString())
     }
 
     debugLog('Access token refreshed successfully')
@@ -69,11 +79,15 @@ const refreshAccessToken = async () => {
     return true
   } catch (error) {
     debugError('Failed to refresh access token:', error)
-    // Clear tokens on refresh failure
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
-    localStorage.removeItem('token_expires_at')
-    localStorage.removeItem('user')
+    // Clear tokens on refresh failure from both storages
+    const clearStorage = (storage) => {
+      storage.removeItem('access_token')
+      storage.removeItem('refresh_token')
+      storage.removeItem('token_expires_at')
+      storage.removeItem('user')
+    }
+    clearStorage(localStorage)
+    clearStorage(sessionStorage)
     stopTokenRefresh()
     
     // Redirect to login if refresh token expired
@@ -131,8 +145,9 @@ const scheduleTokenRefresh = () => {
  * Call this after successful login
  */
 export const startTokenRefresh = () => {
-  const accessToken = localStorage.getItem('access_token')
-  const refreshToken = localStorage.getItem('refresh_token')
+  const storage = getStorage()
+  const accessToken = storage.getItem('access_token') || localStorage.getItem('access_token')
+  const refreshToken = storage.getItem('refresh_token') || localStorage.getItem('refresh_token')
   
   if (!accessToken || !refreshToken) {
     debugWarn('No tokens available, cannot start token refresh')
@@ -140,9 +155,9 @@ export const startTokenRefresh = () => {
   }
 
   // If token_expires_at is not set, set it to 3 hours from now
-  if (!localStorage.getItem('token_expires_at')) {
+  if (!storage.getItem('token_expires_at') && !localStorage.getItem('token_expires_at')) {
     const expiresAt = Date.now() + TOKEN_REFRESH_INTERVAL
-    localStorage.setItem('token_expires_at', expiresAt.toString())
+    storage.setItem('token_expires_at', expiresAt.toString())
   }
 
   scheduleTokenRefresh()
@@ -175,7 +190,8 @@ export const manualRefresh = async () => {
  * Check if token is expired or about to expire
  */
 export const isTokenExpired = () => {
-  const expiresAt = localStorage.getItem('token_expires_at')
+  const storage = getStorage()
+  const expiresAt = storage.getItem('token_expires_at') || localStorage.getItem('token_expires_at')
   if (!expiresAt) {
     return true
   }
