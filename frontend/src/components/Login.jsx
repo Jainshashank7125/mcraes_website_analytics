@@ -12,6 +12,8 @@ import {
   InputAdornment,
   IconButton,
   CircularProgress,
+  FormControlLabel,
+  Checkbox,
 } from '@mui/material'
 import {
   Email as EmailIcon,
@@ -32,12 +34,13 @@ function Login() {
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [rememberMe, setRememberMe] = useState(false)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
 
-    const result = await signin(email, password)
+    const result = await signin(email, password, rememberMe)
 
     if (result.success) {
       navigate('/')
@@ -119,7 +122,7 @@ function Login() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  sx={{ mb: 3 }}
+                  sx={{ mb: 2 }}
                   InputProps={{
                     startAdornment: (
                       <InputAdornment position="start">
@@ -138,6 +141,18 @@ function Login() {
                       </InputAdornment>
                     ),
                   }}
+                />
+
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={rememberMe}
+                      onChange={(e) => setRememberMe(e.target.checked)}
+                      color="primary"
+                    />
+                  }
+                  label="Remember me"
+                  sx={{ mb: 2 }}
                 />
 
                 <Button

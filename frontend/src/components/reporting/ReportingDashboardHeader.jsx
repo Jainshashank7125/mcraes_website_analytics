@@ -51,8 +51,8 @@ export default function ReportingDashboardHeader({
               src={publicBrandInfo.logo_url}
               alt={`${publicBrandInfo.name} logo`}
               sx={{
-                maxHeight: 48,
-                maxWidth: 200,
+                maxHeight: 80,
+                maxWidth: 300,
                 objectFit: 'contain',
                 borderRadius: 1,
               }}

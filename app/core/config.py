@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # These must be set via environment variables (.env file)
     SUPABASE_URL: Optional[str] = None  # Must be set via .env file
     SUPABASE_KEY: Optional[str] = None  # Must be set via .env file (anon key)
+    SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None  # Must be set via .env file (service role key for storage operations)
     # Note: Supabase JWT token expiration duration is configured in Supabase Dashboard
     # Go to: Authentication → Settings → JWT expiry time (default is 3600 seconds / 1 hour)
     

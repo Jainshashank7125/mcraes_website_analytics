@@ -5442,9 +5442,10 @@ async def upload_brand_logo(
         if not brand:
             raise HTTPException(status_code=404, detail="Brand not found")
         
-        # Create Supabase client for storage operations (storage still uses Supabase)
-        from app.core.database import get_supabase_client
-        storage_client = get_supabase_client()
+        # Create Supabase client with service role key for storage operations
+        # Service role key is required to bypass RLS for storage uploads
+        from app.core.database import get_supabase_service_role_client
+        storage_client = get_supabase_service_role_client()
         
         # Validate file type
         if not file.content_type or not file.content_type.startswith('image/'):
@@ -5555,7 +5556,9 @@ async def delete_brand_logo(
         if logo_url:
             try:
                 from app.core.database import get_supabase_client
-                storage_client = get_supabase_client()
+                # Use service role client for storage operations (bypasses RLS)
+                from app.core.database import get_supabase_service_role_client
+                storage_client = get_supabase_service_role_client()
                 
                 # Extract file path from URL
                 # URL format: .../storage/v1/object/public/brand-logos/{filename}
@@ -6383,9 +6386,10 @@ async def upload_client_logo(
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
-        # Create Supabase client for storage operations (storage still uses Supabase)
-        from app.core.database import get_supabase_client
-        storage_client = get_supabase_client()
+        # Create Supabase client with service role key for storage operations
+        # Service role key is required to bypass RLS for storage uploads
+        from app.core.database import get_supabase_service_role_client
+        storage_client = get_supabase_service_role_client()
         
         # Validate file type
         if not file.content_type or not file.content_type.startswith('image/'):
@@ -6492,7 +6496,9 @@ async def delete_client_logo(
         if logo_url:
             try:
                 from app.core.database import get_supabase_client
-                storage_client = get_supabase_client()
+                # Use service role client for storage operations (bypasses RLS)
+                from app.core.database import get_supabase_service_role_client
+                storage_client = get_supabase_service_role_client()
                 
                 # Extract file path from URL
                 if "brand-logos/" in logo_url:
