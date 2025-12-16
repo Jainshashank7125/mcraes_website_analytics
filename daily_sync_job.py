@@ -25,9 +25,10 @@ def sync_scrunch_data():
     try:
         # Sync all Scrunch AI data in complete mode (sync_mode=complete)
         # Timeout: ~30 minutes (1800 seconds)
+        # Pass cron=true to bypass authentication
         response = requests.post(
             f"{API_BASE}/sync/all",
-            params={"sync_mode": "complete"},
+            params={"sync_mode": "complete", "cron": True},
             timeout=1800  # 30 min timeout
         )
         
@@ -74,11 +75,13 @@ def sync_ga4_data():
     try:
         # Sync GA4 data (last 30 days, skip realtime to avoid errors)
         # Complete mode: syncs all clients with GA4 property ID mapped
+        # Pass cron=true to bypass authentication
         response = requests.post(
             f"{API_BASE}/sync/ga4",
             params={
                 "sync_mode": "complete",
-                "sync_realtime": False  # Skip realtime to avoid API errors
+                "sync_realtime": False,  # Skip realtime to avoid API errors
+                "cron": True
             },
             timeout=3600  # 60 min timeout (GA4 can take longer)
         )
@@ -130,9 +133,10 @@ def sync_agency_analytics_data():
         # Sync AgencyAnalytics data in complete mode
         # Complete mode: syncs all active clients
         # Timeout: >2 hours (7200 seconds) as AgencyAnalytics sync can take a long time
+        # Pass cron=true to bypass authentication
         response = requests.post(
             f"{API_BASE}/sync/agency-analytics",
-            params={"sync_mode": "complete"},
+            params={"sync_mode": "complete", "cron": True},
             timeout=7200  # 2 hours timeout (AgencyAnalytics may take >2 hours)
         )
         
