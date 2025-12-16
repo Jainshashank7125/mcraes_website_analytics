@@ -110,25 +110,26 @@ export default function StackedBarChart({
   }
   
   // Build bars configuration
+  // Reversed order so green (good rankings) appears on top and red (bad rankings) appears at bottom
   const bars = []
   if (engine === 'google' || engine === 'both') {
     bars.push(
-      { dataKey: 'google_1_3', name: '1-3', fill: positionColors.position_1_3, stackId: 'google' },
-      { dataKey: 'google_4_10', name: '4-10', fill: positionColors.position_4_10, stackId: 'google' },
-      { dataKey: 'google_11_20', name: '11-20', fill: positionColors.position_11_20, stackId: 'google' },
-      { dataKey: 'google_21_50', name: '21-50', fill: positionColors.position_21_50, stackId: 'google' },
+      { dataKey: 'google_not_found', name: 'Not Found', fill: positionColors.not_found, stackId: 'google' },
       { dataKey: 'google_51_plus', name: '51+', fill: positionColors.position_51_plus, stackId: 'google' },
-      { dataKey: 'google_not_found', name: 'Not Found', fill: positionColors.not_found, stackId: 'google' }
+      { dataKey: 'google_21_50', name: '21-50', fill: positionColors.position_21_50, stackId: 'google' },
+      { dataKey: 'google_11_20', name: '11-20', fill: positionColors.position_11_20, stackId: 'google' },
+      { dataKey: 'google_4_10', name: '4-10', fill: positionColors.position_4_10, stackId: 'google' },
+      { dataKey: 'google_1_3', name: '1-3', fill: positionColors.position_1_3, stackId: 'google' }
     )
   }
   if (engine === 'bing' || engine === 'both') {
     bars.push(
-      { dataKey: 'bing_1_3', name: '1-3', fill: positionColors.position_1_3, stackId: 'bing' },
-      { dataKey: 'bing_4_10', name: '4-10', fill: positionColors.position_4_10, stackId: 'bing' },
-      { dataKey: 'bing_11_20', name: '11-20', fill: positionColors.position_11_20, stackId: 'bing' },
-      { dataKey: 'bing_21_50', name: '21-50', fill: positionColors.position_21_50, stackId: 'bing' },
+      { dataKey: 'bing_not_found', name: 'Not Found', fill: positionColors.not_found, stackId: 'bing' },
       { dataKey: 'bing_51_plus', name: '51+', fill: positionColors.position_51_plus, stackId: 'bing' },
-      { dataKey: 'bing_not_found', name: 'Not Found', fill: positionColors.not_found, stackId: 'bing' }
+      { dataKey: 'bing_21_50', name: '21-50', fill: positionColors.position_21_50, stackId: 'bing' },
+      { dataKey: 'bing_11_20', name: '11-20', fill: positionColors.position_11_20, stackId: 'bing' },
+      { dataKey: 'bing_4_10', name: '4-10', fill: positionColors.position_4_10, stackId: 'bing' },
+      { dataKey: 'bing_1_3', name: '1-3', fill: positionColors.position_1_3, stackId: 'bing' }
     )
   }
   
@@ -190,16 +191,27 @@ export default function StackedBarChart({
           }}
           iconType="rect"
         />
-        {bars.map((bar, index) => (
-          <Bar
-            key={bar.dataKey}
-            dataKey={bar.dataKey}
-            name={bar.name}
-            fill={bar.fill}
-            stackId={bar.stackId}
-            radius={index === bars.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}
-          />
-        ))}
+        {bars.map((bar, index) => {
+          // Apply rounded corners: top bar (last index) gets top corners, bottom bar (first index) gets bottom corners
+          let radius = [0, 0, 0, 0]
+          if (index === bars.length - 1) {
+            // Top bar (green/good rankings) - round top corners
+            radius = [4, 4, 0, 0]
+          } else if (index === 0) {
+            // Bottom bar (not found/bad rankings) - round bottom corners
+            radius = [0, 0, 4, 4]
+          }
+          return (
+            <Bar
+              key={bar.dataKey}
+              dataKey={bar.dataKey}
+              name={bar.name}
+              fill={bar.fill}
+              stackId={bar.stackId}
+              radius={radius}
+            />
+          )
+        })}
       </RechartsBarChart>
     </ResponsiveContainer>
   )

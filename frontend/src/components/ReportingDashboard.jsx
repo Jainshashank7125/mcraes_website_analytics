@@ -4725,7 +4725,7 @@ function ReportingDashboard({
                                             },
                                           }}
                                         >
-                                          <Box
+                                          {/* <Box
                                             display="flex"
                                             alignItems="flex-start"
                                             justifyContent="space-between"
@@ -4749,7 +4749,7 @@ function ReportingDashboard({
                                                 }}
                                               />
                                             </Box>
-                                          </Box>
+                                          </Box> */}
                                           <Typography
                                             variant="body2"
                                             fontWeight={600}
