@@ -670,7 +670,7 @@ export const clientAPI = {
 
   // Soft delete client
   softDeleteClient: async (clientId) => {
-    const response = await api.delete(`/api/v1/data/clients/${clientId}/soft-delete`)
+    const response = await api.delete(`/api/v1/data/clients/${clientId}`)
     return response.data
   },
   deleteClient: async (clientId) => {
