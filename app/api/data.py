@@ -15,7 +15,7 @@ from app.api.auth_v2 import get_current_user_v2
 from app.core.config import settings
 from app.db.database import get_db
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, update
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
