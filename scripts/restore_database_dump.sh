@@ -39,6 +39,18 @@ echo "WARNING: This will DROP and recreate the database!"
 echo "Press Ctrl+C to cancel, or Enter to continue..."
 read
 
+# Check if we're using Docker Compose
+USE_DOCKER=false
+if [ "$TARGET_HOST" == "localhost" ] || [ "$TARGET_HOST" == "127.0.0.1" ]; then
+    # Check if docker compose is available and postgres container exists
+    if command -v docker &> /dev/null && docker compose ps postgres &> /dev/null; then
+        USE_DOCKER=true
+        echo ""
+        echo "Detected Docker Compose PostgreSQL container. Using container for restore."
+        echo ""
+    fi
+fi
+
 # Check if we're restoring to a remote server
 if [ "$TARGET_HOST" != "localhost" ] && [ "$TARGET_HOST" != "127.0.0.1" ]; then
     echo ""
@@ -64,18 +76,52 @@ fi
 #   --username: Target user
 
 echo "Starting restore..."
-pg_restore \
-    --verbose \
-    --clean \
-    --if-exists \
-    --create \
-    --no-owner \
-    --no-acl \
-    --dbname="$TARGET_DB_NAME" \
-    --host="$TARGET_HOST" \
-    --port="$TARGET_PORT" \
-    --username="$TARGET_DB_USER" \
-    "$DUMP_FILE"
+
+if [ "$USE_DOCKER" = true ]; then
+    # Copy dump file to container and restore
+    CONTAINER_NAME="mcraes-postgres"
+    DUMP_BASENAME=$(basename "$DUMP_FILE")
+    
+    echo "Copying dump file to container..."
+    docker cp "$DUMP_FILE" "$CONTAINER_NAME:/tmp/$DUMP_BASENAME"
+    
+    echo "Restoring database..."
+    docker compose exec -T postgres pg_restore \
+        --verbose \
+        --clean \
+        --if-exists \
+        --create \
+        --no-owner \
+        --no-acl \
+        --dbname="$TARGET_DB_NAME" \
+        --host="localhost" \
+        --port="5432" \
+        --username="$TARGET_DB_USER" \
+        "/tmp/$DUMP_BASENAME"
+    
+    # Clean up
+    docker compose exec -T postgres rm -f "/tmp/$DUMP_BASENAME"
+else
+    # Use local pg_restore
+    if ! command -v pg_restore &> /dev/null; then
+        echo "Error: pg_restore command not found."
+        echo "Please install PostgreSQL client tools or use Docker Compose."
+        exit 1
+    fi
+    
+    pg_restore \
+        --verbose \
+        --clean \
+        --if-exists \
+        --create \
+        --no-owner \
+        --no-acl \
+        --dbname="$TARGET_DB_NAME" \
+        --host="$TARGET_HOST" \
+        --port="$TARGET_PORT" \
+        --username="$TARGET_DB_USER" \
+        "$DUMP_FILE"
+fi
 
 if [ $? -eq 0 ]; then
     echo ""

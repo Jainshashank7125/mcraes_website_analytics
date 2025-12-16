@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Query, Request, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
 import logging
 from datetime import datetime, timedelta
@@ -24,6 +25,40 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 ga4_client = GA4APIClient()
+
+# System user dict for cron jobs
+SYSTEM_USER = {
+    "id": "system",
+    "email": "system@mcraes.internal",
+    "full_name": "System (Cron Job)"
+}
+
+async def get_user_for_sync(
+    request: Request,
+    cron: bool = Query(False, description="Set to true for cron jobs to bypass authentication"),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
+    db: Session = Depends(get_db)
+) -> dict:
+    """
+    Dependency that returns system user if cron=true, otherwise requires authentication.
+    This allows cron jobs to bypass authentication while regular API calls still require it.
+    """
+    if cron:
+        logger.info("Cron job detected - using system user")
+        return SYSTEM_USER
+    
+    # For non-cron requests, require authentication
+    if not credentials:
+        from app.core.exceptions import AuthenticationException
+        raise AuthenticationException(
+            user_message="Authentication required",
+            technical_message="No authentication token provided"
+        )
+    
+    # Use the regular authentication - need to call it properly with db session
+    # get_current_user_v2 expects credentials and db as dependencies
+    # Since we're calling it from within another dependency, we need to pass both
+    return await get_current_user_v2(credentials, db)
 
 @router.post("/sync/brands")
 @handle_api_errors(context="syncing brands")
@@ -304,8 +339,9 @@ async def sync_all(
     sync_mode: str = Query("complete", description="Sync mode: 'new' (only missing items) or 'complete' (all items)"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD) for syncing responses. If not provided, syncs all historical responses."),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD) for syncing responses. If not provided, syncs all historical responses."),
+    cron: bool = Query(False, description="Set to true for cron jobs to bypass authentication"),
     request: Request = None,
-    current_user: dict = Depends(get_current_user_v2),
+    current_user: dict = Depends(get_user_for_sync),
     db: Session = Depends(get_db)
 ):
     """
@@ -390,8 +426,9 @@ async def sync_agency_analytics(
     auto_match_brands: bool = Query(True, description="Automatically match campaigns to brands by URL"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD) for syncing keyword rankings. If not provided, syncs all historical data."),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD) for syncing keyword rankings. If not provided, syncs all historical data."),
+    cron: bool = Query(False, description="Set to true for cron jobs to bypass authentication"),
     request: Request = None,
-    current_user: dict = Depends(get_current_user_v2),
+    current_user: dict = Depends(get_user_for_sync),
     db: Session = Depends(get_db)
 ):
     """
@@ -474,8 +511,9 @@ async def sync_ga4(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD), defaults to 30 days ago if not provided"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD), defaults to today if not provided"),
     sync_realtime: bool = Query(True, description="Whether to sync realtime data"),
+    cron: bool = Query(False, description="Set to true for cron jobs to bypass authentication"),
     request: Request = None,
-    current_user: dict = Depends(get_current_user_v2),
+    current_user: dict = Depends(get_user_for_sync),
     db: Session = Depends(get_db)
 ):
     """
