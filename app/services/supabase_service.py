@@ -2946,7 +2946,7 @@ class SupabaseService:
             return []
     
     def list_dashboard_links_for_client(self, client_id: int) -> List[Dict]:
-        """List all dashboard links for a client ordered by creation time"""
+        """List all dashboard links for a client ordered by creation time, including KPI selections"""
         try:
             table = self._get_table("dashboard_links")
             query = (
@@ -2955,19 +2955,40 @@ class SupabaseService:
                 .order_by(table.c.created_at.desc())
             )
             result = self.db.execute(query)
-            return [dict(row._mapping) for row in result]
+            links = []
+            for row in result:
+                link_dict = dict(row._mapping)
+                link_id = link_dict.get("id")
+                
+                # Fetch KPI selections for this link
+                if link_id:
+                    kpi_selection = self.get_dashboard_link_kpi_selection(link_id)
+                    if kpi_selection:
+                        link_dict["kpi_selection"] = kpi_selection
+                
+                links.append(link_dict)
+            return links
         except Exception as e:
             logger.error(f"Error listing dashboard links for client {client_id}: {str(e)}")
             return []
 
     def get_dashboard_link_by_slug(self, slug: str) -> Optional[Dict]:
-        """Get a dashboard link by slug"""
+        """Get a dashboard link by slug, including KPI selections"""
         try:
             table = self._get_table("dashboard_links")
             query = select(table).where(table.c.slug == slug).limit(1)
             result = self.db.execute(query).first()
             if result:
-                return dict(result._mapping)
+                link_dict = dict(result._mapping)
+                link_id = link_dict.get("id")
+                
+                # Fetch KPI selections for this link
+                if link_id:
+                    kpi_selection = self.get_dashboard_link_kpi_selection(link_id)
+                    if kpi_selection:
+                        link_dict["kpi_selection"] = kpi_selection
+                
+                return link_dict
             return None
         except Exception as e:
             logger.error(f"Error getting dashboard link by slug {slug}: {str(e)}")
@@ -2998,13 +3019,23 @@ class SupabaseService:
         slug: Optional[str] = None,
         enabled: bool = True,
         expires_at: Optional[datetime] = None,
-        user_email: Optional[str] = None
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        user_email: Optional[str] = None,
+        selected_kpis: Optional[List[str]] = None,
+        visible_sections: Optional[List[str]] = None,
+        selected_charts: Optional[List[str]] = None
     ) -> Optional[Dict]:
         """Create or update a dashboard link for a client based on date range"""
         try:
             table = self._get_table("dashboard_links")
             link_slug = slug or self.generate_client_slug()
             now = datetime.now()
+
+            # Check if name and description columns exist
+            table_columns = [col.name for col in table.c]
+            has_name_column = 'name' in table_columns
+            has_description_column = 'description' in table_columns
 
             link_data = {
                 "client_id": client_id,
@@ -3016,19 +3047,34 @@ class SupabaseService:
                 "updated_at": now,
             }
 
+            # Only include name/description if columns exist
+            if has_name_column and name is not None:
+                link_data["name"] = name
+            if has_description_column and description is not None:
+                link_data["description"] = description
+
             insert_stmt = pg_insert(table).values(
                 **link_data,
                 created_at=now
             ).returning(table)
 
+            # Build update set conditionally
+            update_set = {
+                "slug": insert_stmt.excluded.slug,
+                "enabled": insert_stmt.excluded.enabled,
+                "expires_at": insert_stmt.excluded.expires_at,
+                "updated_at": insert_stmt.excluded.updated_at,
+            }
+            
+            # Only update name/description if columns exist
+            if has_name_column:
+                update_set["name"] = insert_stmt.excluded.name
+            if has_description_column:
+                update_set["description"] = insert_stmt.excluded.description
+
             insert_stmt = insert_stmt.on_conflict_do_update(
                 index_elements=['client_id', 'start_date', 'end_date'],
-                set_={
-                    "slug": insert_stmt.excluded.slug,
-                    "enabled": insert_stmt.excluded.enabled,
-                    "expires_at": insert_stmt.excluded.expires_at,
-                    "updated_at": insert_stmt.excluded.updated_at,
-                }
+                set_=update_set
             )
 
             result = self.db.execute(insert_stmt)
@@ -3036,12 +3082,380 @@ class SupabaseService:
 
             row = result.fetchone()
             if row:
-                return dict(row._mapping)
+                link_dict = dict(row._mapping)
+                link_id = link_dict.get("id")
+                
+                # Save KPI selections if provided
+                if link_id and (selected_kpis is not None or visible_sections is not None or selected_charts is not None):
+                    kpi_selection = self.upsert_dashboard_link_kpi_selection(
+                        link_id=link_id,
+                        selected_kpis=selected_kpis or [],
+                        visible_sections=visible_sections,
+                        selected_charts=selected_charts or []
+                    )
+                    if kpi_selection:
+                        link_dict["kpi_selection"] = kpi_selection
+                
+                return link_dict
             return None
         except Exception as e:
             self.db.rollback()
             logger.error(f"Error upserting dashboard link for client {client_id}: {str(e)}")
             return None
+
+    def track_dashboard_link_open(
+        self,
+        link_id: int,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        referer: Optional[str] = None
+    ) -> bool:
+        """Record a tracking entry when a dashboard link is opened"""
+        try:
+            table = self._get_table("dashboard_link_tracking")
+            insert_stmt = table.insert().values(
+                dashboard_link_id=link_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                referer=referer,
+                opened_at=datetime.now()
+            )
+            self.db.execute(insert_stmt)
+            self.db.commit()
+            return True
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error tracking dashboard link open for link {link_id}: {str(e)}")
+            return False
+
+    def get_dashboard_link_metrics(
+        self,
+        link_id: int,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None
+    ) -> Dict:
+        """Get metrics for a specific dashboard link"""
+        try:
+            tracking_table = self._get_table("dashboard_link_tracking")
+            
+            # Base query
+            query = select(
+                func.count(tracking_table.c.id).label("total_opens")
+            ).where(tracking_table.c.dashboard_link_id == link_id)
+            
+            # Apply date filters if provided
+            if start_date:
+                query = query.where(tracking_table.c.opened_at >= start_date)
+            if end_date:
+                # Add one day to include the end date
+                from datetime import timedelta
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+                query = query.where(tracking_table.c.opened_at <= end_datetime)
+            
+            result = self.db.execute(query)
+            total_opens = result.scalar() or 0
+            
+            # Get opens over time (daily aggregation)
+            daily_query = select(
+                func.date(tracking_table.c.opened_at).label("date"),
+                func.count(tracking_table.c.id).label("opens")
+            ).where(tracking_table.c.dashboard_link_id == link_id)
+            
+            if start_date:
+                daily_query = daily_query.where(tracking_table.c.opened_at >= start_date)
+            if end_date:
+                from datetime import timedelta
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+                daily_query = daily_query.where(tracking_table.c.opened_at <= end_datetime)
+            
+            daily_query = daily_query.group_by(func.date(tracking_table.c.opened_at)).order_by(func.date(tracking_table.c.opened_at))
+            daily_result = self.db.execute(daily_query)
+            opens_over_time = [{"date": str(row.date), "opens": row.opens} for row in daily_result]
+            
+            # Get recent opens (last 50)
+            recent_query = select(tracking_table).where(
+                tracking_table.c.dashboard_link_id == link_id
+            ).order_by(tracking_table.c.opened_at.desc()).limit(50)
+            
+            recent_result = self.db.execute(recent_query)
+            recent_opens = [dict(row._mapping) for row in recent_result]
+            
+            return {
+                "total_opens": total_opens,
+                "opens_over_time": opens_over_time,
+                "recent_opens": recent_opens
+            }
+        except Exception as e:
+            logger.error(f"Error getting dashboard link metrics for link {link_id}: {str(e)}")
+            return {
+                "total_opens": 0,
+                "opens_over_time": [],
+                "recent_opens": []
+            }
+
+    def get_client_dashboard_links_metrics(
+        self,
+        client_id: int,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None
+    ) -> Dict:
+        """Get aggregated metrics for all dashboard links of a client"""
+        try:
+            links_table = self._get_table("dashboard_links")
+            tracking_table = self._get_table("dashboard_link_tracking")
+            
+            # Get all links for the client
+            links_query = select(links_table).where(links_table.c.client_id == client_id)
+            links_result = self.db.execute(links_query)
+            links = [dict(row._mapping) for row in links_result]
+            
+            total_opens = 0
+            opens_per_link = []
+            opens_over_time = []
+            
+            # Aggregate tracking data
+            for link in links:
+                link_id = link["id"]
+                
+                # Get opens for this link
+                tracking_query = select(
+                    func.count(tracking_table.c.id).label("opens")
+                ).where(tracking_table.c.dashboard_link_id == link_id)
+                
+                if start_date:
+                    tracking_query = tracking_query.where(tracking_table.c.opened_at >= start_date)
+                if end_date:
+                    from datetime import timedelta
+                    end_datetime = datetime.combine(end_date, datetime.max.time())
+                    tracking_query = tracking_query.where(tracking_table.c.opened_at <= end_datetime)
+                
+                result = self.db.execute(tracking_query)
+                link_opens = result.scalar() or 0
+                total_opens += link_opens
+                
+                opens_per_link.append({
+                    "link_id": link_id,
+                    "slug": link["slug"],
+                    "name": link.get("name"),
+                    "opens": link_opens
+                })
+            
+            # Get opens over time (aggregated across all links)
+            daily_query = select(
+                func.date(tracking_table.c.opened_at).label("date"),
+                func.count(tracking_table.c.id).label("opens")
+            ).join(
+                links_table, tracking_table.c.dashboard_link_id == links_table.c.id
+            ).where(links_table.c.client_id == client_id)
+            
+            if start_date:
+                daily_query = daily_query.where(tracking_table.c.opened_at >= start_date)
+            if end_date:
+                from datetime import timedelta
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+                daily_query = daily_query.where(tracking_table.c.opened_at <= end_datetime)
+            
+            daily_query = daily_query.group_by(func.date(tracking_table.c.opened_at)).order_by(func.date(tracking_table.c.opened_at))
+            daily_result = self.db.execute(daily_query)
+            opens_over_time = [{"date": str(row.date), "opens": row.opens} for row in daily_result]
+            
+            return {
+                "total_opens": total_opens,
+                "opens_per_link": opens_per_link,
+                "opens_over_time": opens_over_time,
+                "total_links": len(links)
+            }
+        except Exception as e:
+            logger.error(f"Error getting client dashboard links metrics for client {client_id}: {str(e)}")
+            return {
+                "total_opens": 0,
+                "opens_per_link": [],
+                "opens_over_time": [],
+                "total_links": 0
+            }
+
+    def update_dashboard_link(
+        self,
+        link_id: int,
+        updates: Dict,
+        user_email: Optional[str] = None
+    ) -> Optional[Dict]:
+        """Update a dashboard link"""
+        try:
+            table = self._get_table("dashboard_links")
+            
+            # Check if name and description columns exist
+            table_columns = [col.name for col in table.c]
+            has_name_column = 'name' in table_columns
+            has_description_column = 'description' in table_columns
+            
+            # Extract KPI selection fields if present
+            selected_kpis = updates.pop("selected_kpis", None)
+            visible_sections = updates.pop("visible_sections", None)
+            selected_charts = updates.pop("selected_charts", None)
+            
+            # Only allow updating specific fields
+            allowed_fields = ["start_date", "end_date", "enabled", "expires_at", "slug"]
+            if has_name_column:
+                allowed_fields.append("name")
+            if has_description_column:
+                allowed_fields.append("description")
+            
+            update_data = {k: v for k, v in updates.items() if k in allowed_fields}
+            
+            # Update link fields if any
+            if update_data:
+                update_data["updated_at"] = datetime.now()
+                
+                update_stmt = (
+                    update(table)
+                    .where(table.c.id == link_id)
+                    .values(**update_data)
+                    .returning(table)
+                )
+                
+                result = self.db.execute(update_stmt)
+                self.db.commit()
+                
+                row = result.fetchone()
+                if not row:
+                    return None
+            else:
+                # If no link fields to update, just fetch the link
+                query = select(table).where(table.c.id == link_id).limit(1)
+                result = self.db.execute(query)
+                row = result.first()
+                if not row:
+                    return None
+            
+            link_dict = dict(row._mapping)
+            
+            # Update KPI selections if provided
+            if selected_kpis is not None or visible_sections is not None or selected_charts is not None:
+                kpi_selection = self.upsert_dashboard_link_kpi_selection(
+                    link_id=link_id,
+                    selected_kpis=selected_kpis if selected_kpis is not None else [],
+                    visible_sections=visible_sections,
+                    selected_charts=selected_charts if selected_charts is not None else []
+                )
+                if kpi_selection:
+                    link_dict["kpi_selection"] = kpi_selection
+            
+            return link_dict
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error updating dashboard link {link_id}: {str(e)}")
+            return None
+
+    def delete_dashboard_link(self, link_id: int) -> bool:
+        """Delete a dashboard link (cascades to tracking records and KPI selections)"""
+        try:
+            table = self._get_table("dashboard_links")
+            delete_stmt = table.delete().where(table.c.id == link_id)
+            result = self.db.execute(delete_stmt)
+            self.db.commit()
+            return result.rowcount > 0
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error deleting dashboard link {link_id}: {str(e)}")
+            return False
+
+    def get_dashboard_link_kpi_selection(self, link_id: int) -> Optional[Dict]:
+        """Get KPI selections for a dashboard link"""
+        try:
+            table = self._get_table("dashboard_link_kpi_selections")
+            query = select(table).where(table.c.dashboard_link_id == link_id).limit(1)
+            result = self.db.execute(query)
+            row = result.first()
+            
+            if row:
+                return {
+                    "dashboard_link_id": link_id,
+                    "selected_kpis": row.selected_kpis or [],
+                    "visible_sections": row.visible_sections or [],
+                    "selected_charts": row.selected_charts or [],
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else None
+                }
+            return None
+        except Exception as e:
+            logger.error(f"Error getting KPI selection for dashboard link {link_id}: {str(e)}")
+            return None
+
+    def upsert_dashboard_link_kpi_selection(
+        self,
+        link_id: int,
+        selected_kpis: List[str],
+        visible_sections: Optional[List[str]] = None,
+        selected_charts: Optional[List[str]] = None
+    ) -> Optional[Dict]:
+        """Create or update KPI selections for a dashboard link"""
+        try:
+            table = self._get_table("dashboard_link_kpi_selections")
+            now = datetime.now()
+            
+            # Default visible sections if not provided
+            if visible_sections is None:
+                visible_sections = ['ga4', 'scrunch_ai', 'brand_analytics', 'advanced_analytics', 'keywords']
+            
+            # Default selected_charts if not provided
+            if selected_charts is None:
+                selected_charts = []
+            
+            kpi_data = {
+                "dashboard_link_id": link_id,
+                "selected_kpis": selected_kpis,
+                "visible_sections": visible_sections,
+                "selected_charts": selected_charts,
+                "updated_at": now,
+            }
+            
+            insert_stmt = pg_insert(table).values(
+                **kpi_data,
+                created_at=now
+            ).returning(table)
+            
+            insert_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=['dashboard_link_id'],
+                set_={
+                    "selected_kpis": insert_stmt.excluded.selected_kpis,
+                    "visible_sections": insert_stmt.excluded.visible_sections,
+                    "selected_charts": insert_stmt.excluded.selected_charts,
+                    "updated_at": insert_stmt.excluded.updated_at,
+                }
+            )
+            
+            result = self.db.execute(insert_stmt)
+            self.db.commit()
+            
+            row = result.fetchone()
+            if row:
+                return {
+                    "dashboard_link_id": link_id,
+                    "selected_kpis": row.selected_kpis or [],
+                    "visible_sections": row.visible_sections or [],
+                    "selected_charts": row.selected_charts or [],
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else None
+                }
+            return None
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error upserting KPI selection for dashboard link {link_id}: {str(e)}")
+            return None
+
+    def delete_dashboard_link_kpi_selection(self, link_id: int) -> bool:
+        """Delete KPI selections for a dashboard link (usually handled by CASCADE, but available for explicit deletion)"""
+        try:
+            table = self._get_table("dashboard_link_kpi_selections")
+            delete_stmt = table.delete().where(table.c.dashboard_link_id == link_id)
+            result = self.db.execute(delete_stmt)
+            self.db.commit()
+            return result.rowcount > 0
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error deleting KPI selection for dashboard link {link_id}: {str(e)}")
+            return False
 
     # =====================================================
     # Agency Analytics Methods

@@ -37,6 +37,9 @@ import {
   AccordionDetails,
   LinearProgress,
   Autocomplete,
+  List,
+  ListItem,
+  ListItemText,
 } from "@mui/material";
 import {
   TrendingUp as TrendingUpIcon,
@@ -363,16 +366,32 @@ function ReportingDashboard({
       "0"
     )}`;
   }, []);
+  // Dashboard Links Management
+  const [dashboardLinks, setDashboardLinks] = useState([]);
+  const [loadingLinks, setLoadingLinks] = useState(false);
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [editingLink, setEditingLink] = useState(null);
+  const [linkFormData, setLinkFormData] = useState({
+    name: '',
+    description: '',
+    start_date: '',
+    end_date: '',
+    enabled: true,
+    expires_at: '',
+    slug: ''
+  });
+  const [metricsDialogOpen, setMetricsDialogOpen] = useState(false);
+  const [selectedLinkForMetrics, setSelectedLinkForMetrics] = useState(null);
+  const [linkMetrics, setLinkMetrics] = useState(null);
+  const [loadingMetrics, setLoadingMetrics] = useState(false);
+  const [allLinksMetrics, setAllLinksMetrics] = useState(null);
+  const [loadingAllMetrics, setLoadingAllMetrics] = useState(false);
+  
   const [monthSelection, setMonthSelection] = useState(
     isPublic ? "" : currentMonthStr
   );
   const [brandAnalytics, setBrandAnalytics] = useState(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
-  const [showShareDialog, setShowShareDialog] = useState(false);
-  const [shareableUrl, setShareableUrl] = useState("");
-  const [copied, setCopied] = useState(false);
-  const [linkExpiryHours, setLinkExpiryHours] = useState(null);
-  const [regenerating, setRegenerating] = useState(false);
   const [selectedBrandSlug, setSelectedBrandSlug] = useState(null);
   const [selectedClientReportTitle, setSelectedClientReportTitle] =
     useState(null); // Store custom report title
@@ -381,13 +400,6 @@ function ReportingDashboard({
   const [showOverviewDialog, setShowOverviewDialog] = useState(false);
   const [overviewData, setOverviewData] = useState(null);
   const [loadingOverview, setLoadingOverview] = useState(false);
-  // Date range for shareable URL
-  const [shareDialogStartDate, setShareDialogStartDate] = useState(
-    defaultDates.start
-  );
-  const [shareDialogEndDate, setShareDialogEndDate] = useState(
-    defaultDates.end
-  );
   const [overviewCacheKey, setOverviewCacheKey] = useState(null); // Track cache key (clientId/brandId + date range)
   const [expandedMetricsSources, setExpandedMetricsSources] = useState(
     new Set()
@@ -476,6 +488,13 @@ function ReportingDashboard({
       applyMonthSelection(monthSelection);
     }
   }, [isPublic, monthSelection, applyMonthSelection]);
+
+  // Load dashboard links when client changes (admin only) - for create link functionality
+  useEffect(() => {
+    if (!isPublic && selectedClientId) {
+      loadDashboardLinks();
+    }
+  }, [selectedClientId, isPublic]);
 
   // Loading captions for public reporting page
   const loadingCaptions = [
@@ -958,147 +977,6 @@ function ReportingDashboard({
     }
   }, [selectedClientId, clients]);
 
-  const handleOpenShareDialog = async () => {
-    if (selectedBrandSlug && selectedClientId) {
-      setShowShareDialog(true);
-      setCopied(false);
-
-      try {
-        // Load client data to get saved report dates
-        const client = await clientAPI.getClient(selectedClientId);
-        if (client) {
-          // Use saved report dates if available, otherwise use current date range
-          const savedStartDate = client.report_start_date || startDate;
-          const savedEndDate = client.report_end_date || endDate;
-          setShareDialogStartDate(savedStartDate);
-          setShareDialogEndDate(savedEndDate);
-
-          // Generate URL with date range
-          const baseUrl = window.location.origin;
-          const urlParams = new URLSearchParams();
-          if (savedStartDate) urlParams.append("from", savedStartDate);
-          if (savedEndDate) urlParams.append("to", savedEndDate);
-          const queryString = urlParams.toString();
-          const url = `${baseUrl}/reporting/client/${selectedBrandSlug}${
-            queryString ? `?${queryString}` : ""
-          }`;
-          setShareableUrl(url);
-
-          // Calculate hours remaining until expiry
-          const linkTimestamp = client.updated_at || client.created_at;
-          if (linkTimestamp) {
-            const linkDate = new Date(linkTimestamp);
-            const now = new Date();
-            const hoursSinceCreation = (now - linkDate) / (1000 * 60 * 60);
-            const hoursRemaining = Math.max(0, 48 - hoursSinceCreation);
-            setLinkExpiryHours(hoursRemaining);
-          }
-        } else {
-          // Fallback if client not found
-          setShareDialogStartDate(startDate);
-          setShareDialogEndDate(endDate);
-          const baseUrl = window.location.origin;
-          const urlParams = new URLSearchParams();
-          if (startDate) urlParams.append("from", startDate);
-          if (endDate) urlParams.append("to", endDate);
-          const queryString = urlParams.toString();
-          const url = `${baseUrl}/reporting/client/${selectedBrandSlug}${
-            queryString ? `?${queryString}` : ""
-          }`;
-          setShareableUrl(url);
-        }
-      } catch (err) {
-        debugError("Error loading client data:", err);
-        // Fallback on error
-        setShareDialogStartDate(startDate);
-        setShareDialogEndDate(endDate);
-        const baseUrl = window.location.origin;
-        const urlParams = new URLSearchParams();
-        if (startDate) urlParams.append("from", startDate);
-        if (endDate) urlParams.append("to", endDate);
-        const queryString = urlParams.toString();
-        const url = `${baseUrl}/reporting/client/${selectedBrandSlug}${
-          queryString ? `?${queryString}` : ""
-        }`;
-        setShareableUrl(url);
-      }
-    } else {
-      setError(
-        "Brand slug not available. Please ensure the brand has a slug configured."
-      );
-    }
-  };
-
-  const handleUpdateShareUrl = async () => {
-    if (selectedBrandSlug && selectedClientId) {
-      // Update URL immediately
-      const baseUrl = window.location.origin;
-      const urlParams = new URLSearchParams();
-      if (shareDialogStartDate) urlParams.append("from", shareDialogStartDate);
-      if (shareDialogEndDate) urlParams.append("to", shareDialogEndDate);
-      const queryString = urlParams.toString();
-      const url = `${baseUrl}/reporting/client/${selectedBrandSlug}${
-        queryString ? `?${queryString}` : ""
-      }`;
-      setShareableUrl(url);
-      setCopied(false);
-
-      // Save dates to client
-      try {
-        await clientAPI.updateClientReportDates(selectedClientId, {
-          report_start_date: shareDialogStartDate || null,
-          report_end_date: shareDialogEndDate || null,
-        });
-      } catch (err) {
-        debugError("Error saving report dates:", err);
-        setError(
-          "Failed to save date range. URL updated but dates were not persisted."
-        );
-      }
-    }
-  };
-
-  const handleRegenerateLink = async () => {
-    if (!selectedClientId) return;
-
-    setRegenerating(true);
-    try {
-      const result = await clientAPI.regenerateShareableLink(selectedClientId);
-      const baseUrl = window.location.origin;
-      // Include date range in regenerated URL
-      const urlParams = new URLSearchParams();
-      if (shareDialogStartDate) urlParams.append("from", shareDialogStartDate);
-      if (shareDialogEndDate) urlParams.append("to", shareDialogEndDate);
-      const queryString = urlParams.toString();
-      const newUrl = `${baseUrl}${result.shareable_url}${
-        queryString ? `?${queryString}` : ""
-      }`;
-      setShareableUrl(newUrl);
-      setLinkExpiryHours(48); // Reset to 48 hours
-      setCopied(false);
-      // Refresh clients list to get updated slug
-      if (selectedClientId && clients.length > 0) {
-        const updatedClients = await clientAPI.getClients(1, 25, "");
-        setClients(updatedClients.items || []);
-      }
-    } catch (err) {
-      debugError("Error regenerating link:", err);
-      setError("Failed to regenerate link. Please try again.");
-    } finally {
-      setRegenerating(false);
-    }
-  };
-
-  const handleCopyUrl = async () => {
-    try {
-      await navigator.clipboard.writeText(shareableUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      debugError("Failed to copy URL:", err);
-      setError("Failed to copy URL to clipboard");
-    }
-  };
 
   // Generate overview automatically when KPIs are loaded
   const generateOverviewAutomatically = async (kpiData = null) => {
@@ -1856,63 +1734,18 @@ function ReportingDashboard({
   };
 
   const handleSaveKPISelection = async () => {
-    // Use client_id directly (client-centric approach)
-    let clientIdToUse = selectedClientId;
-
-    // If no selectedClientId but we have a publicSlug, try to get client_id from slug
-    if (!clientIdToUse && isPublic && publicSlug) {
-      try {
-        const client = await clientAPI.getClientBySlug(publicSlug);
-        if (client && client.id) {
-          clientIdToUse = client.id;
-        }
-      } catch (err) {
-        debugError("Error fetching client by slug:", err);
-      }
-    }
-
-    if (!clientIdToUse) {
-      const errorMsg =
-        "Cannot save KPI selections: No client selected. Please select a client first.";
-      setError(errorMsg);
-      debugError("Cannot save KPI selections: No client_id available", {
-        selectedClientId,
-        isPublic,
-        publicSlug,
-      });
-      return;
-    }
-
-    try {
-      // Save to database using client_id (client-centric)
-      // Note: Empty arrays are valid - they mean "show no KPIs/sections/charts" in public view
-      // The backend will set updated_at when saving, which allows us to distinguish
-      // between "no selection saved" (show all) vs "empty selection saved" (show none)
-      await reportingAPI.saveKPISelectionsByClient(
-        clientIdToUse,
-        Array.from(tempSelectedKPIs), // Convert Set to Array (empty Set becomes [])
-        Array.from(tempVisibleSections), // Convert Set to Array (empty Set becomes [])
-        Array.from(tempSelectedCharts) // Convert Set to Array (empty Set becomes [])
-      );
-      setSelectedKPIs(new Set(tempSelectedKPIs));
-      setVisibleSections(new Set(tempVisibleSections));
-      setSelectedCharts(new Set(tempSelectedCharts));
-      setShowKPISelector(false);
-      setError(null); // Clear any previous errors
-      debugLog("KPI, section, and chart selections saved successfully", {
-        clientId: clientIdToUse,
-        kpiCount: tempSelectedKPIs.size,
-        sectionCount: tempVisibleSections.size,
-        chartCount: tempSelectedCharts.size,
-      });
-    } catch (err) {
-      debugError("Error saving KPI selections:", err);
-      const errorMessage =
-        err.response?.data?.detail ||
-        err.message ||
-        "Failed to save KPI and section selections. Please try again.";
-      setError(errorMessage);
-    }
+    // Only update state - don't save to database
+    // KPI selections will be saved when creating/updating a dashboard link
+    setSelectedKPIs(new Set(tempSelectedKPIs));
+    setVisibleSections(new Set(tempVisibleSections));
+    setSelectedCharts(new Set(tempSelectedCharts));
+    setShowKPISelector(false);
+    setError(null); // Clear any previous errors
+    debugLog("KPI, section, and chart selections updated in state", {
+      kpiCount: tempSelectedKPIs.size,
+      sectionCount: tempVisibleSections.size,
+      chartCount: tempSelectedCharts.size,
+    });
   };
 
   const handleOpenKPISelector = () => {
@@ -1931,6 +1764,189 @@ function ReportingDashboard({
       ])
     );
     setShowKPISelector(true);
+  };
+
+  // Dashboard Link Management Functions
+  const loadDashboardLinks = async () => {
+    if (!selectedClientId || isPublic) return;
+    setLoadingLinks(true);
+    try {
+      const response = await clientAPI.listDashboardLinks(selectedClientId);
+      setDashboardLinks(response.items || []);
+    } catch (err) {
+      debugError("Error loading dashboard links:", err);
+      setError("Failed to load dashboard links");
+    } finally {
+      setLoadingLinks(false);
+    }
+  };
+
+  const handleCreateLink = () => {
+    setEditingLink(null);
+    // Use current date range from dashboard (startDate and endDate are already strings)
+    setLinkFormData({
+      name: '',
+      description: '',
+      start_date: startDate || '',
+      end_date: endDate || '',
+      enabled: true,
+      expires_at: '',
+      slug: ''
+    });
+    setLinkDialogOpen(true);
+  };
+
+  const handleEditLink = (link) => {
+    setEditingLink(link);
+    // Format expires_at for datetime-local input (YYYY-MM-DDTHH:mm)
+    let expiresAtFormatted = '';
+    if (link.expires_at) {
+      const expiresDate = new Date(link.expires_at);
+      const year = expiresDate.getFullYear();
+      const month = String(expiresDate.getMonth() + 1).padStart(2, '0');
+      const day = String(expiresDate.getDate()).padStart(2, '0');
+      const hours = String(expiresDate.getHours()).padStart(2, '0');
+      const minutes = String(expiresDate.getMinutes()).padStart(2, '0');
+      expiresAtFormatted = `${year}-${month}-${day}T${hours}:${minutes}`;
+    }
+    setLinkFormData({
+      name: link.name || '',
+      description: link.description || '',
+      start_date: link.start_date || '',
+      end_date: link.end_date || '',
+      enabled: link.enabled !== undefined ? link.enabled : true,
+      expires_at: expiresAtFormatted,
+      slug: link.slug || ''
+    });
+    setLinkDialogOpen(true);
+  };
+
+  const handleSaveLink = async () => {
+    if (!selectedClientId) return;
+    if (!linkFormData.start_date || !linkFormData.end_date) {
+      setError("Start date and end date are required");
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      // Prepare payload - convert datetime-local to ISO string if expires_at is provided
+      const payload = { ...linkFormData };
+      if (payload.expires_at) {
+        const dt = new Date(payload.expires_at);
+        if (!isNaN(dt.getTime())) {
+          payload.expires_at = dt.toISOString();
+        } else {
+          delete payload.expires_at;
+        }
+      } else {
+        delete payload.expires_at;
+      }
+      
+      // Include current KPI selections from state
+      payload.selected_kpis = Array.from(selectedKPIs);
+      payload.visible_sections = Array.from(visibleSections);
+      payload.selected_charts = Array.from(selectedCharts);
+      
+      if (editingLink) {
+        // Update existing link
+        await clientAPI.updateDashboardLink(selectedClientId, editingLink.id, payload);
+        setError(null);
+        debugLog("Dashboard link updated successfully");
+      } else {
+        // Create new link
+        await clientAPI.upsertDashboardLink(selectedClientId, payload);
+        setError(null);
+        debugLog("Dashboard link created successfully");
+      }
+      setLinkDialogOpen(false);
+      await loadDashboardLinks();
+    } catch (err) {
+      debugError("Error saving dashboard link:", err);
+      setError(err.response?.data?.detail || err.message || "Failed to save dashboard link");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteLink = async (linkId) => {
+    if (!selectedClientId) return;
+    if (!window.confirm("Are you sure you want to delete this dashboard link? This action cannot be undone.")) {
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      await clientAPI.deleteDashboardLink(selectedClientId, linkId);
+      setError(null);
+      await loadDashboardLinks();
+    } catch (err) {
+      debugError("Error deleting dashboard link:", err);
+      setError(err.response?.data?.detail || err.message || "Failed to delete dashboard link");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleToggleLinkEnabled = async (link) => {
+    if (!selectedClientId) return;
+    setLoading(true);
+    try {
+      await clientAPI.updateDashboardLink(selectedClientId, link.id, {
+        enabled: !link.enabled
+      });
+      setError(null);
+      await loadDashboardLinks();
+    } catch (err) {
+      debugError("Error toggling link enabled:", err);
+      setError(err.response?.data?.detail || err.message || "Failed to update link");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleViewMetrics = async (link) => {
+    if (!selectedClientId) return;
+    setSelectedLinkForMetrics(link);
+    setLoadingMetrics(true);
+    setMetricsDialogOpen(true);
+    try {
+      const metrics = await clientAPI.getDashboardLinkMetrics(selectedClientId, link.id);
+      setLinkMetrics(metrics);
+    } catch (err) {
+      debugError("Error loading link metrics:", err);
+      setLinkMetrics(null);
+    } finally {
+      setLoadingMetrics(false);
+    }
+  };
+
+  const handleViewAllMetrics = async () => {
+    if (!selectedClientId) return;
+    setLoadingAllMetrics(true);
+    setMetricsDialogOpen(true);
+    setSelectedLinkForMetrics(null);
+    try {
+      const metrics = await clientAPI.getDashboardLinksMetrics(selectedClientId);
+      setAllLinksMetrics(metrics);
+    } catch (err) {
+      debugError("Error loading all links metrics:", err);
+      setAllLinksMetrics(null);
+    } finally {
+      setLoadingAllMetrics(false);
+    }
+  };
+
+
+  const handleCopyLinkUrl = (link) => {
+    const baseUrl = window.location.origin;
+    const url = `${baseUrl}/reporting/client/${link.slug}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setError(null);
+      debugLog("Link URL copied to clipboard");
+    }).catch(() => {
+      setError("Failed to copy URL");
+    });
   };
 
   // Helper function to check if a section should be visible
@@ -2258,29 +2274,6 @@ function ReportingDashboard({
                 <SettingsIcon sx={{ fontSize: 20 }} />
               </IconButton>
             )}
-            {!isPublic && (
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={<ShareIcon sx={{ fontSize: 16 }} />}
-                onClick={handleOpenShareDialog}
-                disabled={!selectedBrandSlug}
-                sx={{
-                  borderRadius: 2,
-                  px: 2,
-                  py: 0.75,
-                  fontWeight: 600,
-                  bgcolor: "background.paper",
-                }}
-                title={
-                  selectedBrandSlug
-                    ? "Share public dashboard URL"
-                    : "Brand slug not configured"
-                }
-              >
-                Share
-              </Button>
-            )}
             <Button
               variant="outlined"
               size="small"
@@ -2374,33 +2367,53 @@ function ReportingDashboard({
 
             {!isPublic && (
               <Box display="flex" alignItems="center" gap={2} flexWrap="wrap">
+                {/* Date Range Inputs */}
                 <Box display="flex" alignItems="center" gap={1}>
                   <CalendarTodayIcon
                     sx={{ fontSize: 18, color: "text.secondary" }}
                   />
                   <TextField
-                    label="Month"
-                    type="month"
+                    label="Start Date"
+                    type="date"
                     size="small"
-                    value={monthSelection}
+                    value={startDate || ''}
                     onChange={(e) => {
-                      setMonthSelection(e.target.value);
-                      setDatePreset("Custom Month");
+                      if (e.target.value) {
+                        setStartDate(e.target.value);
+                        setDatePreset("Custom Range");
+                      }
                     }}
                     InputLabelProps={{ shrink: true }}
-                    sx={{ minWidth: 170 }}
+                    sx={{ minWidth: 150 }}
+                  />
+                  <TextField
+                    label="End Date"
+                    type="date"
+                    size="small"
+                    value={endDate || ''}
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        setEndDate(e.target.value);
+                        setDatePreset("Custom Range");
+                      }
+                    }}
+                    InputLabelProps={{ shrink: true }}
+                    sx={{ minWidth: 150 }}
                   />
                 </Box>
-                {/* <Button
-                  variant="contained"
-                  size="small"
-                  onClick={handleApplyMonth}
-                  sx={{ textTransform: "none" }}
-                >
-                  Reload Dashboard
-                </Button> */}
-                {/* Start/End date inputs disabled per request */}
-                {/* <TextField ... /> */}
+                
+                {/* Create Link Button */}
+                {selectedClientId && (
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={handleCreateLink}
+                    startIcon={<LinkIcon />}
+                    sx={{ textTransform: "none" }}
+                  >
+                    Create Link
+                  </Button>
+                )}
               </Box>
             )}
           </Paper>
@@ -6445,179 +6458,213 @@ function ReportingDashboard({
         </DialogActions>
       </Dialog>
 
-      {/* Share Dialog */}
+      {/* Link Create/Edit Dialog */}
       <Dialog
-        open={showShareDialog}
-        onClose={() => setShowShareDialog(false)}
+        open={linkDialogOpen}
+        onClose={() => setLinkDialogOpen(false)}
         maxWidth="sm"
         fullWidth
         PaperProps={{
           sx: {
             borderRadius: 2,
-            border: `1px solid ${theme.palette.divider}`,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
           },
         }}
       >
-        <DialogTitle sx={{ fontWeight: 600, pb: 1 }}>
-          Share Public Dashboard
+        <DialogTitle>
+          <Typography variant="h6" fontWeight={600}>
+            {editingLink ? 'Edit Dashboard Link' : 'Create Dashboard Link'}
+          </Typography>
         </DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="text.secondary" mb={2}>
-            Share this URL with clients to give them access to the public
-            reporting dashboard for this brand.
-          </Typography>
-
-          {/* Date Range Selector */}
-          <Box sx={{ mb: 3 }}>
-            <Typography variant="subtitle2" sx={{ mb: 1.5, fontWeight: 600 }}>
-              Date Range for Public Dashboard
-            </Typography>
-            <Box
-              sx={{
-                display: "flex",
-                gap: 2,
-                alignItems: "center",
-                flexWrap: "wrap",
-              }}
-            >
+          <Box display="flex" flexDirection="column" gap={2} mt={1}>
+            <TextField
+              label="Name (optional)"
+              value={linkFormData.name}
+              onChange={(e) => setLinkFormData({ ...linkFormData, name: e.target.value })}
+              fullWidth
+              helperText="Friendly name for this link"
+            />
+            <TextField
+              label="Description (optional)"
+              value={linkFormData.description}
+              onChange={(e) => setLinkFormData({ ...linkFormData, description: e.target.value })}
+              fullWidth
+              multiline
+              rows={2}
+              helperText="Optional description for this link"
+            />
+            <Box display="flex" gap={2}>
               <TextField
                 label="Start Date"
                 type="date"
-                size="small"
-                value={shareDialogStartDate || ""}
-                onChange={(e) => {
-                  setShareDialogStartDate(e.target.value);
-                }}
+                value={linkFormData.start_date}
+                onChange={(e) => setLinkFormData({ ...linkFormData, start_date: e.target.value })}
+                fullWidth
+                required
                 InputLabelProps={{ shrink: true }}
-                sx={{ minWidth: 150 }}
               />
               <TextField
                 label="End Date"
                 type="date"
-                size="small"
-                value={shareDialogEndDate || ""}
-                onChange={(e) => {
-                  setShareDialogEndDate(e.target.value);
-                }}
+                value={linkFormData.end_date}
+                onChange={(e) => setLinkFormData({ ...linkFormData, end_date: e.target.value })}
+                fullWidth
+                required
                 InputLabelProps={{ shrink: true }}
-                sx={{ minWidth: 150 }}
               />
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={handleUpdateShareUrl}
-                sx={{ borderRadius: 2, textTransform: "none" }}
-              >
-                Update URL
-              </Button>
             </Box>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ mt: 1, display: "block" }}
-            >
-              Select the date range that will be used to display data on the
-              public dashboard.
-            </Typography>
-          </Box>
-
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 1,
-              p: 1.5,
-              borderRadius: 2,
-              bgcolor: alpha(theme.palette.primary.main, 0.05),
-              border: `1px solid ${theme.palette.divider}`,
-            }}
-          >
-            <LinkIcon sx={{ color: "text.secondary", fontSize: 20 }} />
-            <Typography
-              variant="body2"
-              sx={{
-                flex: 1,
-                fontFamily: "monospace",
-                fontSize: "0.875rem",
-                wordBreak: "break-all",
-                color: "text.primary",
-              }}
-            >
-              {shareableUrl}
-            </Typography>
-            <IconButton
-              onClick={handleCopyUrl}
-              size="small"
-              sx={{
-                color: copied ? theme.palette.success.main : "text.secondary",
-                "&:hover": {
-                  bgcolor: alpha(theme.palette.primary.main, 0.1),
-                },
-              }}
-              title={copied ? "Copied!" : "Copy URL"}
-            >
-              {copied ? (
-                <CheckIcon fontSize="small" />
-              ) : (
-                <ContentCopyIcon fontSize="small" />
-              )}
-            </IconButton>
-          </Box>
-          {copied && (
-            <Typography
-              variant="caption"
-              color="success.main"
-              sx={{ mt: 1, display: "block", fontWeight: 600 }}
-            >
-              URL copied to clipboard!
-            </Typography>
-          )}
-          {linkExpiryHours !== null && (
-            <Box
-              sx={{
-                mt: 2,
-                p: 1.5,
-                borderRadius: 2,
-                bgcolor: alpha(theme.palette.info.main, 0.05),
-                border: `1px solid ${theme.palette.divider}`,
-              }}
-            >
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{ fontSize: "0.875rem" }}
-              >
-                <strong>Link expires in:</strong>{" "}
-                {linkExpiryHours > 0
-                  ? `${Math.floor(linkExpiryHours)} hours ${Math.floor(
-                      (linkExpiryHours % 1) * 60
-                    )} minutes`
-                  : "Link has expired"}
+            <TextField
+              label="Slug (optional)"
+              value={linkFormData.slug}
+              onChange={(e) => setLinkFormData({ ...linkFormData, slug: e.target.value })}
+              fullWidth
+              helperText="Leave empty to auto-generate. Must be unique."
+            />
+            <TextField
+              label="Expires At (optional)"
+              type="datetime-local"
+              value={linkFormData.expires_at}
+              onChange={(e) => setLinkFormData({ ...linkFormData, expires_at: e.target.value })}
+              fullWidth
+              InputLabelProps={{ shrink: true }}
+              helperText="Optional expiration date and time"
+            />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={linkFormData.enabled}
+                  onChange={(e) => setLinkFormData({ ...linkFormData, enabled: e.target.checked })}
+                />
+              }
+              label="Enabled"
+            />
+            <Alert severity="info">
+              <Typography variant="body2">
+                Current KPI selections will be saved with this link. You can modify KPIs in the selector and update this link to save changes.
               </Typography>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ mt: 0.5, display: "block", fontSize: "0.75rem" }}
-              >
-                Shareable links are valid for 48 hours from creation. Regenerate
-                to create a new link.
-              </Typography>
-            </Box>
-          )}
+            </Alert>
+          </Box>
         </DialogContent>
-        <DialogActions sx={{ p: 2, pt: 1 }}>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button
-            onClick={handleRegenerateLink}
-            variant="contained"
-            disabled={regenerating}
-            sx={{ borderRadius: 2, textTransform: "none" }}
+            onClick={() => setLinkDialogOpen(false)}
+            sx={{ textTransform: 'none' }}
           >
-            {regenerating ? "Regenerating..." : "Regenerate Link"}
+            Cancel
           </Button>
           <Button
-            onClick={() => setShowShareDialog(false)}
-            variant="outlined"
-            sx={{ borderRadius: 2, textTransform: "none" }}
+            onClick={handleSaveLink}
+            variant="contained"
+            disabled={loading || !linkFormData.start_date || !linkFormData.end_date}
+            sx={{ textTransform: 'none' }}
+          >
+            {loading ? 'Saving...' : editingLink ? 'Update' : 'Create'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Metrics Dialog */}
+      <Dialog
+        open={metricsDialogOpen}
+        onClose={() => {
+          setMetricsDialogOpen(false);
+          setLinkMetrics(null);
+          setAllLinksMetrics(null);
+          setSelectedLinkForMetrics(null);
+        }}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 2,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+          },
+        }}
+      >
+        <DialogTitle>
+          <Typography variant="h6" fontWeight={600}>
+            {selectedLinkForMetrics ? `Metrics: ${selectedLinkForMetrics.name || selectedLinkForMetrics.slug}` : 'All Links Metrics'}
+          </Typography>
+        </DialogTitle>
+        <DialogContent>
+          {loadingMetrics || loadingAllMetrics ? (
+            <Box display="flex" justifyContent="center" py={4}>
+              <CircularProgress size={40} />
+            </Box>
+          ) : selectedLinkForMetrics && linkMetrics ? (
+            <Box>
+              <Typography variant="h6" mb={2}>
+                Total Opens: {linkMetrics.total_opens || 0}
+              </Typography>
+              {linkMetrics.recent_opens && linkMetrics.recent_opens.length > 0 && (
+                <Box>
+                  <Typography variant="subtitle2" fontWeight={600} mb={1}>
+                    Recent Opens
+                  </Typography>
+                  <List>
+                    {linkMetrics.recent_opens.slice(0, 10).map((open, idx) => (
+                      <ListItem key={idx} sx={{ borderBottom: `1px solid ${theme.palette.divider}` }}>
+                        <ListItemText
+                          primary={new Date(open.opened_at).toLocaleString()}
+                          secondary={
+                            <Box>
+                              {open.ip_address && <Typography variant="caption" display="block">IP: {open.ip_address}</Typography>}
+                              {open.user_agent && (
+                                <Typography variant="caption" display="block" sx={{ wordBreak: 'break-all' }}>
+                                  {open.user_agent.substring(0, 100)}
+                                </Typography>
+                              )}
+                            </Box>
+                          }
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                </Box>
+              )}
+            </Box>
+          ) : allLinksMetrics ? (
+            <Box>
+              <Typography variant="h6" mb={2}>
+                Total Opens: {allLinksMetrics.total_opens || 0}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" mb={2}>
+                Across {allLinksMetrics.total_links || 0} links
+              </Typography>
+              {allLinksMetrics.opens_per_link && allLinksMetrics.opens_per_link.length > 0 && (
+                <Box>
+                  <Typography variant="subtitle2" fontWeight={600} mb={1}>
+                    Opens per Link
+                  </Typography>
+                  <List>
+                    {allLinksMetrics.opens_per_link.map((linkData) => (
+                      <ListItem key={linkData.link_id} sx={{ borderBottom: `1px solid ${theme.palette.divider}` }}>
+                        <ListItemText
+                          primary={linkData.name || linkData.slug}
+                          secondary={`${linkData.opens || 0} opens`}
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                </Box>
+              )}
+            </Box>
+          ) : (
+            <Alert severity="info">
+              No metrics available
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button
+            onClick={() => {
+              setMetricsDialogOpen(false);
+              setLinkMetrics(null);
+              setAllLinksMetrics(null);
+              setSelectedLinkForMetrics(null);
+            }}
+            sx={{ textTransform: 'none' }}
           >
             Close
           </Button>

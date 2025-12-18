@@ -243,20 +243,21 @@ async def generate_metric_review(
         }
         source_name = data_source_names[request.data_source.lower()]
         
-        prompt = f"""You are an expert analytics consultant reviewing {source_name} metrics for a brand.
-
-Analyze the following metrics and provide a comprehensive review focusing on:
+        prompt = f"""You are an expert analytics consultant reviewing {source_name} metrics for a client.
+ 
+Analyze the following metrics and provide a brief summary in pointers focusing on:
 1. What's performing well (highlight strong metrics and positive trends)
 2. Key insights and patterns
 3. Notable changes from the previous period
-4. Overall performance assessment
 
+ 
 Metrics Data:
 {format_metrics_for_prompt(metrics_summary)}
-
+ 
 Date Range: {dashboard_data.get('date_range', {}).get('start_date', 'N/A')} to {dashboard_data.get('date_range', {}).get('end_date', 'N/A')}
-
+ 
 Provide a clear, professional review (4-5 bullet points) that highlights what's good and performing well. Be specific about the metrics and their significance. Use a positive, analytical tone."""
+
         
         # Generate review using OpenAI
         messages = [

@@ -39,6 +39,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Create trigger that fires BEFORE INSERT or UPDATE
+-- Drop trigger if it exists to allow re-running migration
+DROP TRIGGER IF EXISTS trigger_generate_brand_slug ON brands;
 CREATE TRIGGER trigger_generate_brand_slug
   BEFORE INSERT OR UPDATE ON brands
   FOR EACH ROW

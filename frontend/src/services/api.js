@@ -591,7 +591,53 @@ export const clientAPI = {
 
   // Create or update a dashboard link (admin)
   upsertDashboardLink: async (clientId, payload) => {
+    // Payload can include: name, description, start_date, end_date, enabled, expires_at, slug,
+    // selected_kpis, visible_sections, selected_charts
     const response = await api.post(`/api/v1/data/clients/${clientId}/dashboard-links`, payload)
+    return response.data
+  },
+
+  // Track link open (public)
+  trackDashboardLinkOpen: async (slug, metadata) => {
+    const response = await api.post(`/api/v1/data/dashboard-links/${slug}/track`, metadata)
+    return response.data
+  },
+
+  // Update dashboard link (admin)
+  updateDashboardLink: async (clientId, linkId, payload) => {
+    // Payload can include: name, description, start_date, end_date, enabled, expires_at, slug,
+    // selected_kpis, visible_sections, selected_charts
+    const response = await api.put(`/api/v1/data/clients/${clientId}/dashboard-links/${linkId}`, payload)
+    return response.data
+  },
+
+  // Get KPI selections for a dashboard link
+  getDashboardLinkKPISelections: async (clientId, linkId) => {
+    const response = await api.get(`/api/v1/data/clients/${clientId}/dashboard-links/${linkId}/kpi-selections`)
+    return response.data
+  },
+
+  // Delete dashboard link (admin)
+  deleteDashboardLink: async (clientId, linkId) => {
+    const response = await api.delete(`/api/v1/data/clients/${clientId}/dashboard-links/${linkId}`)
+    return response.data
+  },
+
+  // Get dashboard link metrics (admin)
+  getDashboardLinkMetrics: async (clientId, linkId, startDate, endDate) => {
+    const params = {}
+    if (startDate) params.start_date = startDate
+    if (endDate) params.end_date = endDate
+    const response = await api.get(`/api/v1/data/clients/${clientId}/dashboard-links/${linkId}/metrics`, { params })
+    return response.data
+  },
+
+  // Get all dashboard links metrics (admin)
+  getDashboardLinksMetrics: async (clientId, startDate, endDate) => {
+    const params = {}
+    if (startDate) params.start_date = startDate
+    if (endDate) params.end_date = endDate
+    const response = await api.get(`/api/v1/data/clients/${clientId}/dashboard-links/metrics`, { params })
     return response.data
   },
 

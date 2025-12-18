@@ -22,6 +22,7 @@ import ReportingDashboard from './components/ReportingDashboard'
 import PublicReportingDashboard from './components/PublicReportingDashboard'
 import KeywordsDashboard from './components/KeywordsDashboard'
 import AuditLogs from './components/AuditLogs'
+import DashboardLinksManagement from './components/DashboardLinksManagement'
 import Login from './components/Login'
 import CreateUser from './components/CreateUser'
 import NotFound from './components/NotFound'
@@ -66,6 +67,7 @@ function App() {
                           <Route path="/sync" element={<Layout><SyncPanel /></Layout>} />
                           <Route path="/data" element={<Layout><DataView /></Layout>} />
                           <Route path="/reporting" element={<Layout><ReportingDashboard /></Layout>} />
+                          <Route path="/dashboard-links" element={<Layout><DashboardLinksManagement /></Layout>} />
                           <Route path="/audit-logs" element={<Layout><AuditLogs /></Layout>} />
                           <Route path="/create-user" element={<Layout><CreateUser /></Layout>} />
                           <Route path="*" element={<NotFound />} />

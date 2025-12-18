@@ -222,11 +222,54 @@ class DashboardLink(Base):
     end_date = Column(Date, nullable=False)
     enabled = Column(Boolean, nullable=False, default=True, index=True)
     expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    name = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
+    # Relationships
+    kpi_selection = relationship("DashboardLinkKPISelection", back_populates="link", uselist=False, cascade="all, delete-orphan")
+    tracking_events = relationship("DashboardLinkTracking", back_populates="link", cascade="all, delete-orphan")
+
     def __repr__(self):
         return f"<DashboardLink(id={self.id}, client_id={self.client_id}, slug='{self.slug}', enabled={self.enabled})>"
+
+
+class DashboardLinkKPISelection(Base):
+    """KPI selections for dashboard links"""
+    __tablename__ = "dashboard_link_kpi_selections"
+    
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    dashboard_link_id = Column(Integer, ForeignKey("dashboard_links.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    selected_kpis = Column(ARRAY(String), nullable=False, default=[])
+    visible_sections = Column(ARRAY(String), nullable=False, default=['ga4', 'scrunch_ai', 'brand_analytics', 'advanced_analytics', 'keywords'])
+    selected_charts = Column(ARRAY(String), nullable=False, default=[])
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    link = relationship("DashboardLink", back_populates="kpi_selection")
+
+    def __repr__(self):
+        return f"<DashboardLinkKPISelection(id={self.id}, dashboard_link_id={self.dashboard_link_id})>"
+
+
+class DashboardLinkTracking(Base):
+    """Tracking records for dashboard link opens"""
+    __tablename__ = "dashboard_link_tracking"
+    
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    dashboard_link_id = Column(Integer, ForeignKey("dashboard_links.id", ondelete="CASCADE"), nullable=False, index=True)
+    opened_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    ip_address = Column(String, nullable=True)  # Store as string for INET compatibility
+    user_agent = Column(Text, nullable=True)
+    referer = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    link = relationship("DashboardLink", back_populates="tracking_events")
+
+    def __repr__(self):
+        return f"<DashboardLinkTracking(id={self.id}, dashboard_link_id={self.dashboard_link_id}, opened_at='{self.opened_at}')>"
 
 
 class ClientCampaign(Base):
