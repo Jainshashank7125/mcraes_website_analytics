@@ -3000,6 +3000,82 @@ class SupabaseService:
             logger.error(f"Error getting dashboard link by slug {slug}: {str(e)}")
             return None
 
+    def list_all_dashboard_links(self) -> List[Dict]:
+        """List all dashboard links across all clients, including KPI selections and executive summaries - optimized batch query"""
+        try:
+            table = self._get_table("dashboard_links")
+            # Get all links with a single query
+            query = (
+                select(table)
+                .order_by(table.c.created_at.desc())
+            )
+            result = self.db.execute(query)
+            links = []
+            
+            # Get all client IDs and link IDs to batch fetch related data
+            client_ids = set()
+            link_ids = []
+            link_rows = []
+            for row in result:
+                link_dict = dict(row._mapping)
+                link_id = link_dict.get("id")
+                client_id = link_dict.get("client_id")
+                if client_id:
+                    client_ids.add(client_id)
+                if link_id:
+                    link_ids.append(link_id)
+                link_rows.append((link_id, client_id, link_dict))
+            
+            # Batch fetch all clients in one query
+            clients_map = {}
+            if client_ids:
+                clients_table = self._get_table("clients")
+                clients_query = select(clients_table).where(clients_table.c.id.in_(list(client_ids)))
+                clients_result = self.db.execute(clients_query)
+                for client_row in clients_result:
+                    client_dict = dict(client_row._mapping)
+                    clients_map[client_dict["id"]] = client_dict
+            
+            # Batch fetch all KPI selections in one query
+            kpi_selections_map = {}
+            if link_ids:
+                kpi_selection_table = self._get_table("dashboard_link_kpi_selections")
+                kpi_query = select(kpi_selection_table).where(kpi_selection_table.c.dashboard_link_id.in_(link_ids))
+                kpi_result = self.db.execute(kpi_query)
+                for kpi_row in kpi_result:
+                    kpi_dict = dict(kpi_row._mapping)
+                    link_id = kpi_dict.get("dashboard_link_id")
+                    if link_id:
+                        # Format KPI selection to match get_dashboard_link_kpi_selection structure
+                        kpi_selections_map[link_id] = {
+                            "dashboard_link_id": link_id,
+                            "selected_kpis": kpi_dict.get("selected_kpis") or [],
+                            "visible_sections": kpi_dict.get("visible_sections") or [],
+                            "selected_charts": kpi_dict.get("selected_charts") or [],
+                            "selected_performance_metrics_kpis": kpi_dict.get("selected_performance_metrics_kpis") or [],
+                            "created_at": kpi_dict.get("created_at").isoformat() if kpi_dict.get("created_at") else None,
+                            "updated_at": kpi_dict.get("updated_at").isoformat() if kpi_dict.get("updated_at") else None
+                        }
+            
+            # Process links and attach related data
+            for link_id, client_id, link_dict in link_rows:
+                # Attach KPI selection if available
+                if link_id and link_id in kpi_selections_map:
+                    link_dict["kpi_selection"] = kpi_selections_map[link_id]
+                
+                # Add client information
+                if client_id and client_id in clients_map:
+                    link_dict["client_id"] = client_id
+                    link_dict["client_name"] = clients_map[client_id].get("company_name", "Unknown")
+                
+                links.append(link_dict)
+            
+            logger.info(f"Loaded {len(links)} dashboard links across all clients (batch optimized)")
+            return links
+        except Exception as e:
+            logger.error(f"Error listing all dashboard links: {str(e)}")
+            return []
+
     def disable_dashboard_link(self, link_id: int, user_email: Optional[str] = None) -> bool:
         """Disable a dashboard link"""
         try:
@@ -3400,7 +3476,7 @@ class SupabaseService:
             row = result.first()
             
             if row:
-                return {
+                result_dict = {
                     "dashboard_link_id": link_id,
                     "selected_kpis": row.selected_kpis or [],
                     "visible_sections": row.visible_sections or [],
@@ -3408,6 +3484,10 @@ class SupabaseService:
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                     "updated_at": row.updated_at.isoformat() if row.updated_at else None
                 }
+                # Include selected_performance_metrics_kpis if the column exists
+                if hasattr(row, 'selected_performance_metrics_kpis'):
+                    result_dict["selected_performance_metrics_kpis"] = row.selected_performance_metrics_kpis or []
+                return result_dict
             return None
         except Exception as e:
             logger.error(f"Error getting KPI selection for dashboard link {link_id}: {str(e)}")

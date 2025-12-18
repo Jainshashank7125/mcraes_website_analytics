@@ -6090,6 +6090,17 @@ async def track_dashboard_link_open(
 
 
 
+@router.get("/data/dashboard-links")
+@handle_api_errors(context="listing all dashboard links")
+async def list_all_dashboard_links(
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """List all dashboard links across all clients (admin view) - optimized for bulk loading"""
+    supabase = SupabaseService(db=db)
+    links = supabase.list_all_dashboard_links()
+    return {"items": links}
+
 @router.get("/data/clients/{client_id}/dashboard-links")
 @handle_api_errors(context="listing dashboard links for client")
 async def list_dashboard_links_for_client(
