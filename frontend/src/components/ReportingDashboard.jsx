@@ -40,6 +40,8 @@ import {
   List,
   ListItem,
   ListItemText,
+  Tabs,
+  Tab,
 } from "@mui/material";
 import {
   TrendingUp as TrendingUpIcon,
@@ -91,6 +93,7 @@ import KPICard from "./reporting/KPICard";
 import KPIGrid from "./reporting/KPIGrid";
 import PromptsAnalyticsTable from "./reporting/PromptsAnalyticsTable";
 import KeywordsDashboard from "./KeywordsDashboard";
+import ExecutiveSummary from "./reporting/ExecutiveSummary";
 import {
   formatValue,
   getSourceColor,
@@ -110,7 +113,7 @@ import LineChartEnhanced from "./reporting/charts/LineChart";
 import BarChartEnhanced from "./reporting/charts/BarChart";
 import PieChartEnhanced from "./reporting/charts/PieChart";
 
-// Define all KPIs in order: GA4 (9), AgencyAnalytics (8), Scrunch (11)
+// Define all KPIs in order: GA4 (8), AgencyAnalytics (14), Scrunch (5)
 const KPI_ORDER = [
   // GA4 KPIs
   "users",
@@ -121,7 +124,7 @@ const KPI_ORDER = [
   "avg_session_duration",
   "ga4_engagement_rate",
   "conversions",
-  "revenue",
+  // Note: revenue removed from GA4 section
   // AgencyAnalytics KPIs
   // 'impressions', 'clicks', 'ctr', // COMMENTED OUT: Estimated KPIs (not 100% accurate from source)
   "search_volume",
@@ -339,11 +342,9 @@ function ReportingDashboard({
       "ga4",
       "agency_analytics",
       "scrunch_ai",
-      "brand_analytics",
-      "advanced_analytics",
-      "keywords",
+      "all_performance_metrics",
     ])
-  ); // Track expanded accordion sections
+  ); // Track expanded accordion sections - only 4 main sections
   // Initialize with "Last 30 days" as default
   const getDefaultDates = () => {
     const end = new Date();
@@ -404,6 +405,11 @@ function ReportingDashboard({
   const [overviewData, setOverviewData] = useState(null);
   const [loadingOverview, setLoadingOverview] = useState(false);
   const [overviewCacheKey, setOverviewCacheKey] = useState(null); // Track cache key (clientId/brandId + date range)
+  // Executive summary state (structured JSON, persisted per dashboard link)
+  const [executiveSummary, setExecutiveSummary] = useState(null);
+  const [executiveSummaryCacheKey, setExecutiveSummaryCacheKey] = useState(null);
+  // Tab state for public dashboard
+  const [activeTab, setActiveTab] = useState(0); // 0 = Executive Summary, 1 = Detailed Metrics
   const [expandedMetricsSources, setExpandedMetricsSources] = useState(
     new Set()
   ); // Track which metric sources are expanded
@@ -415,14 +421,13 @@ function ReportingDashboard({
   // Public performance metrics KPIs (loaded from database for public view)
   const [publicPerformanceMetricsKPIs, setPublicPerformanceMetricsKPIs] = useState(null);
   // Section visibility state (for authenticated users to configure)
+  // Only 4 main sections: ga4, agency_analytics, scrunch_ai, all_performance_metrics
   const [visibleSections, setVisibleSections] = useState(
     new Set([
       "ga4",
       "agency_analytics",
       "scrunch_ai",
-      "brand_analytics",
-      "advanced_analytics",
-      "keywords",
+      "all_performance_metrics",
     ])
   );
   const [tempVisibleSections, setTempVisibleSections] = useState(
@@ -430,9 +435,7 @@ function ReportingDashboard({
       "ga4",
       "agency_analytics",
       "scrunch_ai",
-      "brand_analytics",
-      "advanced_analytics",
-      "keywords",
+      "all_performance_metrics",
     ])
   ); // For dialog
   // Chart/visualization selections (for each section)
@@ -501,6 +504,39 @@ function ReportingDashboard({
     }
   }, [selectedClientId, isPublic]);
 
+  // Load executive summary from dashboard link (public mode) and generate if missing
+  useEffect(() => {
+    if (isPublic && publicBrandInfo?.dashboard_link) {
+      const dashboardLink = publicBrandInfo.dashboard_link;
+      
+      if (dashboardLink.executive_summary) {
+        // Executive summary exists, load it
+        debugLog("Loading executive summary from dashboard link (public view)", { 
+          linkId: dashboardLink.id 
+        });
+        setExecutiveSummary(dashboardLink.executive_summary);
+        setExecutiveSummaryCacheKey(`link-${dashboardLink.id}`);
+        // Set default tab to Executive Summary for public view
+        setActiveTab(0);
+      } else {
+        // No executive summary found, need to generate it
+        debugLog("No executive summary found in dashboard link (public view), will generate on demand", {
+          linkId: dashboardLink.id
+        });
+        setExecutiveSummary(null);
+        setExecutiveSummaryCacheKey(null);
+        // Default to Executive Summary tab (will show "not available" message initially)
+        setActiveTab(0);
+        
+        // Generate executive summary if dashboard data is available
+        // This will be called when dashboardData is loaded
+        if (dashboardData && dashboardData.kpis && Object.keys(dashboardData.kpis).length > 0) {
+          generateOverviewForPublicLink(dashboardLink.id);
+        }
+      }
+    }
+  }, [isPublic, publicBrandInfo?.dashboard_link, dashboardData]);
+
   // Loading captions for public reporting page
   const loadingCaptions = [
     "Fetching the latest insights...",
@@ -556,218 +592,14 @@ function ReportingDashboard({
     }
   }, [location.state, isPublic, selectedClientId]);
 
-  // Load KPI selections from database when client changes (for authenticated users) - client-centric
-  useEffect(() => {
-    if (selectedClientId && !isPublic) {
-      loadKPISelections();
-    }
-  }, [selectedClientId, isPublic]);
+  // Client-level KPI selection removed - KPIs are now selected per dashboard link
+  // Removed useEffect hooks for loadKPISelections and loadPublicKPISelections
 
-  // Load public KPI selections when in public mode - client-centric
-  useEffect(() => {
-    if ((selectedClientId || (isPublic && publicSlug)) && isPublic) {
-      loadPublicKPISelections();
-    }
-  }, [selectedClientId, isPublic, publicSlug]);
+  // Client-level KPI selection function removed - KPIs are now selected per dashboard link
+  // This function is no longer used as KPI selections come from dashboard links
 
-  const loadKPISelections = async () => {
-    // Use client_id (client-centric approach)
-    const clientIdToUse = selectedClientId;
-    if (!clientIdToUse) return;
-
-    try {
-      const data = await reportingAPI.getKPISelectionsByClient(clientIdToUse);
-      if (data) {
-        // Load KPI selections
-        if (data.selected_kpis && data.selected_kpis.length > 0) {
-          setSelectedKPIs(new Set(data.selected_kpis));
-          setTempSelectedKPIs(new Set(data.selected_kpis));
-        } else {
-          // If no selections saved, default to all available KPIs
-          setSelectedKPIs(new Set(KPI_ORDER));
-          setTempSelectedKPIs(new Set(KPI_ORDER));
-        }
-
-        // Load section visibility
-        if (data.visible_sections && data.visible_sections.length > 0) {
-          setVisibleSections(new Set(data.visible_sections));
-          setTempVisibleSections(new Set(data.visible_sections));
-        } else {
-          // Default to all sections visible
-          const defaultSections = new Set([
-            "ga4",
-            "agency_analytics",
-            "scrunch_ai",
-            "brand_analytics",
-            "advanced_analytics",
-            "keywords",
-          ]);
-          setVisibleSections(defaultSections);
-          setTempVisibleSections(defaultSections);
-        }
-
-        // Load performance metrics KPIs
-        if (data.selected_performance_metrics_kpis && data.selected_performance_metrics_kpis.length > 0) {
-          setSelectedPerformanceMetricsKPIs(new Set(data.selected_performance_metrics_kpis));
-          setTempSelectedPerformanceMetricsKPIs(new Set(data.selected_performance_metrics_kpis));
-        } else {
-          // If no selections saved, default to all available KPIs
-          setSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
-          setTempSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
-        }
-
-        // Load chart selections
-        if (data.selected_charts && data.selected_charts.length > 0) {
-          setSelectedCharts(new Set(data.selected_charts));
-          setTempSelectedCharts(new Set(data.selected_charts));
-        } else {
-          // If no chart selections saved, default to all charts
-          const allCharts = new Set();
-          const sectionsToUse =
-            data.visible_sections && data.visible_sections.length > 0
-              ? data.visible_sections
-              : [
-                  "ga4",
-                  "agency_analytics",
-                  "scrunch_ai",
-                  "brand_analytics",
-                  "advanced_analytics",
-                  "keywords",
-                ];
-          sectionsToUse.forEach((sectionKey) => {
-            getDashboardSectionCharts(sectionKey).forEach((chart) => {
-              allCharts.add(chart.key);
-            });
-          });
-          setSelectedCharts(allCharts);
-          setTempSelectedCharts(allCharts);
-        }
-      }
-    } catch (err) {
-      debugError("Error loading KPI selections:", err);
-      // Fallback to all KPIs and sections on error
-      setSelectedKPIs(new Set(KPI_ORDER));
-      setTempSelectedKPIs(new Set(KPI_ORDER));
-      const defaultSections = new Set([
-        "ga4",
-        "agency_analytics",
-        "scrunch_ai",
-        "brand_analytics",
-        "advanced_analytics",
-        "keywords",
-      ]);
-      setVisibleSections(defaultSections);
-      setTempVisibleSections(defaultSections);
-      const allCharts = new Set();
-      defaultSections.forEach((sectionKey) => {
-        getDashboardSectionCharts(sectionKey).forEach((chart) => {
-          allCharts.add(chart.key);
-        });
-      });
-      setSelectedCharts(allCharts);
-      setTempSelectedCharts(allCharts);
-    }
-  };
-
-  const loadPublicKPISelections = async () => {
-    // Use client_id from slug (client-centric approach)
-    let clientIdToUse = selectedClientId;
-
-    // If no selectedClientId but we have a publicSlug, try to get client_id from slug
-    if (!clientIdToUse && isPublic && publicSlug) {
-      try {
-        const client = await clientAPI.getClientBySlug(publicSlug);
-        if (client && client.id) {
-          clientIdToUse = client.id;
-        }
-      } catch (err) {
-        debugError("Error fetching client by slug for KPI selections:", err);
-        return; // Can't load without client_id
-      }
-    }
-
-    if (!clientIdToUse) return;
-
-    try {
-      const data = await reportingAPI.getKPISelectionsByClient(clientIdToUse);
-      debugLog("Loaded public KPI selections:", data);
-      if (data) {
-        // Check if a selection was explicitly saved (updated_at exists means record exists in DB)
-        const hasExplicitSelection =
-          data.updated_at !== null && data.updated_at !== undefined;
-
-        // Load public KPI selections
-        if (hasExplicitSelection) {
-          // Selection was explicitly saved - use it (even if empty array means "show no KPIs")
-          if (data.selected_kpis && data.selected_kpis.length > 0) {
-            setPublicKPISelections(new Set(data.selected_kpis));
-          } else {
-            // Empty array with updated_at means admin explicitly deselected all KPIs
-            setPublicKPISelections(new Set([]));
-          }
-        } else {
-          // No selection saved yet - show all available KPIs (default behavior)
-          setPublicKPISelections(null);
-        }
-
-        // Load public section visibility
-        if (hasExplicitSelection) {
-          // Selection was explicitly saved - use it (even if empty array means "show no sections")
-          if (data.visible_sections && data.visible_sections.length > 0) {
-            const sectionsSet = new Set(data.visible_sections);
-            debugLog("Setting publicVisibleSections:", Array.from(sectionsSet));
-            setPublicVisibleSections(sectionsSet);
-          } else {
-            // Empty array with updated_at means admin explicitly deselected all sections
-            debugLog(
-              "Empty visible_sections with updated_at, setting to empty Set (show no sections)"
-            );
-            setPublicVisibleSections(new Set([]));
-          }
-        } else {
-          // No selection saved yet - show all sections (default behavior)
-          debugLog(
-            "No visible_sections saved (updated_at is null), setting to null (show all)"
-          );
-          setPublicVisibleSections(null);
-        }
-
-        // Load public performance metrics KPIs
-        if (hasExplicitSelection) {
-          // Selection was explicitly saved - use it (even if empty array means "show no KPIs")
-          if (data.selected_performance_metrics_kpis && data.selected_performance_metrics_kpis.length > 0) {
-            setPublicPerformanceMetricsKPIs(new Set(data.selected_performance_metrics_kpis));
-          } else {
-            // Empty array with updated_at means admin explicitly deselected all KPIs
-            setPublicPerformanceMetricsKPIs(new Set([]));
-          }
-        } else {
-          // No selection saved yet - show all available KPIs (default behavior)
-          setPublicPerformanceMetricsKPIs(null);
-        }
-
-        // Load public chart selections
-        if (hasExplicitSelection) {
-          // Selection was explicitly saved - use it (even if empty array means "show no charts")
-          if (data.selected_charts && data.selected_charts.length > 0) {
-            setPublicSelectedCharts(new Set(data.selected_charts));
-          } else {
-            // Empty array with updated_at means admin explicitly deselected all charts
-            setPublicSelectedCharts(new Set([]));
-          }
-        } else {
-          // No selection saved yet - show all charts (default behavior)
-          setPublicSelectedCharts(null);
-        }
-      }
-    } catch (err) {
-      debugError("Error loading public KPI selections:", err);
-      // On error, show all KPIs, sections, and charts (default behavior)
-      setPublicKPISelections(null);
-      setPublicVisibleSections(null);
-      setPublicSelectedCharts(null);
-    }
-  };
+  // Client-level public KPI selection function removed - KPIs are now selected per dashboard link
+  // This function is no longer used as KPI selections come from dashboard links
 
   // Comprehensive data loading function - loads all dashboard data including KPI selections
   const loadAllData = async (overrideRange = null) => {
@@ -789,7 +621,7 @@ function ReportingDashboard({
         loadScrunchData(overrideRange),
         // Load brand analytics for both public and authenticated views (needed for brand_analytics section)
         loadBrandAnalytics(overrideRange),
-        !isPublic ? loadKPISelections() : loadPublicKPISelections(),
+        // Client-level KPI selection removed - KPIs are now loaded from dashboard links
       ]);
     } finally {
       // Clear loading state for public mode
@@ -1006,8 +838,154 @@ function ReportingDashboard({
     }
   }, [selectedClientId, clients]);
 
+  // Auto-save executive summary to matching dashboard link
+  const saveExecutiveSummaryToMatchingLink = async (summary) => {
+    if (!selectedClientId || !startDate || !endDate || !dashboardLinks || dashboardLinks.length === 0) {
+      debugLog("Cannot auto-save executive summary - missing requirements", {
+        hasClientId: !!selectedClientId,
+        hasStartDate: !!startDate,
+        hasEndDate: !!endDate,
+        hasLinks: !!dashboardLinks,
+        linksCount: dashboardLinks?.length || 0
+      });
+      return;
+    }
 
-  // Generate overview automatically when KPIs are loaded
+    try {
+      // Find matching dashboard link by date range
+      const matchingLink = dashboardLinks.find(link => {
+        const linkStart = link.start_date ? new Date(link.start_date).toISOString().split('T')[0] : null;
+        const linkEnd = link.end_date ? new Date(link.end_date).toISOString().split('T')[0] : null;
+        return linkStart === startDate && linkEnd === endDate;
+      });
+
+      if (matchingLink && matchingLink.id) {
+        debugLog("Auto-saving executive summary to matching dashboard link", { 
+          linkId: matchingLink.id,
+          slug: matchingLink.slug,
+          startDate,
+          endDate
+        });
+        
+        await clientAPI.updateDashboardLink(selectedClientId, matchingLink.id, {
+          executive_summary: summary
+        });
+        
+        // Update the link in local state
+        const updatedLinks = dashboardLinks.map(link => 
+          link.id === matchingLink.id 
+            ? { ...link, executive_summary: summary }
+            : link
+        );
+        setDashboardLinks(updatedLinks);
+        
+        debugLog("Executive summary saved to dashboard link successfully", { 
+          linkId: matchingLink.id,
+          slug: matchingLink.slug
+        });
+      } else {
+        debugLog("No matching dashboard link found for auto-save", { 
+          startDate, 
+          endDate,
+          availableLinks: dashboardLinks.map(l => ({
+            id: l.id,
+            slug: l.slug,
+            start: l.start_date,
+            end: l.end_date
+          }))
+        });
+      }
+    } catch (err) {
+      debugError("Error auto-saving executive summary to dashboard link:", err);
+      // Don't throw - this is a convenience feature, not critical
+    }
+  };
+
+  // Generate overview for public dashboard link and save it
+  const generateOverviewForPublicLink = async (linkId) => {
+    if (!dashboardData || !dashboardData.kpis || Object.keys(dashboardData.kpis).length === 0) {
+      return;
+    }
+
+    // Check if we already have executive summary for this link
+    if (executiveSummary && executiveSummaryCacheKey === `link-${linkId}`) {
+      debugLog("Executive summary already loaded for this link", { linkId });
+      return;
+    }
+
+    // Don't fetch if already loading
+    if (loadingOverview) {
+      return;
+    }
+
+    // Set loading state
+    setLoadingOverview(true);
+
+    try {
+      // Get client_id or brand_id from publicBrandInfo
+      const clientId = publicBrandInfo?.clientData?.id || publicBrandInfo?.dashboard_link?.client_id;
+      const brandId = publicBrandInfo?.scrunch_brand_id || publicBrandInfo?.id;
+      
+      // Use dates ONLY from the dashboard link, not from URL params or state
+      const linkStartDate = publicBrandInfo?.dashboard_link?.start_date;
+      const linkEndDate = publicBrandInfo?.dashboard_link?.end_date;
+      
+      debugLog("Generating executive summary for public dashboard link", { 
+        linkId, 
+        clientId, 
+        brandId,
+        startDate: linkStartDate,
+        endDate: linkEndDate
+      });
+      
+      const overview = await openaiAPI.getOverallOverview(
+        clientId || undefined,
+        brandId || undefined,
+        linkStartDate || undefined,
+        linkEndDate || undefined
+      );
+      
+      if (overview.executive_summary) {
+        // Store executive summary in state
+        setExecutiveSummary(overview.executive_summary);
+        setExecutiveSummaryCacheKey(`link-${linkId}`);
+        
+        // Also set overviewData for consistency
+        setOverviewData(overview);
+        setOverviewCacheKey(`link-${linkId}`);
+        
+        // Try to save the executive summary to the dashboard link
+        // Note: This requires authentication, so it will fail in public view
+        // In that case, the summary will still be displayed for this session but not persisted
+        // The summary should ideally be generated and saved by admins, not on-the-fly in public view
+        // For now, we'll attempt to save but gracefully handle the failure
+        if (clientId && linkId) {
+          try {
+            await clientAPI.updateDashboardLink(clientId, linkId, {
+              executive_summary: overview.executive_summary
+            });
+            debugLog("Executive summary saved to dashboard link", { linkId });
+          } catch (saveErr) {
+            // This is expected in public view - summary is displayed but not persisted
+            // Admins should generate and save summaries when creating/updating links
+            debugLog("Could not save executive summary to dashboard link (authentication required). Summary is displayed for this session only.", { 
+              linkId,
+              error: saveErr.message 
+            });
+          }
+        } else {
+          debugLog("Cannot save executive summary - missing clientId or linkId", { clientId, linkId });
+        }
+      }
+    } catch (err) {
+      debugError("Error generating overview for public link:", err);
+      // Don't set error here - just log it, user will see "not available" message
+    } finally {
+      setLoadingOverview(false);
+    }
+  };
+
+  // Generate overview automatically when KPIs are loaded (admin view only)
   const generateOverviewAutomatically = async (kpiData = null) => {
     // Use provided data or current dashboardData
     const dataToUse = kpiData || dashboardData;
@@ -1047,6 +1025,17 @@ function ReportingDashboard({
       setOverviewData(overview);
       setOverviewCacheKey(cacheKey);
       setExpandedMetricsSources(new Set()); // Reset expanded state when new overview is loaded
+      
+      // Store executive summary from response (structured JSON)
+      if (overview.executive_summary) {
+        setExecutiveSummary(overview.executive_summary);
+        setExecutiveSummaryCacheKey(cacheKey);
+        
+        // Auto-save executive summary to matching dashboard link (admin view only)
+        if (!isPublic && selectedClientId && startDate && endDate && dashboardLinks && dashboardLinks.length > 0) {
+          saveExecutiveSummaryToMatchingLink(overview.executive_summary);
+        }
+      }
     } catch (err) {
       debugError("Error generating overview:", err);
       // Don't set error here - just log it, user can retry by clicking button
@@ -1057,7 +1046,7 @@ function ReportingDashboard({
     }
   };
 
-  const handleOpenOverview = () => {
+  const handleOpenOverview = async () => {
     if (
       !dashboardData ||
       !dashboardData.kpis ||
@@ -1074,8 +1063,74 @@ function ReportingDashboard({
       selectedClientId || selectedBrandId
     }-${startDate}-${endDate}`;
 
+    // First, check if executive summary exists in the currently editing dashboard link (admin view)
+    if (!isPublic && editingLink && editingLink.executive_summary) {
+      debugLog("Loading executive summary from editing dashboard link", { linkId: editingLink.id });
+      setExecutiveSummary(editingLink.executive_summary);
+      setExecutiveSummaryCacheKey(`link-${editingLink.id}`);
+      // Also set overviewData for backward compatibility with dialog
+      setOverviewData({
+        executive_summary: editingLink.executive_summary,
+        date_range: { start_date: startDate, end_date: endDate },
+        total_metrics_analyzed: dashboardData.kpis ? Object.keys(dashboardData.kpis).length : 0,
+        metrics_by_source: {
+          GA4: Object.values(dashboardData.kpis || {}).filter(k => k.source === "GA4").length,
+          AgencyAnalytics: Object.values(dashboardData.kpis || {}).filter(k => k.source === "AgencyAnalytics").length,
+          Scrunch: Object.values(dashboardData.kpis || {}).filter(k => k.source === "Scrunch").length,
+        }
+      });
+      setOverviewCacheKey(cacheKey);
+      setShowOverviewDialog(true);
+      return;
+    }
+
+    // Check if there's a dashboard link with matching date range that has executive summary (admin view)
+    if (!isPublic && dashboardLinks && dashboardLinks.length > 0 && startDate && endDate) {
+      const matchingLink = dashboardLinks.find(link => {
+        const linkStart = link.start_date ? new Date(link.start_date).toISOString().split('T')[0] : null;
+        const linkEnd = link.end_date ? new Date(link.end_date).toISOString().split('T')[0] : null;
+        return linkStart === startDate && linkEnd === endDate && link.executive_summary;
+      });
+      
+      if (matchingLink && matchingLink.executive_summary) {
+        debugLog("Loading executive summary from matching dashboard link by date range", { 
+          linkId: matchingLink.id,
+          startDate: startDate,
+          endDate: endDate
+        });
+        setExecutiveSummary(matchingLink.executive_summary);
+        setExecutiveSummaryCacheKey(`link-${matchingLink.id}`);
+        // Also set overviewData for backward compatibility with dialog
+        setOverviewData({
+          executive_summary: matchingLink.executive_summary,
+          date_range: { start_date: startDate, end_date: endDate },
+          total_metrics_analyzed: dashboardData.kpis ? Object.keys(dashboardData.kpis).length : 0,
+          metrics_by_source: {
+            GA4: Object.values(dashboardData.kpis || {}).filter(k => k.source === "GA4").length,
+            AgencyAnalytics: Object.values(dashboardData.kpis || {}).filter(k => k.source === "AgencyAnalytics").length,
+            Scrunch: Object.values(dashboardData.kpis || {}).filter(k => k.source === "Scrunch").length,
+          }
+        });
+        setOverviewCacheKey(cacheKey);
+        setShowOverviewDialog(true);
+        return;
+      }
+    }
+
+    // Check if we already have executive summary in state that matches cache key
+    if (executiveSummary && executiveSummaryCacheKey === cacheKey) {
+      debugLog("Using cached executive summary from state");
+      setShowOverviewDialog(true);
+      return;
+    }
+
     // If overview data exists and matches current cache key, just show dialog
     if (overviewData && overviewCacheKey === cacheKey) {
+      // Ensure executiveSummary state is set if overviewData has it
+      if (overviewData.executive_summary && !executiveSummary) {
+        setExecutiveSummary(overviewData.executive_summary);
+        setExecutiveSummaryCacheKey(cacheKey);
+      }
       setShowOverviewDialog(true);
       return;
     }
@@ -1086,7 +1141,8 @@ function ReportingDashboard({
       return;
     }
 
-    // If no overview data or cache key doesn't match, fetch it
+    // If no executive summary found, fetch it from API
+    debugLog("No executive summary found in dashboard link, calling API to generate");
     setShowOverviewDialog(true);
     generateOverviewAutomatically();
   };
@@ -1166,8 +1222,9 @@ function ReportingDashboard({
           }
         }
 
-        // Auto-generate overview when KPIs are available
-        if (data.kpis && Object.keys(data.kpis).length > 0) {
+        // Auto-generate overview when KPIs are available (only in admin view)
+        // In public view, we check dashboard link first and only call API if summary doesn't exist
+        if (data.kpis && Object.keys(data.kpis).length > 0 && !isPublic) {
           // Call with a slight delay to ensure state is updated
           setTimeout(() => {
             generateOverviewAutomatically(data);
@@ -1546,32 +1603,33 @@ function ReportingDashboard({
   };
 
   // Helper function to get KPIs displayed in each dashboard section
+  // Only 4 main sections: ga4, agency_analytics (keywords), scrunch_ai, all_performance_metrics
   const getDashboardSectionKPIs = (sectionKey) => {
     switch (sectionKey) {
       case "ga4":
-        // GA4 section shows GA4 KPIs
+        // GA4 section shows GA4 KPIs (Website Analytics)
         return KPI_ORDER.filter((key) => {
           const metadata = KPI_METADATA[key];
           return metadata && metadata.source === "GA4";
         });
       case "agency_analytics":
-        // Agency Analytics section shows AgencyAnalytics KPIs
-        // Note: These are displayed as charts within GA4 section, but tracked separately
+      case "keywords":
+        // Agency Analytics/Keywords section shows AgencyAnalytics KPIs (Organic Visibility)
+        // Both use the same KPIs - keywords is just the display name
         return KPI_ORDER.filter((key) => {
           const metadata = KPI_METADATA[key];
           return metadata && metadata.source === "AgencyAnalytics";
         });
       case "scrunch_ai":
-        // Scrunch AI section shows Scrunch KPIs
+        // Scrunch AI section shows Scrunch KPIs (AI Visibility)
+        // Includes brand_analytics and advanced_analytics as sub-sections
         return KPI_ORDER.filter((key) => {
           const metadata = KPI_METADATA[key];
           return metadata && metadata.source === "Scrunch";
         });
       case "brand_analytics":
-        // Brand Analytics section doesn't show individual KPIs, just charts
-        return [];
       case "advanced_analytics":
-        // Advanced Analytics Query section doesn't show individual KPIs
+        // These are now sub-sections under scrunch_ai, no separate KPIs
         return [];
       default:
         return [];
@@ -1579,6 +1637,7 @@ function ReportingDashboard({
   };
 
   // Helper function to get charts/visualizations for each dashboard section
+  // Only 4 main sections: ga4, agency_analytics (keywords), scrunch_ai, all_performance_metrics
   const getDashboardSectionCharts = (sectionKey) => {
     switch (sectionKey) {
       case "ga4":
@@ -1615,44 +1674,14 @@ function ReportingDashboard({
           },
         ];
       case "agency_analytics":
+      case "keywords":
+        // Agency Analytics/Keywords section - both use same charts
         return [
           {
             key: "all_keywords_ranking",
             label: "Top Keywords Ranking",
             description: "SEO keyword rankings",
           },
-        ];
-      case "scrunch_ai":
-        return [
-          {
-            key: "top_performing_prompts",
-            label: "Top Performing Prompts",
-            description: "Best performing AI prompts",
-          },
-          {
-            key: "scrunch_ai_insights",
-            label: "Scrunch AI Insights",
-            description: "AI-generated insights and recommendations",
-          },
-        ];
-      case "brand_analytics":
-        return [
-          {
-            key: "brand_analytics_charts",
-            label: "Brand Analytics Charts",
-            description: "Platform distribution, funnel stages, and sentiment",
-          },
-        ];
-      case "advanced_analytics":
-        return [
-          {
-            key: "scrunch_visualizations",
-            label: "Advanced Query Visualizations",
-            description: "Query API-based visualizations",
-          },
-        ];
-      case "keywords":
-        return [
           {
             key: "keyword_rankings_chart",
             label: "Rankings Distribution",
@@ -1664,6 +1693,34 @@ function ReportingDashboard({
             description: "Detailed keyword performance table",
           },
         ];
+      case "scrunch_ai":
+        // Scrunch AI section - includes brand_analytics and advanced_analytics as sub-sections
+        return [
+          {
+            key: "top_performing_prompts",
+            label: "Top Performing Prompts",
+            description: "Best performing AI prompts",
+          },
+          {
+            key: "scrunch_ai_insights",
+            label: "Scrunch AI Insights",
+            description: "AI-generated insights and recommendations",
+          },
+          {
+            key: "brand_analytics_charts",
+            label: "Brand Analytics Charts",
+            description: "Platform distribution, funnel stages, and sentiment",
+          },
+          {
+            key: "scrunch_visualizations",
+            label: "Advanced Query Visualizations",
+            description: "Query API-based visualizations",
+          },
+        ];
+      case "brand_analytics":
+      case "advanced_analytics":
+        // These are now sub-sections under scrunch_ai, handled via scrunch_ai charts
+        return [];
       default:
         return [];
     }
@@ -1791,8 +1848,7 @@ function ReportingDashboard({
         "ga4",
         "agency_analytics",
         "scrunch_ai",
-        "brand_analytics",
-        "advanced_analytics",
+        "all_performance_metrics",
       ])
     );
     setShowKPISelector(true);
@@ -1815,6 +1871,9 @@ function ReportingDashboard({
 
   const handleCreateLink = () => {
     setEditingLink(null);
+    // Clear executive summary when creating a new link (will be generated/saved when link is created)
+    setExecutiveSummary(null);
+    setExecutiveSummaryCacheKey(null);
     // Use current date range from dashboard (startDate and endDate are already strings)
     setLinkFormData({
       name: '',
@@ -1828,8 +1887,91 @@ function ReportingDashboard({
     setLinkDialogOpen(true);
   };
 
+  // Reset KPI selections to default (all selected) and clear dropdown selection
+  const handleResetKPISelections = () => {
+    debugLog("Resetting KPI selections to default (all selected)");
+    
+    // Reset to all KPIs selected
+    setSelectedKPIs(new Set(KPI_ORDER));
+    setTempSelectedKPIs(new Set(KPI_ORDER));
+    setSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
+    setTempSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
+    
+    // Reset to all sections visible
+    setVisibleSections(new Set(["ga4", "agency_analytics", "scrunch_ai", "all_performance_metrics"]));
+    
+    // Clear charts selection
+    setSelectedCharts(new Set());
+    
+    // Clear executive summary
+    setExecutiveSummary(null);
+    setExecutiveSummaryCacheKey(null);
+    
+    // Clear dropdown selection
+    setEditingLink(null);
+    setLinkFormData({
+      name: '',
+      description: '',
+      start_date: startDate || '',
+      end_date: endDate || '',
+      enabled: true,
+      expires_at: '',
+      slug: ''
+    });
+    
+    // Close dialog if open
+    setLinkDialogOpen(false);
+    
+    debugLog("KPI selections reset to default");
+  };
+
   const handleEditLink = (link) => {
     setEditingLink(link);
+    
+    // Load executive summary from the link if it exists
+    if (link.executive_summary) {
+      debugLog("Loading executive summary from dashboard link for editing", { linkId: link.id });
+      setExecutiveSummary(link.executive_summary);
+      setExecutiveSummaryCacheKey(`link-${link.id}`);
+    } else {
+      // Clear executive summary if link doesn't have one
+      debugLog("No executive summary in dashboard link, will generate on demand", { linkId: link.id });
+      setExecutiveSummary(null);
+      setExecutiveSummaryCacheKey(null);
+    }
+    
+    // Load KPI selections from the link and override current selections
+    if (link.kpi_selection) {
+      debugLog("Loading KPI selections from dashboard link", { 
+        linkId: link.id,
+        selectedKPIs: link.kpi_selection.selected_kpis,
+        visibleSections: link.kpi_selection.visible_sections,
+        selectedCharts: link.kpi_selection.selected_charts,
+        selectedPerformanceMetricsKPIs: link.kpi_selection.selected_performance_metrics_kpis
+      });
+      
+      // Override current KPI selections with link's selections
+      if (link.kpi_selection.selected_kpis && Array.isArray(link.kpi_selection.selected_kpis)) {
+        setSelectedKPIs(new Set(link.kpi_selection.selected_kpis));
+        setTempSelectedKPIs(new Set(link.kpi_selection.selected_kpis));
+      }
+      
+      if (link.kpi_selection.selected_performance_metrics_kpis && Array.isArray(link.kpi_selection.selected_performance_metrics_kpis)) {
+        setSelectedPerformanceMetricsKPIs(new Set(link.kpi_selection.selected_performance_metrics_kpis));
+        setTempSelectedPerformanceMetricsKPIs(new Set(link.kpi_selection.selected_performance_metrics_kpis));
+      }
+      
+      if (link.kpi_selection.visible_sections && Array.isArray(link.kpi_selection.visible_sections)) {
+        setVisibleSections(new Set(link.kpi_selection.visible_sections));
+      }
+      
+      if (link.kpi_selection.selected_charts && Array.isArray(link.kpi_selection.selected_charts)) {
+        setSelectedCharts(new Set(link.kpi_selection.selected_charts));
+      }
+    } else {
+      debugLog("No KPI selections found in dashboard link, keeping current selections", { linkId: link.id });
+    }
+    
     // Format expires_at for datetime-local input (YYYY-MM-DDTHH:mm)
     let expiresAtFormatted = '';
     if (link.expires_at) {
@@ -1863,7 +2005,18 @@ function ReportingDashboard({
       expires_at: expiresAtFormatted,
       slug: link.slug || ''
     });
-    setLinkDialogOpen(true);
+    // Don't open dialog automatically - user will click "Edit Link" button to open it
+  };
+
+  // Open edit dialog for currently selected link
+  const handleOpenEditDialog = () => {
+    if (editingLink) {
+      // Dialog form data is already set when link was selected
+      setLinkDialogOpen(true);
+    } else {
+      // No link selected, create new one
+      handleCreateLink();
+    }
   };
 
   const handleSaveLink = async () => {
@@ -1894,6 +2047,24 @@ function ReportingDashboard({
       payload.visible_sections = Array.from(visibleSections);
       payload.selected_charts = Array.from(selectedCharts);
       
+      // Include executive summary if available (from local state or overviewData)
+      // Check both executiveSummary state and overviewData.executive_summary
+      const summaryToSave = executiveSummary || overviewData?.executive_summary;
+      if (summaryToSave) {
+        payload.executive_summary = summaryToSave;
+        debugLog("Including executive summary in save payload", {
+          hasExecutiveSummary: !!executiveSummary,
+          hasOverviewData: !!overviewData?.executive_summary,
+          linkId: editingLink?.id
+        });
+      } else {
+        debugLog("No executive summary available to save", {
+          hasExecutiveSummary: !!executiveSummary,
+          hasOverviewData: !!overviewData?.executive_summary,
+          linkId: editingLink?.id
+        });
+      }
+      
       if (editingLink) {
         // Update existing link
         await clientAPI.updateDashboardLink(selectedClientId, editingLink.id, payload);
@@ -1912,6 +2083,8 @@ function ReportingDashboard({
       if (!editingLink) {
         setEditingLink(null);
       }
+      // Note: editingLink is kept for updates so user can continue editing if needed
+      // The dropdown will show the selected link, and clicking "Edit Link" will reopen the dialog
     } catch (err) {
       debugError("Error saving dashboard link:", err);
       setError(err.response?.data?.detail || err.message || "Failed to save dashboard link");
@@ -2002,6 +2175,11 @@ function ReportingDashboard({
 
   // Helper function to check if a section should be visible
   const isSectionVisible = (sectionKey) => {
+    // brand_analytics and advanced_analytics are now sub-sections under scrunch_ai
+    if (sectionKey === "brand_analytics" || sectionKey === "advanced_analytics") {
+      return isSectionVisible("scrunch_ai");
+    }
+    
     if (isPublic) {
       // In public mode, use publicVisibleSections
       if (publicVisibleSections === null) {
@@ -2020,10 +2198,10 @@ function ReportingDashboard({
   // Helper function to check if a chart should be visible in public view
   const isChartVisible = (chartKey) => {
     if (!isPublic) {
-      // In authenticated mode, always show charts (managers can see everything)
-      return true;
+      // In authenticated mode, check selectedCharts state
+      return selectedCharts.has(chartKey);
     }
-    // In public mode, check publicSelectedCharts
+    // In public mode, check publicSelectedCharts from dashboard link
     if (publicSelectedCharts === null) {
       return true; // Show all charts if no selections saved (default behavior)
     }
@@ -2033,13 +2211,14 @@ function ReportingDashboard({
     return publicSelectedCharts.has(chartKey); // Check if this specific chart is selected
   };
 
-  // Helper function to check if KPIs for a section should be shown in public view
+  // Helper function to check if KPIs for a section should be shown
   const shouldShowSectionKPIs = (sectionKey) => {
     if (!isPublic) {
-      // In authenticated mode, always show KPIs
-      return true;
+      // In authenticated mode, check if any KPIs for this section are selected in local state
+      const sectionKPIs = getDashboardSectionKPIs(sectionKey);
+      return sectionKPIs.some((kpiKey) => selectedKPIs.has(kpiKey));
     }
-    // In public mode, check if any KPIs for this section are selected
+    // In public mode, check if any KPIs for this section are selected from dashboard link
     if (publicKPISelections === null) {
       return true; // Show all KPIs if no selections saved (default behavior)
     }
@@ -2051,13 +2230,14 @@ function ReportingDashboard({
     return sectionKPIs.some((kpiKey) => publicKPISelections.has(kpiKey));
   };
 
-  // Helper function to check if charts for a section should be shown in public view
+  // Helper function to check if charts for a section should be shown
   const shouldShowSectionCharts = (sectionKey) => {
     if (!isPublic) {
-      // In authenticated mode, always show charts
-      return true;
+      // In authenticated mode, check if any charts for this section are selected in local state
+      const sectionCharts = getDashboardSectionCharts(sectionKey);
+      return sectionCharts.some((chart) => selectedCharts.has(chart.key));
     }
-    // In public mode, check if any charts for this section are selected
+    // In public mode, check if any charts for this section are selected from dashboard link
     if (publicSelectedCharts === null) {
       return true; // Show all charts if no selections saved (default behavior)
     }
@@ -2116,9 +2296,7 @@ function ReportingDashboard({
       "ga4",
       "agency_analytics",
       "scrunch_ai",
-      "brand_analytics",
-      "advanced_analytics",
-      "keywords",
+      "all_performance_metrics",
     ]);
     const allKPIs = new Set(KPI_ORDER);
     const allCharts = new Set();
@@ -2282,34 +2460,37 @@ function ReportingDashboard({
 
           {/* Buttons - Right side */}
           <Box display="flex" gap={1.5} sx={{ flexShrink: 0 }}>
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<InsightsIcon sx={{ fontSize: 16 }} />}
-              onClick={handleOpenOverview}
-              disabled={
-                !dashboardData ||
-                !dashboardData.kpis ||
-                Object.keys(dashboardData.kpis).length === 0
-              }
-              sx={{
-                borderRadius: 2,
-                px: 2,
-                py: 0.75,
-                fontWeight: 600,
-                textTransform: "none",
-                bgcolor: theme.palette.primary.main,
-                "&:hover": {
-                  bgcolor: theme.palette.primary.dark,
-                },
-                "&:disabled": {
-                  bgcolor: alpha(theme.palette.primary.main, 0.3),
-                },
-              }}
-              title="AI Overview of all metrics"
-            >
-              AI Overview
-            </Button>
+            {/* AI Overview button - only show in admin view */}
+            {!isPublic && (
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<InsightsIcon sx={{ fontSize: 16 }} />}
+                onClick={handleOpenOverview}
+                disabled={
+                  !dashboardData ||
+                  !dashboardData.kpis ||
+                  Object.keys(dashboardData.kpis).length === 0
+                }
+                sx={{
+                  borderRadius: 2,
+                  px: 2,
+                  py: 0.75,
+                  fontWeight: 600,
+                  textTransform: "none",
+                  bgcolor: theme.palette.primary.main,
+                  "&:hover": {
+                    bgcolor: theme.palette.primary.dark,
+                  },
+                  "&:disabled": {
+                    bgcolor: alpha(theme.palette.primary.main, 0.3),
+                  },
+                }}
+                title="AI Overview of all metrics"
+              >
+                AI Overview
+              </Button>
+            )}
             {!isPublic && (
               <IconButton
                 onClick={handleOpenKPISelector}
@@ -2326,21 +2507,24 @@ function ReportingDashboard({
                 <SettingsIcon sx={{ fontSize: 20 }} />
               </IconButton>
             )}
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<RefreshIcon sx={{ fontSize: 16 }} />}
-              onClick={loadAllData}
-              sx={{
-                borderRadius: 2,
-                px: 2,
-                py: 0.75,
-                fontWeight: 600,
-                bgcolor: "background.paper",
-              }}
-            >
-              Refresh
-            </Button>
+            {/* Refresh button - only show in admin view */}
+            {!isPublic && (
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<RefreshIcon sx={{ fontSize: 16 }} />}
+                onClick={loadAllData}
+                sx={{
+                  borderRadius: 2,
+                  px: 2,
+                  py: 0.75,
+                  fontWeight: 600,
+                  bgcolor: "background.paper",
+                }}
+              >
+                Refresh
+              </Button>
+            )}
           </Box>
         </Box>
 
@@ -2468,7 +2652,7 @@ function ReportingDashboard({
                             // Create new link
                             handleCreateLink();
                           } else if (linkId) {
-                            // Edit existing link
+                            // Edit existing link - automatically open dialog
                             const selectedLink = dashboardLinks.find(link => link.id === linkId);
                             if (selectedLink) {
                               handleEditLink(selectedLink);
@@ -2485,6 +2669,8 @@ function ReportingDashboard({
                               expires_at: '',
                               slug: ''
                             });
+                            // Close dialog if open
+                            setLinkDialogOpen(false);
                           }
                         }}
                         sx={{ textTransform: 'none' }}
@@ -2520,17 +2706,25 @@ function ReportingDashboard({
                         ))}
                       </Select>
                     </FormControl>
-                    {editingLink && (
-                      <Button
-                        variant="outlined"
-                        size="small"
-                        onClick={handleCreateLink}
-                        startIcon={<LinkIcon />}
-                        sx={{ textTransform: "none" }}
-                      >
-                        Create New
-                      </Button>
-                    )}
+                    <Button
+                      variant={editingLink ? "contained" : "outlined"}
+                      size="small"
+                      onClick={handleOpenEditDialog}
+                      startIcon={<LinkIcon />}
+                      sx={{ textTransform: "none" }}
+                    >
+                      {editingLink ? 'Edit Link' : 'Create Link'}
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={handleResetKPISelections}
+                      startIcon={<RefreshIcon />}
+                      sx={{ textTransform: "none" }}
+                      title="Reset KPI selections to default (all selected) and clear link selection"
+                    >
+                      Reset
+                    </Button>
                   </Box>
                 )}
               </Box>
@@ -2562,8 +2756,8 @@ function ReportingDashboard({
         </Alert>
       )}
 
-      {/* Diagnostic Information */}
-      {dashboardData?.diagnostics && !dashboardData?.no_data && (
+      {/* Diagnostic Information - Only show in admin view */}
+      {!isPublic && dashboardData?.diagnostics && !dashboardData?.no_data && (
         <Box mb={3}>
           {(!dashboardData.diagnostics.ga4_configured ||
             !dashboardData.diagnostics.agency_analytics_configured) && (
@@ -2619,6 +2813,26 @@ function ReportingDashboard({
         </Box>
       )}
 
+      {/* Tab Navigation - Always show in public view */}
+      {isPublic && (
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3, px: 3 }}>
+          <Tabs 
+            value={activeTab} 
+            onChange={(e, newValue) => setActiveTab(newValue)}
+            sx={{
+              '& .MuiTab-root': {
+                textTransform: 'none',
+                fontWeight: 600,
+                minHeight: 48,
+              }
+            }}
+          >
+            <Tab label="Executive Summary" />
+            <Tab label="Detailed Metrics" />
+          </Tabs>
+        </Box>
+      )}
+
       {loading ? (
         <Box
           display="flex"
@@ -2630,7 +2844,28 @@ function ReportingDashboard({
         </Box>
       ) : dashboardData && !dashboardData.no_data ? (
         <>
-          {/* Google Analytics 4 Section */}
+          {/* Executive Summary Tab Content - Show in public view when tab 0 is active */}
+          {isPublic && activeTab === 0 && (
+            <Box sx={{ px: 3 }}>
+              {executiveSummary ? (
+                <ExecutiveSummary summary={executiveSummary} theme={theme} />
+              ) : (
+                <Alert severity="info" sx={{ borderRadius: 2 }}>
+                  <Typography variant="h6" gutterBottom>
+                    Executive Summary Not Available
+                  </Typography>
+                  <Typography variant="body2">
+                    The executive summary for this reporting period is not yet available. Please check the Detailed Metrics tab for current performance data.
+                  </Typography>
+                </Alert>
+              )}
+            </Box>
+          )}
+          
+          {/* Detailed Metrics Tab Content - Show when not public, or tab 1 is active in public view */}
+          {(!isPublic || activeTab === 1) && (
+            <>
+              {/* Google Analytics 4 Section */}
           {isSectionVisible("ga4") &&
             // Show section if it has KPIs (and KPIs are selected in public view) OR charts (and charts are selected in public view)
             ((shouldShowSectionKPIs("ga4") &&
@@ -3016,11 +3251,9 @@ function ReportingDashboard({
                             </Grid>
                           )}
 
-                        {/* Conversions or Revenue */}
-                        {((dashboardData?.kpis?.conversions &&
-                          shouldShowKPI("conversions")) ||
-                          (dashboardData?.kpis?.revenue &&
-                            shouldShowKPI("revenue"))) && (
+                        {/* Conversions */}
+                        {dashboardData?.kpis?.conversions &&
+                          shouldShowKPI("conversions") && (
                           <Grid item xs={12} sm={6} md={3}>
                             <motion.div
                               initial={{ opacity: 0, y: 20 }}
@@ -3054,9 +3287,7 @@ function ReportingDashboard({
                                         fontWeight: 500,
                                       }}
                                     >
-                                      {dashboardData.kpis.conversions
-                                        ? "Conversions"
-                                        : "Revenue"}
+                                      Conversions
                                     </Typography>
                                     <IconButton size="small" sx={{ p: 0.5 }}>
                                       <TrendingUpIcon
@@ -3078,19 +3309,8 @@ function ReportingDashboard({
                                     }}
                                   >
                                     {(() => {
-                                      const kpi =
-                                        dashboardData.kpis.conversions ||
-                                        dashboardData.kpis.revenue;
+                                      const kpi = dashboardData.kpis.conversions;
                                       const value = kpi.value || 0;
-                                      if (dashboardData.kpis.revenue) {
-                                        return `${value.toLocaleString(
-                                          undefined,
-                                          {
-                                            minimumFractionDigits: 0,
-                                            maximumFractionDigits: 0,
-                                          }
-                                        )}`;
-                                      }
                                       if (value >= 1000) {
                                         return `${(value / 1000).toFixed(1)}K`;
                                       }
@@ -3105,9 +3325,7 @@ function ReportingDashboard({
                                     }}
                                   >
                                     {(() => {
-                                      const kpi =
-                                        dashboardData.kpis.conversions ||
-                                        dashboardData.kpis.revenue;
+                                      const kpi = dashboardData.kpis.conversions;
                                       return (
                                         kpi.change !== undefined &&
                                         kpi.change !== null &&
@@ -3829,69 +4047,7 @@ function ReportingDashboard({
                             </Grid>
                           )} */}
 
-                          {/* Revenue Comparison Chart */}
-                          {dashboardData.chart_data.ga4_daily_comparison.some(
-                            (d) =>
-                              d.current_revenue > 0 || d.previous_revenue > 0
-                          ) && (
-                            <Grid item xs={12} md={6}>
-                              <ChartCard
-                                title="Revenue"
-                                badge={getBadgeLabel("GA4")}
-                                badgeColor={CHART_COLORS.ga4.primary}
-                                height={400}
-                                animationDelay={0.5}
-                              >
-                                <LineChartEnhanced
-                                  data={
-                                    dashboardData.chart_data
-                                      .ga4_daily_comparison
-                                  }
-                                  dataKey="date"
-                                  lines={[
-                                    {
-                                      dataKey: "current_revenue",
-                                      name: getDateRangeLabel(),
-                                      color: CHART_COLORS.success,
-                                      strokeWidth: 2.5,
-                                    },
-                                    {
-                                      dataKey: "previous_revenue",
-                                      name: "Previous period",
-                                      color: CHART_COLORS.comparison.previous,
-                                      strokeWidth: 2,
-                                      strokeDasharray: "5 5",
-                                    },
-                                  ]}
-                                  xAxisFormatter={(value) => {
-                                    if (value && value.length === 8) {
-                                      const day = value.substring(6, 8);
-                                      return day;
-                                    }
-                                    return value;
-                                  }}
-                                  formatter={(value) =>
-                                    `$${value.toLocaleString(undefined, {
-                                      minimumFractionDigits: 2,
-                                      maximumFractionDigits: 2,
-                                    })}`
-                                  }
-                                  labelFormatter={(label) => {
-                                    if (label && label.length === 8) {
-                                      const year = label.substring(0, 4);
-                                      const month = label.substring(4, 6);
-                                      const day = label.substring(6, 8);
-                                      return `${day} ${getMonthName(
-                                        parseInt(month)
-                                      )} ${year}`;
-                                    }
-                                    return label;
-                                  }}
-                                  height={320}
-                                />
-                              </ChartCard>
-                            </Grid>
-                          )}
+                          {/* Revenue chart removed - revenue KPI removed from GA4 section */}
                         </Grid>
                       </Box>
                     )}
@@ -4560,11 +4716,16 @@ function ReportingDashboard({
                 dashboardData?.chart_data?.top_performing_prompts?.length > 0 ||
                 dashboardData?.chart_data?.scrunch_ai_insights?.length > 0;
 
+              // Check if section has selected KPIs or charts
+              const hasSelectedKPIs = shouldShowSectionKPIs("scrunch_ai");
+              const hasSelectedCharts = shouldShowSectionCharts("scrunch_ai");
+
               const shouldShow =
-                loadingScrunch ||
-                hasScrunchData ||
-                hasScrunchChartData ||
-                hasScrunchFromMain;
+                (loadingScrunch ||
+                  hasScrunchData ||
+                  hasScrunchChartData ||
+                  hasScrunchFromMain) &&
+                (hasSelectedKPIs || hasSelectedCharts);
 
               // Debug logging
               debugLog("Scrunch section data check:", {
@@ -4574,6 +4735,8 @@ function ReportingDashboard({
                 scrunchKPIsFromMain: scrunchKPIsFromMain.length,
                 scrunchKPIsFromMainKeys: scrunchKPIsFromMain,
                 hasScrunchFromMain,
+                hasSelectedKPIs,
+                hasSelectedCharts,
                 shouldShow,
                 dashboardDataKeys: dashboardData?.kpis
                   ? Object.keys(dashboardData.kpis)
@@ -4798,11 +4961,10 @@ function ReportingDashboard({
                           scrunchChartData?.top_performing_prompts ||
                           [];
 
-                        // Only show if chart is selected (in public view) or in admin view
+                        // Only show if chart is selected and data exists
                         if (
                           topPrompts.length === 0 ||
-                          (isPublic &&
-                            !isChartVisible("top_performing_prompts"))
+                          !isChartVisible("top_performing_prompts")
                         ) {
                           return null;
                         }
@@ -4939,10 +5101,10 @@ function ReportingDashboard({
                           dashboardData?.chart_data?.scrunch_ai_insights ||
                           [];
 
-                        // Only show if chart is selected (in public view) or in admin view
+                        // Only show if chart is selected and data exists
                         if (
                           insights.length === 0 ||
-                          (isPublic && !isChartVisible("scrunch_ai_insights"))
+                          !isChartVisible("scrunch_ai_insights")
                         ) {
                           return null;
                         }
@@ -5295,9 +5457,8 @@ function ReportingDashboard({
                       })()}
 
                       {/* Prompts Analytics Table - Scrunch-like interface */}
-                      {/* Note: PromptsAnalyticsTable is always shown if section is visible - it's part of the Scrunch AI section */}
-                      {(!isPublic ||
-                        isChartVisible("top_performing_prompts") ||
+                      {/* Show if chart is visible or section has selected KPIs */}
+                      {(isChartVisible("top_performing_prompts") ||
                         shouldShowSectionKPIs("scrunch_ai")) && (
                         <PromptsAnalyticsTable
                           clientId={promptsClientId}
@@ -5306,42 +5467,12 @@ function ReportingDashboard({
                           endDate={endDate}
                         />
                       )}
-                    </>
-                  );
-                })()}
-
-                {/* New Query API Visualizations - Separate component that fetches its own data */}
-                {/* {isSectionVisible("advanced_analytics") && selectedBrandId && (
-                  <Box sx={{ mb: 4, mt: 4 }}>
-                    <Typography
-                      variant="h6"
-                      fontWeight={600}
-                      mb={3}
-                      sx={{
-                        fontSize: "1.125rem",
-                        letterSpacing: "-0.01em",
-                      }}
-                    >
-                      Advanced Analytics (Query API)
-                    </Typography>
-                    <ScrunchVisualizations
-                      brandId={selectedBrandId}
-                      startDate={startDate}
-                      endDate={endDate}
-                    />
-                  </Box>
-                )} */}
-
-                {/* Brand Analytics Charts Section */}
-                {isSectionVisible("brand_analytics") &&
-                  brandAnalytics &&
-                  isChartVisible("brand_analytics_charts") && (
-                    <SectionContainer
-                      title="Brand Analytics Insights"
-                      loading={loadingAnalytics}
-                    >
-                      <Grid container spacing={2.5} sx={{ mb: 3 }}>
-                        {/* Platform Distribution - Donut Chart */}
+                      {/* Brand Analytics Charts - Sub-section under Scrunch AI (no separate heading) */}
+                      {brandAnalytics &&
+                        isChartVisible("brand_analytics_charts") && (
+                          <Box sx={{ mb: 4, mt: 4 }}>
+                            <Grid container spacing={2.5} sx={{ mb: 3 }}>
+                              {/* Platform Distribution - Donut Chart */}
                         {brandAnalytics.platform_distribution &&
                           Object.keys(brandAnalytics.platform_distribution)
                             .length > 0 && (
@@ -5869,16 +6000,31 @@ function ReportingDashboard({
                               )}
                           </Grid>
                         )}
-                    </SectionContainer>
-                  )}
+                          </Box>
+                        )}
+
+                      {/* Advanced Query Visualizations - Sub-section under Scrunch AI (no separate heading) */}
+                      {selectedBrandId &&
+                        isChartVisible("scrunch_visualizations") && (
+                          <Box sx={{ mb: 4, mt: 4 }}>
+                            <ScrunchVisualizations
+                              brandId={selectedBrandId}
+                              startDate={startDate}
+                              endDate={endDate}
+                            />
+                          </Box>
+                        )}
+                    </>
+                  );
+                })()}
               </SectionContainer>
             )}
 
-            {/* Keywords Section */}
-            {isSectionVisible("keywords") &&
+            {/* Agency Analytics / Keywords Section */}
+            {isSectionVisible("agency_analytics") &&
               selectedClientId &&
-              (shouldShowSectionKPIs("keywords") ||
-                shouldShowSectionCharts("keywords")) && (
+              (shouldShowSectionKPIs("agency_analytics") ||
+                shouldShowSectionCharts("agency_analytics")) && (
                 <SectionContainer
                   title={
                     isPublic
@@ -5954,7 +6100,7 @@ function ReportingDashboard({
                       selectedKPIs={
                         isPublic
                           ? publicKPISelections || selectedKPIs
-                          : new Set(KPI_ORDER)
+                          : selectedKPIs
                       }
                       startDate={startDate}
                       endDate={endDate}
@@ -5983,6 +6129,8 @@ function ReportingDashboard({
               </SectionContainer>
             )}
           </Box>
+            </>
+          )}
         </>
       ) : !loading &&
         (selectedBrandId || (isPublic && publicSlug)) &&
@@ -6098,55 +6246,31 @@ function ReportingDashboard({
               {[
                 {
                   key: "ga4",
-                  label: "Google Analytics",
-                  description: "Website traffic and engagement metrics",
+                  label: "Website Analytics",
+                  description: "Google Analytics 4 - Website traffic, engagement, and conversion metrics",
                   icon: AnalyticsIcon,
                   color: getSourceColor("GA4"),
                 },
                 {
                   key: "agency_analytics",
-                  label: "Agency Analytics",
+                  label: "Organic Visibility",
                   description:
-                    "SEO and keyword ranking metrics (shown in GA4 section)",
-                  icon: AnalyticsIcon,
+                    "Agency Analytics - Keyword rankings, search volume, and SEO performance metrics",
+                  icon: SearchIcon,
                   color: getSourceColor("AgencyAnalytics"),
                 },
                 {
                   key: "scrunch_ai",
-                  label: "Scrunch AI",
-                  description: "AI platform presence and engagement metrics",
+                  label: "AI Visibility",
+                  description: "Scrunch AI - AI platform presence, engagement, competitor insights (includes Brand Analytics and Advanced Query Visualizations as sub-sections)",
                   icon: AnalyticsIcon,
                   color: getSourceColor("Scrunch"),
-                },
-                {
-                  key: "brand_analytics",
-                  label: "Brand Analytics Insights",
-                  description:
-                    "Platform distribution, funnel stages, and sentiment analysis",
-                  icon: AnalyticsIcon,
-                  color: theme.palette.primary.main,
-                },
-                {
-                  key: "advanced_analytics",
-                  label: "Advanced Analytics Query",
-                  description:
-                    "Detailed Scrunch AI visualizations and insights",
-                  icon: AnalyticsIcon,
-                  color: theme.palette.secondary.main,
-                },
-                {
-                  key: "keywords",
-                  label: "Keywords",
-                  description:
-                    "Keyword rankings, search volume, and performance metrics",
-                  icon: SearchIcon,
-                  color: getSourceColor("AgencyAnalytics"),
                 },
                 {
                   key: "all_performance_metrics",
                   label: "All Performance Metrics",
                   description:
-                    "KPIs shown in the summary section (independent from source sections)",
+                    "Summary section - KPIs shown in the summary section (independent from source sections)",
                   icon: AnalyticsIcon,
                   color: theme.palette.primary.main,
                 },
@@ -6357,18 +6481,14 @@ function ReportingDashboard({
                                 const metadata = KPI_METADATA[key];
                                 const kpi = dashboardData?.kpis?.[key];
                                 // Auth view: always allow selecting KPIs (so user can configure public view)
-                                // Public view: allow selection if KPI exists or is one of our keyword/agency/scrunch KPIs
-                                const isKeywordSection =
-                                  section.key === "keywords";
+                                // Public view: allow selection if KPI exists or is one of our agency/scrunch KPIs
                                 const isAgencySection =
                                   section.key === "agency_analytics";
                                 const isScrunchSection =
                                   section.key === "scrunch_ai";
                                 const allowPublicOverride =
                                   isPublic &&
-                                  (isKeywordSection ||
-                                    isAgencySection ||
-                                    isScrunchSection);
+                                  (isAgencySection || isScrunchSection);
                                 const isAvailable =
                                   !isPublic || !!kpi || allowPublicOverride;
 
@@ -6516,60 +6636,101 @@ function ReportingDashboard({
                               </Box>
                             </Box>
                             <Box display="flex" flexDirection="column" gap={1}>
-                              {sectionCharts.map((chart) => {
+                              {sectionCharts.map((chart, index) => {
                                 const isChartSelected = tempSelectedCharts.has(
                                   chart.key
                                 );
+                                // Group sub-sections under scrunch_ai visually
+                                const isSubSection = section.key === "scrunch_ai" && 
+                                  (chart.key === "brand_analytics_charts" || chart.key === "scrunch_visualizations");
+                                const isFirstSubSection = isSubSection && 
+                                  index > 0 && 
+                                  !(sectionCharts[index - 1].key === "brand_analytics_charts" || sectionCharts[index - 1].key === "scrunch_visualizations");
+                                
                                 return (
-                                  <FormControlLabel
-                                    key={chart.key}
-                                    control={
-                                      <Checkbox
-                                        checked={isChartSelected}
-                                        onChange={(e) => {
-                                          const newSelected = new Set(
-                                            tempSelectedCharts
-                                          );
-                                          if (e.target.checked) {
-                                            newSelected.add(chart.key);
-                                          } else {
-                                            newSelected.delete(chart.key);
-                                          }
-                                          setTempSelectedCharts(newSelected);
-                                        }}
-                                        size="small"
+                                  <Box key={chart.key}>
+                                    {isFirstSubSection && (
+                                      <Typography
+                                        variant="caption"
+                                        color="text.secondary"
                                         sx={{
-                                          color: section.color,
-                                          "&.Mui-checked": {
-                                            color: section.color,
-                                          },
+                                          fontSize: "0.7rem",
+                                          fontWeight: 600,
+                                          textTransform: "uppercase",
+                                          letterSpacing: "0.05em",
+                                          mb: 0.5,
+                                          mt: 1,
+                                          display: "block",
                                         }}
-                                      />
-                                    }
-                                    label={
-                                      <Box>
-                                        <Typography
-                                          variant="body2"
-                                          fontWeight={500}
-                                          sx={{ fontSize: "0.875rem" }}
-                                        >
-                                          {chart.label}
-                                        </Typography>
-                                        <Typography
-                                          variant="caption"
-                                          color="text.secondary"
-                                          sx={{ fontSize: "0.7rem" }}
-                                        >
-                                          {chart.description}
-                                        </Typography>
-                                      </Box>
-                                    }
-                                    sx={{
-                                      mb: 0.5,
-                                      width: "100%",
-                                      alignItems: "flex-start",
-                                    }}
-                                  />
+                                      >
+                                        Sub-sections:
+                                      </Typography>
+                                    )}
+                                    <FormControlLabel
+                                      control={
+                                        <Checkbox
+                                          checked={isChartSelected}
+                                          onChange={(e) => {
+                                            const newSelected = new Set(
+                                              tempSelectedCharts
+                                            );
+                                            if (e.target.checked) {
+                                              newSelected.add(chart.key);
+                                            } else {
+                                              newSelected.delete(chart.key);
+                                            }
+                                            setTempSelectedCharts(newSelected);
+                                          }}
+                                          size="small"
+                                          sx={{
+                                            color: section.color,
+                                            "&.Mui-checked": {
+                                              color: section.color,
+                                            },
+                                          }}
+                                        />
+                                      }
+                                      label={
+                                        <Box>
+                                          <Box display="flex" alignItems="center" gap={0.5}>
+                                            <Typography
+                                              variant="body2"
+                                              fontWeight={500}
+                                              sx={{ fontSize: "0.875rem" }}
+                                            >
+                                              {chart.label}
+                                            </Typography>
+                                            {isSubSection && (
+                                              <Chip
+                                                label="Sub-section"
+                                                size="small"
+                                                sx={{
+                                                  height: 16,
+                                                  fontSize: "0.6rem",
+                                                  bgcolor: alpha(section.color, 0.1),
+                                                  color: section.color,
+                                                  fontWeight: 500,
+                                                }}
+                                              />
+                                            )}
+                                          </Box>
+                                          <Typography
+                                            variant="caption"
+                                            color="text.secondary"
+                                            sx={{ fontSize: "0.7rem" }}
+                                          >
+                                            {chart.description}
+                                          </Typography>
+                                        </Box>
+                                      }
+                                      sx={{
+                                        mb: 0.5,
+                                        width: "100%",
+                                        alignItems: "flex-start",
+                                        pl: isSubSection ? 2 : 0,
+                                      }}
+                                    />
+                                  </Box>
                                 );
                               })}
                             </Box>
@@ -6871,7 +7032,7 @@ function ReportingDashboard({
         >
           <InsightsIcon sx={{ color: theme.palette.primary.main }} />
           <Typography variant="h6" fontWeight={600}>
-            AI Overview - All Metrics
+            {overviewData?.executive_summary ? "Executive Summary" : "AI Overview - All Metrics"}
           </Typography>
         </DialogTitle>
         <DialogContent>
@@ -6912,31 +7073,39 @@ function ReportingDashboard({
                 </Typography>
               </Box>
 
-              {/* AI Generated Overview */}
-              <Paper
-                elevation={0}
-                sx={{
-                  p: 3,
-                  bgcolor: alpha(theme.palette.primary.main, 0.05),
-                  border: `1px solid ${theme.palette.divider}`,
-                  borderRadius: 2,
-                  mb: 3,
-                }}
-              >
-                <Typography
-                  variant="body1"
+              {/* AI Generated Overview - Show Executive Summary if available, otherwise show old format */}
+              {overviewData.executive_summary ? (
+                <ExecutiveSummary summary={overviewData.executive_summary} theme={theme} />
+              ) : overviewData.overview ? (
+                <Paper
+                  elevation={0}
                   sx={{
-                    whiteSpace: "pre-line",
-                    lineHeight: 1.8,
-                    fontSize: "0.95rem",
+                    p: 3,
+                    bgcolor: alpha(theme.palette.primary.main, 0.05),
+                    border: `1px solid ${theme.palette.divider}`,
+                    borderRadius: 2,
+                    mb: 3,
                   }}
                 >
-                  {overviewData.overview}
-                </Typography>
-              </Paper>
+                  <Typography
+                    variant="body1"
+                    sx={{
+                      whiteSpace: "pre-line",
+                      lineHeight: 1.8,
+                      fontSize: "0.95rem",
+                    }}
+                  >
+                    {overviewData.overview}
+                  </Typography>
+                </Paper>
+              ) : (
+                <Alert severity="info">
+                  No overview data available. Please try again.
+                </Alert>
+              )}
 
-              {/* Metrics Summary by Source */}
-              {overviewData.metrics && overviewData.metrics.length > 0 && (
+              {/* Metrics Summary by Source - Only show if not showing Executive Summary */}
+              {!overviewData.executive_summary && overviewData.metrics && overviewData.metrics.length > 0 && (
                 <Box>
                   <Typography variant="subtitle1" fontWeight={600} mb={2}>
                     Metrics Summary

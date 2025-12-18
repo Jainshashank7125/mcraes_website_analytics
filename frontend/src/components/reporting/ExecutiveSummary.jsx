@@ -1,0 +1,290 @@
+import React from 'react'
+import {
+  Box,
+  Typography,
+  Paper,
+  Divider,
+  List,
+  ListItem,
+  ListItemText,
+  Chip,
+  useTheme,
+  alpha
+} from '@mui/material'
+import {
+  CheckCircle as CheckCircleIcon,
+  Warning as WarningIcon,
+  Error as ErrorIcon
+} from '@mui/icons-material'
+
+export default function ExecutiveSummary({ summary, theme }) {
+  if (!summary) {
+    return (
+      <Box sx={{ p: 3, textAlign: 'center' }}>
+        <Typography variant="body1" color="text.secondary">
+          No executive summary available.
+        </Typography>
+      </Box>
+    )
+  }
+
+  const header = summary.header || {}
+  const overallStatus = header.overall_status || ''
+  
+  // Determine status color and icon
+  let statusColor = 'default'
+  let StatusIcon = CheckCircleIcon
+  if (overallStatus.includes('✅')) {
+    statusColor = 'success'
+    StatusIcon = CheckCircleIcon
+  } else if (overallStatus.includes('⚠️')) {
+    statusColor = 'warning'
+    StatusIcon = WarningIcon
+  } else if (overallStatus.includes('🔴')) {
+    statusColor = 'error'
+    StatusIcon = ErrorIcon
+  }
+
+  return (
+    <Box sx={{ maxWidth: '900px', mx: 'auto', p: 3 }}>
+      {/* Header Section */}
+      <Paper
+        elevation={0}
+        sx={{
+          p: 3,
+          mb: 3,
+          bgcolor: alpha(theme.palette.primary.main, 0.05),
+          border: `1px solid ${theme.palette.divider}`,
+          borderRadius: 2
+        }}
+      >
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+          <Box>
+            <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
+              {header.client_name || 'Client'}
+            </Typography>
+            <Typography variant="h6" color="text.secondary" gutterBottom>
+              {header.program_name || 'Digital Marketing Program'}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              Reporting Period: {header.reporting_period || 'N/A'}
+            </Typography>
+          </Box>
+          {overallStatus && (
+            <Chip
+              icon={<StatusIcon />}
+              label={overallStatus.replace(/[✅⚠️🔴]/g, '').trim()}
+              color={statusColor}
+              sx={{ fontWeight: 600 }}
+            />
+          )}
+        </Box>
+      </Paper>
+
+      {/* Executive Summary */}
+      {summary.executive_summary && (
+        <Paper
+          elevation={0}
+          sx={{
+            p: 3,
+            mb: 3,
+            bgcolor: 'background.paper',
+            border: `1px solid ${theme.palette.divider}`,
+            borderRadius: 2
+          }}
+        >
+          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
+            Executive Summary
+          </Typography>
+          <Typography variant="body1" sx={{ lineHeight: 1.8, whiteSpace: 'pre-line' }}>
+            {summary.executive_summary}
+          </Typography>
+        </Paper>
+      )}
+
+      {/* What Worked */}
+      {summary.what_worked && summary.what_worked.length > 0 && (
+        <Paper
+          elevation={0}
+          sx={{
+            p: 3,
+            mb: 3,
+            bgcolor: 'background.paper',
+            border: `1px solid ${theme.palette.divider}`,
+            borderRadius: 2
+          }}
+        >
+          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
+            What Worked This Month
+          </Typography>
+          <List dense>
+            {summary.what_worked.map((item, index) => (
+              <ListItem key={index} sx={{ pl: 0, py: 0.5 }}>
+                <ListItemText
+                  primary={
+                    <Typography variant="body1" sx={{ lineHeight: 1.7 }}>
+                      {item}
+                    </Typography>
+                  }
+                />
+              </ListItem>
+            ))}
+          </List>
+        </Paper>
+      )}
+
+      {/* What to Watch */}
+      {summary.what_to_watch && summary.what_to_watch.length > 0 && (
+        <Paper
+          elevation={0}
+          sx={{
+            p: 3,
+            mb: 3,
+            bgcolor: alpha(theme.palette.warning.main, 0.05),
+            border: `1px solid ${theme.palette.divider}`,
+            borderRadius: 2
+          }}
+        >
+          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
+            What to Watch
+          </Typography>
+          <List dense>
+            {summary.what_to_watch.map((item, index) => (
+              <ListItem key={index} sx={{ pl: 0, py: 0.5 }}>
+                <ListItemText
+                  primary={
+                    <Typography variant="body1" sx={{ lineHeight: 1.7 }}>
+                      {item}
+                    </Typography>
+                  }
+                />
+              </ListItem>
+            ))}
+          </List>
+        </Paper>
+      )}
+
+      {/* AI Visibility Snapshot */}
+      {summary.ai_visibility_snapshot && summary.ai_visibility_snapshot.length > 0 && (
+        <Paper
+          elevation={0}
+          sx={{
+            p: 3,
+            mb: 3,
+            bgcolor: 'background.paper',
+            border: `1px solid ${theme.palette.divider}`,
+            borderRadius: 2
+          }}
+        >
+          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
+            AI Visibility Snapshot
+          </Typography>
+          <List dense>
+            {summary.ai_visibility_snapshot.map((item, index) => (
+              <ListItem key={index} sx={{ pl: 0, py: 0.5 }}>
+                <ListItemText
+                  primary={
+                    <Typography variant="body1" sx={{ lineHeight: 1.7 }}>
+                      {item}
+                    </Typography>
+                  }
+                />
+              </ListItem>
+            ))}
+          </List>
+        </Paper>
+      )}
+
+      {/* Content & Authority Snapshot */}
+      {summary.content_authority_snapshot && summary.content_authority_snapshot.length > 0 && (
+        <Paper
+          elevation={0}
+          sx={{
+            p: 3,
+            mb: 3,
+            bgcolor: 'background.paper',
+            border: `1px solid ${theme.palette.divider}`,
+            borderRadius: 2
+          }}
+        >
+          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
+            Content & Authority Snapshot
+          </Typography>
+          <List dense>
+            {summary.content_authority_snapshot.map((item, index) => (
+              <ListItem key={index} sx={{ pl: 0, py: 0.5 }}>
+                <ListItemText
+                  primary={
+                    <Typography variant="body1" sx={{ lineHeight: 1.7 }}>
+                      {item}
+                    </Typography>
+                  }
+                />
+              </ListItem>
+            ))}
+          </List>
+        </Paper>
+      )}
+
+      {/* Focus for the Next 30 Days */}
+      {summary.focus_next_30_days && summary.focus_next_30_days.length > 0 && (
+        <Paper
+          elevation={0}
+          sx={{
+            p: 3,
+            mb: 3,
+            bgcolor: alpha(theme.palette.primary.main, 0.05),
+            border: `1px solid ${theme.palette.divider}`,
+            borderRadius: 2
+          }}
+        >
+          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
+            Focus for the Next 30 Days
+          </Typography>
+          <List dense>
+            {summary.focus_next_30_days.map((item, index) => (
+              <ListItem key={index} sx={{ pl: 0, py: 0.5 }}>
+                <ListItemText
+                  primary={
+                    <Typography variant="body1" sx={{ lineHeight: 1.7 }}>
+                      {item}
+                    </Typography>
+                  }
+                />
+              </ListItem>
+            ))}
+          </List>
+        </Paper>
+      )}
+
+      {/* Client Action Needed */}
+      {summary.client_action_needed && (
+        <Paper
+          elevation={0}
+          sx={{
+            p: 3,
+            mb: 3,
+            bgcolor: alpha(theme.palette.info.main, 0.05),
+            border: `1px solid ${theme.palette.divider}`,
+            borderRadius: 2
+          }}
+        >
+          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
+            Client Action Needed
+          </Typography>
+          <Typography variant="body1" sx={{ lineHeight: 1.8, whiteSpace: 'pre-line' }}>
+            {summary.client_action_needed}
+          </Typography>
+        </Paper>
+      )}
+
+      {/* Footer */}
+      <Box sx={{ mt: 4, pt: 2, borderTop: `1px solid ${theme.palette.divider}` }}>
+        <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
+          Detailed analytics and supporting data are available below.
+        </Typography>
+      </Box>
+    </Box>
+  )
+}
+

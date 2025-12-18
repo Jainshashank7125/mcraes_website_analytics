@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Query, HTTPException, Depends, UploadFile, File, Form, Request
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 import logging
 import time
 from datetime import datetime, timedelta, date as date_type, timezone
@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.db.database import get_db
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, and_, or_, update
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,7 @@ ga4_client = GA4APIClient()
 
 
 class DashboardLinkRequest(BaseModel):
+    executive_summary: Optional[Dict[str, Any]] = Field(None, description="Executive summary data (structured JSON)")
     slug: Optional[str] = None
     start_date: date_type
     end_date: date_type
@@ -49,6 +50,7 @@ class DashboardLinkUpdateRequest(BaseModel):
     visible_sections: Optional[List[str]] = None
     selected_charts: Optional[List[str]] = None
     selected_performance_metrics_kpis: Optional[List[str]] = None
+    executive_summary: Optional[Dict[str, Any]] = Field(None, description="Executive summary data (structured JSON)")
 
 @router.get("/data/brands")
 @handle_api_errors(context="fetching brands")
@@ -6130,7 +6132,8 @@ async def upsert_dashboard_link_for_client(
         selected_kpis=request.selected_kpis,
         visible_sections=request.visible_sections,
         selected_charts=request.selected_charts,
-        selected_performance_metrics_kpis=request.selected_performance_metrics_kpis
+        selected_performance_metrics_kpis=request.selected_performance_metrics_kpis,
+        executive_summary=request.executive_summary
     )
 
     if not link:
@@ -6188,6 +6191,8 @@ async def update_dashboard_link(
         update_data["selected_charts"] = request.selected_charts
     if request.selected_performance_metrics_kpis is not None:
         update_data["selected_performance_metrics_kpis"] = request.selected_performance_metrics_kpis
+    if request.executive_summary is not None:
+        update_data["executive_summary"] = request.executive_summary
     
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
