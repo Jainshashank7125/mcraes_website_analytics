@@ -35,6 +35,7 @@ class DashboardLinkRequest(BaseModel):
     selected_kpis: Optional[List[str]] = None
     visible_sections: Optional[List[str]] = None
     selected_charts: Optional[List[str]] = None
+    selected_performance_metrics_kpis: Optional[List[str]] = None
 
 class DashboardLinkUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -47,6 +48,7 @@ class DashboardLinkUpdateRequest(BaseModel):
     selected_kpis: Optional[List[str]] = None
     visible_sections: Optional[List[str]] = None
     selected_charts: Optional[List[str]] = None
+    selected_performance_metrics_kpis: Optional[List[str]] = None
 
 @router.get("/data/brands")
 @handle_api_errors(context="fetching brands")
@@ -4898,6 +4900,7 @@ class KPISelectionRequest(BaseModel):
     selected_kpis: List[str]
     visible_sections: Optional[List[str]] = None  # Optional for backward compatibility
     selected_charts: Optional[List[str]] = None  # Optional chart selections
+    selected_performance_metrics_kpis: Optional[List[str]] = None  # Optional performance metrics KPIs (independent from selected_kpis)
     version: Optional[int] = None  # Version for optimistic locking
 
 @router.get("/data/reporting-dashboard/{brand_id}/kpi-selections")
@@ -4939,6 +4942,7 @@ async def get_brand_kpi_selections(brand_id: int, db: Session = Depends(get_db))
                 "selected_kpis": selection.get("selected_kpis", []),
                 "visible_sections": selection.get("visible_sections", ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"]),
                 "selected_charts": selection.get("selected_charts", []),
+                "selected_performance_metrics_kpis": selection.get("selected_performance_metrics_kpis", []),
                 "updated_at": selection.get("updated_at").isoformat() if selection.get("updated_at") else None,
                 "version": selection.get("version", 1),
                 "last_modified_by": selection.get("last_modified_by")
@@ -4989,6 +4993,7 @@ async def get_client_kpi_selections(client_id: int, db: Session = Depends(get_db
                 "selected_kpis": selection.get("selected_kpis", []),
                 "visible_sections": selection.get("visible_sections", ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"]),
                 "selected_charts": selection.get("selected_charts", []),
+                "selected_performance_metrics_kpis": selection.get("selected_performance_metrics_kpis", []),
                 "updated_at": selection.get("updated_at"),
                 "version": selection.get("version", 1),
                 "last_modified_by": selection.get("last_modified_by")
@@ -5001,6 +5006,7 @@ async def get_client_kpi_selections(client_id: int, db: Session = Depends(get_db
                 "selected_kpis": [],
                 "visible_sections": ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"],
                 "selected_charts": [],
+                "selected_performance_metrics_kpis": [],
                 "updated_at": None,
                 "version": 1,
                 "last_modified_by": None
@@ -5077,12 +5083,22 @@ async def save_client_kpi_selections(
             else:
                 selected_charts = []
         
+        # Prepare selected_performance_metrics_kpis
+        selected_performance_metrics_kpis = request.selected_performance_metrics_kpis
+        if selected_performance_metrics_kpis is None:
+            # If not provided, keep existing performance metrics KPIs or use empty array
+            if existing and existing.get("selected_performance_metrics_kpis") is not None:
+                selected_performance_metrics_kpis = existing["selected_performance_metrics_kpis"]
+            else:
+                selected_performance_metrics_kpis = []
+        
         # Upsert KPI selections using SQLAlchemy (client-centric)
         result = supabase.upsert_client_kpi_selection(
             client_id=client_id,
             selected_kpis=request.selected_kpis,
             visible_sections=visible_sections,
             selected_charts=selected_charts,
+            selected_performance_metrics_kpis=selected_performance_metrics_kpis,
             version=request.version,
             last_modified_by=current_user.get("email")
         )
@@ -6113,7 +6129,8 @@ async def upsert_dashboard_link_for_client(
         user_email=current_user.get("email"),
         selected_kpis=request.selected_kpis,
         visible_sections=request.visible_sections,
-        selected_charts=request.selected_charts
+        selected_charts=request.selected_charts,
+        selected_performance_metrics_kpis=request.selected_performance_metrics_kpis
     )
 
     if not link:
@@ -6169,6 +6186,8 @@ async def update_dashboard_link(
         update_data["visible_sections"] = request.visible_sections
     if request.selected_charts is not None:
         update_data["selected_charts"] = request.selected_charts
+    if request.selected_performance_metrics_kpis is not None:
+        update_data["selected_performance_metrics_kpis"] = request.selected_performance_metrics_kpis
     
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -6318,6 +6337,7 @@ async def get_dashboard_link_kpi_selections(
             "selected_kpis": [],
             "visible_sections": ['ga4', 'scrunch_ai', 'brand_analytics', 'advanced_analytics', 'keywords'],
             "selected_charts": [],
+            "selected_performance_metrics_kpis": [],
             "created_at": None,
             "updated_at": None
         }

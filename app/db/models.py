@@ -244,6 +244,7 @@ class DashboardLinkKPISelection(Base):
     selected_kpis = Column(ARRAY(String), nullable=False, default=[])
     visible_sections = Column(ARRAY(String), nullable=False, default=['ga4', 'scrunch_ai', 'brand_analytics', 'advanced_analytics', 'keywords'])
     selected_charts = Column(ARRAY(String), nullable=False, default=[])
+    selected_performance_metrics_kpis = Column(ARRAY(String), nullable=False, default=[])
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -720,6 +721,7 @@ class BrandKPISelection(Base):
     selected_kpis = Column(ARRAY(String), nullable=False, default=[])
     visible_sections = Column(ARRAY(String), nullable=False, default=['ga4', 'scrunch_ai', 'brand_analytics', 'advanced_analytics', 'performance_metrics'])
     selected_charts = Column(ARRAY(String), nullable=False, default=[])
+    selected_performance_metrics_kpis = Column(ARRAY(String), nullable=False, default=[])
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     version = Column(Integer, nullable=False, default=1)

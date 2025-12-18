@@ -3024,7 +3024,8 @@ class SupabaseService:
         user_email: Optional[str] = None,
         selected_kpis: Optional[List[str]] = None,
         visible_sections: Optional[List[str]] = None,
-        selected_charts: Optional[List[str]] = None
+        selected_charts: Optional[List[str]] = None,
+        selected_performance_metrics_kpis: Optional[List[str]] = None
     ) -> Optional[Dict]:
         """Create or update a dashboard link for a client based on date range"""
         try:
@@ -3086,12 +3087,13 @@ class SupabaseService:
                 link_id = link_dict.get("id")
                 
                 # Save KPI selections if provided
-                if link_id and (selected_kpis is not None or visible_sections is not None or selected_charts is not None):
+                if link_id and (selected_kpis is not None or visible_sections is not None or selected_charts is not None or selected_performance_metrics_kpis is not None):
                     kpi_selection = self.upsert_dashboard_link_kpi_selection(
                         link_id=link_id,
                         selected_kpis=selected_kpis or [],
                         visible_sections=visible_sections,
-                        selected_charts=selected_charts or []
+                        selected_charts=selected_charts or [],
+                        selected_performance_metrics_kpis=selected_performance_metrics_kpis or []
                     )
                     if kpi_selection:
                         link_dict["kpi_selection"] = kpi_selection
@@ -3293,6 +3295,7 @@ class SupabaseService:
             selected_kpis = updates.pop("selected_kpis", None)
             visible_sections = updates.pop("visible_sections", None)
             selected_charts = updates.pop("selected_charts", None)
+            selected_performance_metrics_kpis = updates.pop("selected_performance_metrics_kpis", None)
             
             # Only allow updating specific fields
             allowed_fields = ["start_date", "end_date", "enabled", "expires_at", "slug"]
@@ -3331,12 +3334,13 @@ class SupabaseService:
             link_dict = dict(row._mapping)
             
             # Update KPI selections if provided
-            if selected_kpis is not None or visible_sections is not None or selected_charts is not None:
+            if selected_kpis is not None or visible_sections is not None or selected_charts is not None or selected_performance_metrics_kpis is not None:
                 kpi_selection = self.upsert_dashboard_link_kpi_selection(
                     link_id=link_id,
                     selected_kpis=selected_kpis if selected_kpis is not None else [],
                     visible_sections=visible_sections,
-                    selected_charts=selected_charts if selected_charts is not None else []
+                    selected_charts=selected_charts if selected_charts is not None else [],
+                    selected_performance_metrics_kpis=selected_performance_metrics_kpis if selected_performance_metrics_kpis is not None else []
                 )
                 if kpi_selection:
                     link_dict["kpi_selection"] = kpi_selection
@@ -3387,7 +3391,8 @@ class SupabaseService:
         link_id: int,
         selected_kpis: List[str],
         visible_sections: Optional[List[str]] = None,
-        selected_charts: Optional[List[str]] = None
+        selected_charts: Optional[List[str]] = None,
+        selected_performance_metrics_kpis: Optional[List[str]] = None
     ) -> Optional[Dict]:
         """Create or update KPI selections for a dashboard link"""
         try:
@@ -3402,11 +3407,16 @@ class SupabaseService:
             if selected_charts is None:
                 selected_charts = []
             
+            # Default selected_performance_metrics_kpis if not provided
+            if selected_performance_metrics_kpis is None:
+                selected_performance_metrics_kpis = []
+            
             kpi_data = {
                 "dashboard_link_id": link_id,
                 "selected_kpis": selected_kpis,
                 "visible_sections": visible_sections,
                 "selected_charts": selected_charts,
+                "selected_performance_metrics_kpis": selected_performance_metrics_kpis,
                 "updated_at": now,
             }
             
@@ -3421,6 +3431,7 @@ class SupabaseService:
                     "selected_kpis": insert_stmt.excluded.selected_kpis,
                     "visible_sections": insert_stmt.excluded.visible_sections,
                     "selected_charts": insert_stmt.excluded.selected_charts,
+                    "selected_performance_metrics_kpis": insert_stmt.excluded.selected_performance_metrics_kpis,
                     "updated_at": insert_stmt.excluded.updated_at,
                 }
             )
@@ -3435,6 +3446,7 @@ class SupabaseService:
                     "selected_kpis": row.selected_kpis or [],
                     "visible_sections": row.visible_sections or [],
                     "selected_charts": row.selected_charts or [],
+                    "selected_performance_metrics_kpis": getattr(row, 'selected_performance_metrics_kpis', None) or [],
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                     "updated_at": row.updated_at.isoformat() if row.updated_at else None
                 }
@@ -3776,6 +3788,7 @@ class SupabaseService:
                     "selected_kpis": row.selected_kpis or [],
                     "visible_sections": row.visible_sections or [],
                     "selected_charts": row.selected_charts or [],
+                    "selected_performance_metrics_kpis": getattr(row, 'selected_performance_metrics_kpis', None) or [],
                     "version": row.version or 1,
                     "last_modified_by": row.last_modified_by,
                     "updated_at": row.updated_at.isoformat() if row.updated_at else None
@@ -3791,6 +3804,7 @@ class SupabaseService:
         selected_kpis: List[str],
         visible_sections: Optional[List[str]] = None,
         selected_charts: Optional[List[str]] = None,
+        selected_performance_metrics_kpis: Optional[List[str]] = None,
         version: Optional[int] = None,
         last_modified_by: Optional[str] = None
     ) -> Dict:
@@ -3813,6 +3827,7 @@ class SupabaseService:
                 "selected_kpis": selected_kpis,
                 "visible_sections": visible_sections or ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"],
                 "selected_charts": selected_charts or [],
+                "selected_performance_metrics_kpis": selected_performance_metrics_kpis or [],
                 "last_modified_by": last_modified_by,
                 "updated_at": datetime.utcnow()
             }
@@ -3839,6 +3854,7 @@ class SupabaseService:
                     "selected_kpis": stmt.excluded.selected_kpis,
                     "visible_sections": stmt.excluded.visible_sections,
                     "selected_charts": stmt.excluded.selected_charts,
+                    "selected_performance_metrics_kpis": stmt.excluded.selected_performance_metrics_kpis,
                     "version": stmt.excluded.version,
                     "last_modified_by": stmt.excluded.last_modified_by,
                     "updated_at": stmt.excluded.updated_at

@@ -1,0 +1,92 @@
+{
+    "kpi_selector_config": {
+        "google_analytics_4/Website Analytics": {
+            "kpis": [
+                "active_users/users",
+                "sessions/total_sessions",
+                "new_users",
+                "engaged_sessions",
+                "bounce_rate",
+                "avg_session_duration",
+                "engagement_rate",
+                "conversions",
+                "revenue"
+            ],
+            "charts": [
+                "active_users/users",
+                "sessions/total_sessions",
+                "new_users",
+                "top_performing_pages",
+                "traffic_sources_distribution",
+                "sessions_by_channel",
+                "geographic_distribution",
+                "sessions_vs_users_by_channel",
+                "top_countries",
+                "bounce_rate"
+            
+            ]
+        },
+        "agency_analytics/Keywords/Organic Visibility": {
+            "charts": [
+                "top_keywords_ranking",
+                "google_ranking",
+                "keyword_ranking_change_and_volume_table"
+            ],
+            "kpis": [
+                "avg_google_ranking",
+                "avg_bing_ranking",
+                "avg_search_volume",
+                "top_10_visibility_percentage",
+                "improving_keywords_count",
+                "declining_keywords_count",
+                "stable_keywords_count"
+            ]
+        },
+        "scrunch_ai/AI Visibility": {
+            "sections": [
+                "top_performing_prompts",
+                "scrunch_ai_insights/AI Search Presence & Competitor Insights",
+                "brand_analytics_charts"
+            ],
+            "charts": [
+                "brand_analytics_charts/Brand Analytics Charts",
+                "advanced_query_visualization/Advanced Query Visualization"
+            ],
+            "kpis": [
+                "total_citations",
+                "brand_presence_rate",
+                "brand_sentiment_score",
+                "top10_prompt_percentage",
+                "prompt_search_volume"
+            ]
+        },
+        "summary/all performance metrics": {
+            "kpis": [
+                "active_users/users",
+                "sessions/total_sessions",
+                "new_users",
+                "engaged_sessions",
+                "bounce_rate",
+                "avg_session_duration",
+                "engagement_rate",
+                "conversions",
+                "revenue",
+
+                "total_citations",
+                "brand_presence_rate",
+                "brand_sentiment_score",
+                "top10_prompt_percentage",
+                "prompt_search_volume",
+
+                "search_volume",
+                "avg_keyword_rank",
+                "ranking_change",
+                "google_ranking_count",
+                "google_ranking",
+                "google_ranking_change",
+                "all_keywords_ranking"
+            
+            ]
+        }
+    }
+}
