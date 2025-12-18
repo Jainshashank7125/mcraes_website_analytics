@@ -37,6 +37,7 @@ class DashboardLinkRequest(BaseModel):
     visible_sections: Optional[List[str]] = None
     selected_charts: Optional[List[str]] = None
     selected_performance_metrics_kpis: Optional[List[str]] = None
+    show_change_period: Optional[Dict[str, bool]] = Field(None, description="Per-section flags for showing change period indicators")
 
 class DashboardLinkUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -50,6 +51,7 @@ class DashboardLinkUpdateRequest(BaseModel):
     visible_sections: Optional[List[str]] = None
     selected_charts: Optional[List[str]] = None
     selected_performance_metrics_kpis: Optional[List[str]] = None
+    show_change_period: Optional[Dict[str, bool]] = Field(None, description="Per-section flags for showing change period indicators")
     executive_summary: Optional[Dict[str, Any]] = Field(None, description="Executive summary data (structured JSON)")
 
 @router.get("/data/brands")
@@ -6144,6 +6146,7 @@ async def upsert_dashboard_link_for_client(
         visible_sections=request.visible_sections,
         selected_charts=request.selected_charts,
         selected_performance_metrics_kpis=request.selected_performance_metrics_kpis,
+        show_change_period=request.show_change_period,
         executive_summary=request.executive_summary
     )
 
@@ -6202,6 +6205,8 @@ async def update_dashboard_link(
         update_data["selected_charts"] = request.selected_charts
     if request.selected_performance_metrics_kpis is not None:
         update_data["selected_performance_metrics_kpis"] = request.selected_performance_metrics_kpis
+    if request.show_change_period is not None:
+        update_data["show_change_period"] = request.show_change_period
     if request.executive_summary is not None:
         update_data["executive_summary"] = request.executive_summary
     

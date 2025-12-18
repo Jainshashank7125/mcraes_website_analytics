@@ -246,6 +246,7 @@ class DashboardLinkKPISelection(Base):
     visible_sections = Column(ARRAY(String), nullable=False, default=['ga4', 'scrunch_ai', 'brand_analytics', 'advanced_analytics', 'keywords'])
     selected_charts = Column(ARRAY(String), nullable=False, default=[])
     selected_performance_metrics_kpis = Column(ARRAY(String), nullable=False, default=[])
+    show_change_period = Column(JSON, nullable=True)  # JSON object: {"ga4": true, "agency_analytics": true, ...}
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

@@ -334,8 +334,12 @@ function ReportingDashboard({
   const [selectedKPIs, setSelectedKPIs] = useState(new Set(KPI_ORDER));
   const [tempSelectedKPIs, setTempSelectedKPIs] = useState(new Set(KPI_ORDER)); // For dialog
   // All Performance Metrics section KPI selections (independent from section-specific KPIs)
-  const [selectedPerformanceMetricsKPIs, setSelectedPerformanceMetricsKPIs] = useState(new Set(KPI_ORDER));
-  const [tempSelectedPerformanceMetricsKPIs, setTempSelectedPerformanceMetricsKPIs] = useState(new Set(KPI_ORDER)); // For dialog
+  const [selectedPerformanceMetricsKPIs, setSelectedPerformanceMetricsKPIs] =
+    useState(new Set(KPI_ORDER));
+  const [
+    tempSelectedPerformanceMetricsKPIs,
+    setTempSelectedPerformanceMetricsKPIs,
+  ] = useState(new Set(KPI_ORDER)); // For dialog
   const [showKPISelector, setShowKPISelector] = useState(false);
   const [expandedSections, setExpandedSections] = useState(
     new Set([
@@ -376,13 +380,13 @@ function ReportingDashboard({
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const [editingLink, setEditingLink] = useState(null);
   const [linkFormData, setLinkFormData] = useState({
-    name: '',
-    description: '',
-    start_date: '',
-    end_date: '',
+    name: "",
+    description: "",
+    start_date: "",
+    end_date: "",
     enabled: true,
-    expires_at: '',
-    slug: ''
+    expires_at: "",
+    slug: "",
   });
   const [metricsDialogOpen, setMetricsDialogOpen] = useState(false);
   const [selectedLinkForMetrics, setSelectedLinkForMetrics] = useState(null);
@@ -407,7 +411,8 @@ function ReportingDashboard({
   const [overviewCacheKey, setOverviewCacheKey] = useState(null); // Track cache key (clientId/brandId + date range)
   // Executive summary state (structured JSON, persisted per dashboard link)
   const [executiveSummary, setExecutiveSummary] = useState(null);
-  const [executiveSummaryCacheKey, setExecutiveSummaryCacheKey] = useState(null);
+  const [executiveSummaryCacheKey, setExecutiveSummaryCacheKey] =
+    useState(null);
   // Tab state for public dashboard
   const [activeTab, setActiveTab] = useState(0); // 0 = Executive Summary, 1 = Detailed Metrics
   const [expandedMetricsSources, setExpandedMetricsSources] = useState(
@@ -419,7 +424,8 @@ function ReportingDashboard({
   // Public KPI selections (loaded from database for public view)
   const [publicKPISelections, setPublicKPISelections] = useState(null);
   // Public performance metrics KPIs (loaded from database for public view)
-  const [publicPerformanceMetricsKPIs, setPublicPerformanceMetricsKPIs] = useState(null);
+  const [publicPerformanceMetricsKPIs, setPublicPerformanceMetricsKPIs] =
+    useState(null);
   // Section visibility state (for authenticated users to configure)
   // Only 4 main sections: ga4, agency_analytics, scrunch_ai, all_performance_metrics
   const [visibleSections, setVisibleSections] = useState(
@@ -441,9 +447,23 @@ function ReportingDashboard({
   // Chart/visualization selections (for each section)
   const [selectedCharts, setSelectedCharts] = useState(new Set());
   const [tempSelectedCharts, setTempSelectedCharts] = useState(new Set()); // For dialog
+  // Show change period flags per section
+  const [showChangePeriod, setShowChangePeriod] = useState({
+    ga4: true,
+    agency_analytics: true,
+    scrunch_ai: true,
+    all_performance_metrics: true
+  });
+  const [tempShowChangePeriod, setTempShowChangePeriod] = useState({
+    ga4: true,
+    agency_analytics: true,
+    scrunch_ai: true,
+    all_performance_metrics: true
+  }); // For dialog
   // Public section visibility and chart selections (loaded from database for public view)
   const [publicVisibleSections, setPublicVisibleSections] = useState(null);
   const [publicSelectedCharts, setPublicSelectedCharts] = useState(null);
+  const [publicShowChangePeriod, setPublicShowChangePeriod] = useState(null);
   const theme = useTheme();
 
   // Derive client id for prompts analytics in public mode (dashboard link slug) or auth mode
@@ -504,34 +524,70 @@ function ReportingDashboard({
     }
   }, [selectedClientId, isPublic]);
 
-  // Load executive summary from dashboard link (public mode) and generate if missing
+  // Load executive summary and KPI selections from dashboard link (public mode)
   useEffect(() => {
     if (isPublic && publicBrandInfo?.dashboard_link) {
       const dashboardLink = publicBrandInfo.dashboard_link;
-      
+
       if (dashboardLink.executive_summary) {
         // Executive summary exists, load it
-        debugLog("Loading executive summary from dashboard link (public view)", { 
-          linkId: dashboardLink.id 
-        });
+        debugLog(
+          "Loading executive summary from dashboard link (public view)",
+          {
+            linkId: dashboardLink.id,
+          }
+        );
         setExecutiveSummary(dashboardLink.executive_summary);
         setExecutiveSummaryCacheKey(`link-${dashboardLink.id}`);
         // Set default tab to Executive Summary for public view
         setActiveTab(0);
       } else {
         // No executive summary found, need to generate it
-        debugLog("No executive summary found in dashboard link (public view), will generate on demand", {
-          linkId: dashboardLink.id
-        });
+        debugLog(
+          "No executive summary found in dashboard link (public view), will generate on demand",
+          {
+            linkId: dashboardLink.id,
+          }
+        );
         setExecutiveSummary(null);
         setExecutiveSummaryCacheKey(null);
         // Default to Executive Summary tab (will show "not available" message initially)
         setActiveTab(0);
-        
+
         // Generate executive summary if dashboard data is available
         // This will be called when dashboardData is loaded
-        if (dashboardData && dashboardData.kpis && Object.keys(dashboardData.kpis).length > 0) {
+        if (
+          dashboardData &&
+          dashboardData.kpis &&
+          Object.keys(dashboardData.kpis).length > 0
+        ) {
           generateOverviewForPublicLink(dashboardLink.id);
+        }
+      }
+
+      // Load KPI selections from dashboard link
+      if (dashboardLink.kpi_selection) {
+        const kpiSelection = dashboardLink.kpi_selection;
+        
+        if (kpiSelection.selected_kpis && Array.isArray(kpiSelection.selected_kpis)) {
+          setPublicKPISelections(new Set(kpiSelection.selected_kpis));
+        }
+        
+        if (kpiSelection.selected_performance_metrics_kpis && Array.isArray(kpiSelection.selected_performance_metrics_kpis)) {
+          setPublicPerformanceMetricsKPIs(new Set(kpiSelection.selected_performance_metrics_kpis));
+        }
+        
+        if (kpiSelection.visible_sections && Array.isArray(kpiSelection.visible_sections)) {
+          setPublicVisibleSections(new Set(kpiSelection.visible_sections));
+        }
+        
+        if (kpiSelection.selected_charts && Array.isArray(kpiSelection.selected_charts)) {
+          setPublicSelectedCharts(new Set(kpiSelection.selected_charts));
+        }
+
+        // Load show_change_period flags
+        if (kpiSelection.show_change_period) {
+          setPublicShowChangePeriod(kpiSelection.show_change_period);
         }
       }
     }
@@ -840,59 +896,69 @@ function ReportingDashboard({
 
   // Auto-save executive summary to matching dashboard link
   const saveExecutiveSummaryToMatchingLink = async (summary) => {
-    if (!selectedClientId || !startDate || !endDate || !dashboardLinks || dashboardLinks.length === 0) {
+    if (
+      !selectedClientId ||
+      !startDate ||
+      !endDate ||
+      !dashboardLinks ||
+      dashboardLinks.length === 0
+    ) {
       debugLog("Cannot auto-save executive summary - missing requirements", {
         hasClientId: !!selectedClientId,
         hasStartDate: !!startDate,
         hasEndDate: !!endDate,
         hasLinks: !!dashboardLinks,
-        linksCount: dashboardLinks?.length || 0
+        linksCount: dashboardLinks?.length || 0,
       });
       return;
     }
 
     try {
       // Find matching dashboard link by date range
-      const matchingLink = dashboardLinks.find(link => {
-        const linkStart = link.start_date ? new Date(link.start_date).toISOString().split('T')[0] : null;
-        const linkEnd = link.end_date ? new Date(link.end_date).toISOString().split('T')[0] : null;
+      const matchingLink = dashboardLinks.find((link) => {
+        const linkStart = link.start_date
+          ? new Date(link.start_date).toISOString().split("T")[0]
+          : null;
+        const linkEnd = link.end_date
+          ? new Date(link.end_date).toISOString().split("T")[0]
+          : null;
         return linkStart === startDate && linkEnd === endDate;
       });
 
       if (matchingLink && matchingLink.id) {
-        debugLog("Auto-saving executive summary to matching dashboard link", { 
+        debugLog("Auto-saving executive summary to matching dashboard link", {
           linkId: matchingLink.id,
           slug: matchingLink.slug,
           startDate,
-          endDate
+          endDate,
         });
-        
+
         await clientAPI.updateDashboardLink(selectedClientId, matchingLink.id, {
-          executive_summary: summary
+          executive_summary: summary,
         });
-        
+
         // Update the link in local state
-        const updatedLinks = dashboardLinks.map(link => 
-          link.id === matchingLink.id 
+        const updatedLinks = dashboardLinks.map((link) =>
+          link.id === matchingLink.id
             ? { ...link, executive_summary: summary }
             : link
         );
         setDashboardLinks(updatedLinks);
-        
-        debugLog("Executive summary saved to dashboard link successfully", { 
+
+        debugLog("Executive summary saved to dashboard link successfully", {
           linkId: matchingLink.id,
-          slug: matchingLink.slug
+          slug: matchingLink.slug,
         });
       } else {
-        debugLog("No matching dashboard link found for auto-save", { 
-          startDate, 
+        debugLog("No matching dashboard link found for auto-save", {
+          startDate,
           endDate,
-          availableLinks: dashboardLinks.map(l => ({
+          availableLinks: dashboardLinks.map((l) => ({
             id: l.id,
             slug: l.slug,
             start: l.start_date,
-            end: l.end_date
-          }))
+            end: l.end_date,
+          })),
         });
       }
     } catch (err) {
@@ -903,7 +969,11 @@ function ReportingDashboard({
 
   // Generate overview for public dashboard link and save it
   const generateOverviewForPublicLink = async (linkId) => {
-    if (!dashboardData || !dashboardData.kpis || Object.keys(dashboardData.kpis).length === 0) {
+    if (
+      !dashboardData ||
+      !dashboardData.kpis ||
+      Object.keys(dashboardData.kpis).length === 0
+    ) {
       return;
     }
 
@@ -923,37 +993,39 @@ function ReportingDashboard({
 
     try {
       // Get client_id or brand_id from publicBrandInfo
-      const clientId = publicBrandInfo?.clientData?.id || publicBrandInfo?.dashboard_link?.client_id;
+      const clientId =
+        publicBrandInfo?.clientData?.id ||
+        publicBrandInfo?.dashboard_link?.client_id;
       const brandId = publicBrandInfo?.scrunch_brand_id || publicBrandInfo?.id;
-      
+
       // Use dates ONLY from the dashboard link, not from URL params or state
       const linkStartDate = publicBrandInfo?.dashboard_link?.start_date;
       const linkEndDate = publicBrandInfo?.dashboard_link?.end_date;
-      
-      debugLog("Generating executive summary for public dashboard link", { 
-        linkId, 
-        clientId, 
+
+      debugLog("Generating executive summary for public dashboard link", {
+        linkId,
+        clientId,
         brandId,
         startDate: linkStartDate,
-        endDate: linkEndDate
+        endDate: linkEndDate,
       });
-      
+
       const overview = await openaiAPI.getOverallOverview(
         clientId || undefined,
         brandId || undefined,
         linkStartDate || undefined,
         linkEndDate || undefined
       );
-      
+
       if (overview.executive_summary) {
         // Store executive summary in state
         setExecutiveSummary(overview.executive_summary);
         setExecutiveSummaryCacheKey(`link-${linkId}`);
-        
+
         // Also set overviewData for consistency
         setOverviewData(overview);
         setOverviewCacheKey(`link-${linkId}`);
-        
+
         // Try to save the executive summary to the dashboard link
         // Note: This requires authentication, so it will fail in public view
         // In that case, the summary will still be displayed for this session but not persisted
@@ -962,19 +1034,25 @@ function ReportingDashboard({
         if (clientId && linkId) {
           try {
             await clientAPI.updateDashboardLink(clientId, linkId, {
-              executive_summary: overview.executive_summary
+              executive_summary: overview.executive_summary,
             });
             debugLog("Executive summary saved to dashboard link", { linkId });
           } catch (saveErr) {
             // This is expected in public view - summary is displayed but not persisted
             // Admins should generate and save summaries when creating/updating links
-            debugLog("Could not save executive summary to dashboard link (authentication required). Summary is displayed for this session only.", { 
-              linkId,
-              error: saveErr.message 
-            });
+            debugLog(
+              "Could not save executive summary to dashboard link (authentication required). Summary is displayed for this session only.",
+              {
+                linkId,
+                error: saveErr.message,
+              }
+            );
           }
         } else {
-          debugLog("Cannot save executive summary - missing clientId or linkId", { clientId, linkId });
+          debugLog(
+            "Cannot save executive summary - missing clientId or linkId",
+            { clientId, linkId }
+          );
         }
       }
     } catch (err) {
@@ -1025,14 +1103,21 @@ function ReportingDashboard({
       setOverviewData(overview);
       setOverviewCacheKey(cacheKey);
       setExpandedMetricsSources(new Set()); // Reset expanded state when new overview is loaded
-      
+
       // Store executive summary from response (structured JSON)
       if (overview.executive_summary) {
         setExecutiveSummary(overview.executive_summary);
         setExecutiveSummaryCacheKey(cacheKey);
-        
+
         // Auto-save executive summary to matching dashboard link (admin view only)
-        if (!isPublic && selectedClientId && startDate && endDate && dashboardLinks && dashboardLinks.length > 0) {
+        if (
+          !isPublic &&
+          selectedClientId &&
+          startDate &&
+          endDate &&
+          dashboardLinks &&
+          dashboardLinks.length > 0
+        ) {
           saveExecutiveSummaryToMatchingLink(overview.executive_summary);
         }
       }
@@ -1065,19 +1150,29 @@ function ReportingDashboard({
 
     // First, check if executive summary exists in the currently editing dashboard link (admin view)
     if (!isPublic && editingLink && editingLink.executive_summary) {
-      debugLog("Loading executive summary from editing dashboard link", { linkId: editingLink.id });
+      debugLog("Loading executive summary from editing dashboard link", {
+        linkId: editingLink.id,
+      });
       setExecutiveSummary(editingLink.executive_summary);
       setExecutiveSummaryCacheKey(`link-${editingLink.id}`);
       // Also set overviewData for backward compatibility with dialog
       setOverviewData({
         executive_summary: editingLink.executive_summary,
         date_range: { start_date: startDate, end_date: endDate },
-        total_metrics_analyzed: dashboardData.kpis ? Object.keys(dashboardData.kpis).length : 0,
+        total_metrics_analyzed: dashboardData.kpis
+          ? Object.keys(dashboardData.kpis).length
+          : 0,
         metrics_by_source: {
-          GA4: Object.values(dashboardData.kpis || {}).filter(k => k.source === "GA4").length,
-          AgencyAnalytics: Object.values(dashboardData.kpis || {}).filter(k => k.source === "AgencyAnalytics").length,
-          Scrunch: Object.values(dashboardData.kpis || {}).filter(k => k.source === "Scrunch").length,
-        }
+          GA4: Object.values(dashboardData.kpis || {}).filter(
+            (k) => k.source === "GA4"
+          ).length,
+          AgencyAnalytics: Object.values(dashboardData.kpis || {}).filter(
+            (k) => k.source === "AgencyAnalytics"
+          ).length,
+          Scrunch: Object.values(dashboardData.kpis || {}).filter(
+            (k) => k.source === "Scrunch"
+          ).length,
+        },
       });
       setOverviewCacheKey(cacheKey);
       setShowOverviewDialog(true);
@@ -1085,31 +1180,56 @@ function ReportingDashboard({
     }
 
     // Check if there's a dashboard link with matching date range that has executive summary (admin view)
-    if (!isPublic && dashboardLinks && dashboardLinks.length > 0 && startDate && endDate) {
-      const matchingLink = dashboardLinks.find(link => {
-        const linkStart = link.start_date ? new Date(link.start_date).toISOString().split('T')[0] : null;
-        const linkEnd = link.end_date ? new Date(link.end_date).toISOString().split('T')[0] : null;
-        return linkStart === startDate && linkEnd === endDate && link.executive_summary;
+    if (
+      !isPublic &&
+      dashboardLinks &&
+      dashboardLinks.length > 0 &&
+      startDate &&
+      endDate
+    ) {
+      const matchingLink = dashboardLinks.find((link) => {
+        const linkStart = link.start_date
+          ? new Date(link.start_date).toISOString().split("T")[0]
+          : null;
+        const linkEnd = link.end_date
+          ? new Date(link.end_date).toISOString().split("T")[0]
+          : null;
+        return (
+          linkStart === startDate &&
+          linkEnd === endDate &&
+          link.executive_summary
+        );
       });
-      
+
       if (matchingLink && matchingLink.executive_summary) {
-        debugLog("Loading executive summary from matching dashboard link by date range", { 
-          linkId: matchingLink.id,
-          startDate: startDate,
-          endDate: endDate
-        });
+        debugLog(
+          "Loading executive summary from matching dashboard link by date range",
+          {
+            linkId: matchingLink.id,
+            startDate: startDate,
+            endDate: endDate,
+          }
+        );
         setExecutiveSummary(matchingLink.executive_summary);
         setExecutiveSummaryCacheKey(`link-${matchingLink.id}`);
         // Also set overviewData for backward compatibility with dialog
         setOverviewData({
           executive_summary: matchingLink.executive_summary,
           date_range: { start_date: startDate, end_date: endDate },
-          total_metrics_analyzed: dashboardData.kpis ? Object.keys(dashboardData.kpis).length : 0,
+          total_metrics_analyzed: dashboardData.kpis
+            ? Object.keys(dashboardData.kpis).length
+            : 0,
           metrics_by_source: {
-            GA4: Object.values(dashboardData.kpis || {}).filter(k => k.source === "GA4").length,
-            AgencyAnalytics: Object.values(dashboardData.kpis || {}).filter(k => k.source === "AgencyAnalytics").length,
-            Scrunch: Object.values(dashboardData.kpis || {}).filter(k => k.source === "Scrunch").length,
-          }
+            GA4: Object.values(dashboardData.kpis || {}).filter(
+              (k) => k.source === "GA4"
+            ).length,
+            AgencyAnalytics: Object.values(dashboardData.kpis || {}).filter(
+              (k) => k.source === "AgencyAnalytics"
+            ).length,
+            Scrunch: Object.values(dashboardData.kpis || {}).filter(
+              (k) => k.source === "Scrunch"
+            ).length,
+          },
         });
         setOverviewCacheKey(cacheKey);
         setShowOverviewDialog(true);
@@ -1142,7 +1262,9 @@ function ReportingDashboard({
     }
 
     // If no executive summary found, fetch it from API
-    debugLog("No executive summary found in dashboard link, calling API to generate");
+    debugLog(
+      "No executive summary found in dashboard link, calling API to generate"
+    );
     setShowOverviewDialog(true);
     generateOverviewAutomatically();
   };
@@ -1642,11 +1764,11 @@ function ReportingDashboard({
     switch (sectionKey) {
       case "ga4":
         return [
-          {
-            key: "ga4_traffic_overview",
-            label: "Traffic Overview",
-            description: "Overall traffic metrics",
-          },
+          // {
+          //   key: "ga4_traffic_overview",
+          //   label: "Traffic Overview",
+          //   description: "Overall traffic metrics",
+          // },
           {
             key: "ga4_daily_comparison",
             label: "Daily Comparison",
@@ -1823,9 +1945,12 @@ function ReportingDashboard({
     // Only update state - don't save to database
     // KPI selections will be saved when creating/updating a dashboard link
     setSelectedKPIs(new Set(tempSelectedKPIs));
-    setSelectedPerformanceMetricsKPIs(new Set(tempSelectedPerformanceMetricsKPIs));
+    setSelectedPerformanceMetricsKPIs(
+      new Set(tempSelectedPerformanceMetricsKPIs)
+    );
     setVisibleSections(new Set(tempVisibleSections));
     setSelectedCharts(new Set(tempSelectedCharts));
+    setShowChangePeriod({ ...tempShowChangePeriod });
     setShowKPISelector(false);
     setError(null); // Clear any previous errors
     debugLog("KPI, section, and chart selections updated in state", {
@@ -1833,15 +1958,33 @@ function ReportingDashboard({
       performanceMetricsKPICount: tempSelectedPerformanceMetricsKPIs.size,
       sectionCount: tempVisibleSections.size,
       chartCount: tempSelectedCharts.size,
+      showChangePeriod: tempShowChangePeriod,
     });
   };
 
   const handleOpenKPISelector = () => {
     // Initialize temp selection with current selection
     setTempSelectedKPIs(new Set(selectedKPIs));
-    setTempSelectedPerformanceMetricsKPIs(new Set(selectedPerformanceMetricsKPIs));
+    setTempSelectedPerformanceMetricsKPIs(
+      new Set(selectedPerformanceMetricsKPIs)
+    );
     setTempVisibleSections(new Set(visibleSections));
-    setTempSelectedCharts(new Set(selectedCharts));
+    
+    // If no charts are selected, select all charts by default
+    const chartsToSelect = selectedCharts.size > 0 
+      ? new Set(selectedCharts)
+      : (() => {
+          const allCharts = new Set();
+          ["ga4", "agency_analytics", "scrunch_ai", "all_performance_metrics"].forEach((sectionKey) => {
+            getDashboardSectionCharts(sectionKey).forEach((chart) => {
+              allCharts.add(chart.key);
+            });
+          });
+          return allCharts;
+        })();
+    setTempSelectedCharts(chartsToSelect);
+    
+    setTempShowChangePeriod({ ...showChangePeriod });
     // Expand all sections by default
     setExpandedSections(
       new Set([
@@ -1876,13 +2019,13 @@ function ReportingDashboard({
     setExecutiveSummaryCacheKey(null);
     // Use current date range from dashboard (startDate and endDate are already strings)
     setLinkFormData({
-      name: '',
-      description: '',
-      start_date: startDate || '',
-      end_date: endDate || '',
+      name: "",
+      description: "",
+      start_date: startDate || "",
+      end_date: endDate || "",
       enabled: true,
-      expires_at: '',
-      slug: ''
+      expires_at: "",
+      slug: "",
     });
     setLinkDialogOpen(true);
   };
@@ -1890,120 +2033,175 @@ function ReportingDashboard({
   // Reset KPI selections to default (all selected) and clear dropdown selection
   const handleResetKPISelections = () => {
     debugLog("Resetting KPI selections to default (all selected)");
-    
+
     // Reset to all KPIs selected
     setSelectedKPIs(new Set(KPI_ORDER));
     setTempSelectedKPIs(new Set(KPI_ORDER));
     setSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
     setTempSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
-    
+
     // Reset to all sections visible
-    setVisibleSections(new Set(["ga4", "agency_analytics", "scrunch_ai", "all_performance_metrics"]));
-    
-    // Clear charts selection
-    setSelectedCharts(new Set());
-    
+    setVisibleSections(
+      new Set([
+        "ga4",
+        "agency_analytics",
+        "scrunch_ai",
+        "all_performance_metrics",
+      ])
+    );
+
+    // Select all charts by default
+    const allCharts = new Set();
+    ["ga4", "agency_analytics", "scrunch_ai", "all_performance_metrics"].forEach((sectionKey) => {
+      getDashboardSectionCharts(sectionKey).forEach((chart) => {
+        allCharts.add(chart.key);
+      });
+    });
+    setSelectedCharts(allCharts);
+    setTempSelectedCharts(new Set(allCharts));
+
+    // Reset change period flags to all true
+    const defaultShowChangePeriod = {
+      ga4: true,
+      agency_analytics: true,
+      scrunch_ai: true,
+      all_performance_metrics: true
+    };
+    setShowChangePeriod(defaultShowChangePeriod);
+    setTempShowChangePeriod(defaultShowChangePeriod);
+
     // Clear executive summary
     setExecutiveSummary(null);
     setExecutiveSummaryCacheKey(null);
-    
+
     // Clear dropdown selection
     setEditingLink(null);
     setLinkFormData({
-      name: '',
-      description: '',
-      start_date: startDate || '',
-      end_date: endDate || '',
+      name: "",
+      description: "",
+      start_date: startDate || "",
+      end_date: endDate || "",
       enabled: true,
-      expires_at: '',
-      slug: ''
+      expires_at: "",
+      slug: "",
     });
-    
+
     // Close dialog if open
     setLinkDialogOpen(false);
-    
+
     debugLog("KPI selections reset to default");
   };
 
   const handleEditLink = (link) => {
     setEditingLink(link);
-    
+
     // Load executive summary from the link if it exists
     if (link.executive_summary) {
-      debugLog("Loading executive summary from dashboard link for editing", { linkId: link.id });
+      debugLog("Loading executive summary from dashboard link for editing", {
+        linkId: link.id,
+      });
       setExecutiveSummary(link.executive_summary);
       setExecutiveSummaryCacheKey(`link-${link.id}`);
     } else {
       // Clear executive summary if link doesn't have one
-      debugLog("No executive summary in dashboard link, will generate on demand", { linkId: link.id });
+      debugLog(
+        "No executive summary in dashboard link, will generate on demand",
+        { linkId: link.id }
+      );
       setExecutiveSummary(null);
       setExecutiveSummaryCacheKey(null);
     }
-    
+
     // Load KPI selections from the link and override current selections
     if (link.kpi_selection) {
-      debugLog("Loading KPI selections from dashboard link", { 
+      debugLog("Loading KPI selections from dashboard link", {
         linkId: link.id,
         selectedKPIs: link.kpi_selection.selected_kpis,
         visibleSections: link.kpi_selection.visible_sections,
         selectedCharts: link.kpi_selection.selected_charts,
-        selectedPerformanceMetricsKPIs: link.kpi_selection.selected_performance_metrics_kpis
+        selectedPerformanceMetricsKPIs:
+          link.kpi_selection.selected_performance_metrics_kpis,
       });
-      
+
       // Override current KPI selections with link's selections
-      if (link.kpi_selection.selected_kpis && Array.isArray(link.kpi_selection.selected_kpis)) {
+      if (
+        link.kpi_selection.selected_kpis &&
+        Array.isArray(link.kpi_selection.selected_kpis)
+      ) {
         setSelectedKPIs(new Set(link.kpi_selection.selected_kpis));
         setTempSelectedKPIs(new Set(link.kpi_selection.selected_kpis));
       }
-      
-      if (link.kpi_selection.selected_performance_metrics_kpis && Array.isArray(link.kpi_selection.selected_performance_metrics_kpis)) {
-        setSelectedPerformanceMetricsKPIs(new Set(link.kpi_selection.selected_performance_metrics_kpis));
-        setTempSelectedPerformanceMetricsKPIs(new Set(link.kpi_selection.selected_performance_metrics_kpis));
+
+      if (
+        link.kpi_selection.selected_performance_metrics_kpis &&
+        Array.isArray(link.kpi_selection.selected_performance_metrics_kpis)
+      ) {
+        setSelectedPerformanceMetricsKPIs(
+          new Set(link.kpi_selection.selected_performance_metrics_kpis)
+        );
+        setTempSelectedPerformanceMetricsKPIs(
+          new Set(link.kpi_selection.selected_performance_metrics_kpis)
+        );
       }
-      
-      if (link.kpi_selection.visible_sections && Array.isArray(link.kpi_selection.visible_sections)) {
+
+      if (
+        link.kpi_selection.visible_sections &&
+        Array.isArray(link.kpi_selection.visible_sections)
+      ) {
         setVisibleSections(new Set(link.kpi_selection.visible_sections));
       }
-      
-      if (link.kpi_selection.selected_charts && Array.isArray(link.kpi_selection.selected_charts)) {
+
+      if (
+        link.kpi_selection.selected_charts &&
+        Array.isArray(link.kpi_selection.selected_charts)
+      ) {
         setSelectedCharts(new Set(link.kpi_selection.selected_charts));
       }
+
+      // Load show_change_period flags if available
+      if (link.kpi_selection.show_change_period) {
+        setShowChangePeriod(link.kpi_selection.show_change_period);
+        setTempShowChangePeriod(link.kpi_selection.show_change_period);
+      }
     } else {
-      debugLog("No KPI selections found in dashboard link, keeping current selections", { linkId: link.id });
+      debugLog(
+        "No KPI selections found in dashboard link, keeping current selections",
+        { linkId: link.id }
+      );
     }
-    
+
     // Format expires_at for datetime-local input (YYYY-MM-DDTHH:mm)
-    let expiresAtFormatted = '';
+    let expiresAtFormatted = "";
     if (link.expires_at) {
       const expiresDate = new Date(link.expires_at);
       const year = expiresDate.getFullYear();
-      const month = String(expiresDate.getMonth() + 1).padStart(2, '0');
-      const day = String(expiresDate.getDate()).padStart(2, '0');
-      const hours = String(expiresDate.getHours()).padStart(2, '0');
-      const minutes = String(expiresDate.getMinutes()).padStart(2, '0');
+      const month = String(expiresDate.getMonth() + 1).padStart(2, "0");
+      const day = String(expiresDate.getDate()).padStart(2, "0");
+      const hours = String(expiresDate.getHours()).padStart(2, "0");
+      const minutes = String(expiresDate.getMinutes()).padStart(2, "0");
       expiresAtFormatted = `${year}-${month}-${day}T${hours}:${minutes}`;
     }
     // Format start_date and end_date for date input (YYYY-MM-DD)
     const formatDateForInput = (dateString) => {
-      if (!dateString) return '';
+      if (!dateString) return "";
       try {
         const date = new Date(dateString);
         const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, "0");
+        const day = String(date.getDate()).padStart(2, "0");
         return `${year}-${month}-${day}`;
       } catch {
-        return dateString.split('T')[0] || '';
+        return dateString.split("T")[0] || "";
       }
     };
     setLinkFormData({
-      name: link.name || '',
-      description: link.description || '',
+      name: link.name || "",
+      description: link.description || "",
       start_date: formatDateForInput(link.start_date),
       end_date: formatDateForInput(link.end_date),
       enabled: link.enabled !== undefined ? link.enabled : true,
       expires_at: expiresAtFormatted,
-      slug: link.slug || ''
+      slug: link.slug || "",
     });
     // Don't open dialog automatically - user will click "Edit Link" button to open it
   };
@@ -2012,7 +2210,7 @@ function ReportingDashboard({
   const handleOpenEditDialog = () => {
     if (editingLink) {
       // Dialog form data is already set when link was selected
-      setLinkDialogOpen(true);
+    setLinkDialogOpen(true);
     } else {
       // No link selected, create new one
       handleCreateLink();
@@ -2043,10 +2241,13 @@ function ReportingDashboard({
       
       // Include current KPI selections from state
       payload.selected_kpis = Array.from(selectedKPIs);
-      payload.selected_performance_metrics_kpis = Array.from(selectedPerformanceMetricsKPIs);
+      payload.selected_performance_metrics_kpis = Array.from(
+        selectedPerformanceMetricsKPIs
+      );
       payload.visible_sections = Array.from(visibleSections);
       payload.selected_charts = Array.from(selectedCharts);
-      
+      payload.show_change_period = showChangePeriod;
+
       // Include executive summary if available (from local state or overviewData)
       // Check both executiveSummary state and overviewData.executive_summary
       const summaryToSave = executiveSummary || overviewData?.executive_summary;
@@ -2055,19 +2256,23 @@ function ReportingDashboard({
         debugLog("Including executive summary in save payload", {
           hasExecutiveSummary: !!executiveSummary,
           hasOverviewData: !!overviewData?.executive_summary,
-          linkId: editingLink?.id
+          linkId: editingLink?.id,
         });
       } else {
         debugLog("No executive summary available to save", {
           hasExecutiveSummary: !!executiveSummary,
           hasOverviewData: !!overviewData?.executive_summary,
-          linkId: editingLink?.id
+          linkId: editingLink?.id,
         });
       }
       
       if (editingLink) {
         // Update existing link
-        await clientAPI.updateDashboardLink(selectedClientId, editingLink.id, payload);
+        await clientAPI.updateDashboardLink(
+          selectedClientId,
+          editingLink.id,
+          payload
+        );
         setError(null);
         debugLog("Dashboard link updated successfully");
       } else {
@@ -2087,7 +2292,11 @@ function ReportingDashboard({
       // The dropdown will show the selected link, and clicking "Edit Link" will reopen the dialog
     } catch (err) {
       debugError("Error saving dashboard link:", err);
-      setError(err.response?.data?.detail || err.message || "Failed to save dashboard link");
+      setError(
+        err.response?.data?.detail ||
+          err.message ||
+          "Failed to save dashboard link"
+      );
     } finally {
       setLoading(false);
     }
@@ -2095,7 +2304,11 @@ function ReportingDashboard({
 
   const handleDeleteLink = async (linkId) => {
     if (!selectedClientId) return;
-    if (!window.confirm("Are you sure you want to delete this dashboard link? This action cannot be undone.")) {
+    if (
+      !window.confirm(
+        "Are you sure you want to delete this dashboard link? This action cannot be undone."
+      )
+    ) {
       return;
     }
     
@@ -2106,7 +2319,11 @@ function ReportingDashboard({
       await loadDashboardLinks();
     } catch (err) {
       debugError("Error deleting dashboard link:", err);
-      setError(err.response?.data?.detail || err.message || "Failed to delete dashboard link");
+      setError(
+        err.response?.data?.detail ||
+          err.message ||
+          "Failed to delete dashboard link"
+      );
     } finally {
       setLoading(false);
     }
@@ -2117,13 +2334,15 @@ function ReportingDashboard({
     setLoading(true);
     try {
       await clientAPI.updateDashboardLink(selectedClientId, link.id, {
-        enabled: !link.enabled
+        enabled: !link.enabled,
       });
       setError(null);
       await loadDashboardLinks();
     } catch (err) {
       debugError("Error toggling link enabled:", err);
-      setError(err.response?.data?.detail || err.message || "Failed to update link");
+      setError(
+        err.response?.data?.detail || err.message || "Failed to update link"
+      );
     } finally {
       setLoading(false);
     }
@@ -2135,7 +2354,10 @@ function ReportingDashboard({
     setLoadingMetrics(true);
     setMetricsDialogOpen(true);
     try {
-      const metrics = await clientAPI.getDashboardLinkMetrics(selectedClientId, link.id);
+      const metrics = await clientAPI.getDashboardLinkMetrics(
+        selectedClientId,
+        link.id
+      );
       setLinkMetrics(metrics);
     } catch (err) {
       debugError("Error loading link metrics:", err);
@@ -2151,7 +2373,9 @@ function ReportingDashboard({
     setMetricsDialogOpen(true);
     setSelectedLinkForMetrics(null);
     try {
-      const metrics = await clientAPI.getDashboardLinksMetrics(selectedClientId);
+      const metrics = await clientAPI.getDashboardLinksMetrics(
+        selectedClientId
+      );
       setAllLinksMetrics(metrics);
     } catch (err) {
       debugError("Error loading all links metrics:", err);
@@ -2161,14 +2385,16 @@ function ReportingDashboard({
     }
   };
 
-
   const handleCopyLinkUrl = (link) => {
     const baseUrl = window.location.origin;
     const url = `${baseUrl}/reporting/client/${link.slug}`;
-    navigator.clipboard.writeText(url).then(() => {
+    navigator.clipboard
+      .writeText(url)
+      .then(() => {
       setError(null);
       debugLog("Link URL copied to clipboard");
-    }).catch(() => {
+      })
+      .catch(() => {
       setError("Failed to copy URL");
     });
   };
@@ -2176,7 +2402,10 @@ function ReportingDashboard({
   // Helper function to check if a section should be visible
   const isSectionVisible = (sectionKey) => {
     // brand_analytics and advanced_analytics are now sub-sections under scrunch_ai
-    if (sectionKey === "brand_analytics" || sectionKey === "advanced_analytics") {
+    if (
+      sectionKey === "brand_analytics" ||
+      sectionKey === "advanced_analytics"
+    ) {
       return isSectionVisible("scrunch_ai");
     }
     
@@ -2250,6 +2479,20 @@ function ReportingDashboard({
   };
 
   // Helper function to check if a specific KPI should be shown in public view
+  // Helper function to check if change period should be shown for a section
+  const shouldShowChangePeriod = (sectionKey) => {
+    if (isPublic) {
+      // In public mode, check publicShowChangePeriod from dashboard link
+      if (publicShowChangePeriod === null) {
+        return true; // Default to showing change period if not set
+      }
+      return publicShowChangePeriod[sectionKey] !== false; // Show if true or undefined
+    } else {
+      // In authenticated mode, check showChangePeriod state
+      return showChangePeriod[sectionKey] !== false; // Show if true or undefined
+    }
+  };
+
   const shouldShowKPI = (kpiKey) => {
     if (!isPublic) {
       // In authenticated mode, always show KPIs (filtered by selectedKPIs)
@@ -2311,6 +2554,13 @@ function ReportingDashboard({
     setTempVisibleSections(allSections);
     setTempSelectedKPIs(allKPIs);
     setTempSelectedCharts(allCharts);
+    // Also set all change period flags to true
+    setTempShowChangePeriod({
+      ga4: true,
+      agency_analytics: true,
+      scrunch_ai: true,
+      all_performance_metrics: true
+    });
   };
 
   const handleDeselectAllSections = () => {
@@ -2332,19 +2582,25 @@ function ReportingDashboard({
     Object.keys(allKPIs).length > 0
       ? isPublic
         ? // Public mode: Read from dashboard link
-          (publicPerformanceMetricsKPIs === null
+          publicPerformanceMetricsKPIs === null
             ? // No selection saved - show all available KPIs (default)
-              KPI_ORDER.filter((key) => allKPIs[key]).map((key) => [key, allKPIs[key]])
+            KPI_ORDER.filter((key) => allKPIs[key]).map((key) => [
+              key,
+              allKPIs[key],
+            ])
             : publicPerformanceMetricsKPIs.size === 0
             ? // Empty selection - admin explicitly deselected all
               []
             : // Show only selected KPIs from link
-              KPI_ORDER.filter((key) => allKPIs[key] && publicPerformanceMetricsKPIs.has(key))
-                .map((key) => [key, allKPIs[key]])
-          )
+            KPI_ORDER.filter(
+              (key) => allKPIs[key] && publicPerformanceMetricsKPIs.has(key)
+            ).map((key) => [key, allKPIs[key]])
         : // Admin mode: Use state (defaults to all KPIs)
           KPI_ORDER.filter(
-            (key) => allKPIs[key] && selectedPerformanceMetricsKPIs.has(key) && key !== "competitive_benchmarking"
+            (key) =>
+              allKPIs[key] &&
+              selectedPerformanceMetricsKPIs.has(key) &&
+              key !== "competitive_benchmarking"
           ).map((key) => [key, allKPIs[key]])
       : [];
 
@@ -2462,34 +2718,34 @@ function ReportingDashboard({
           <Box display="flex" gap={1.5} sx={{ flexShrink: 0 }}>
             {/* AI Overview button - only show in admin view */}
             {!isPublic && (
-              <Button
-                variant="contained"
-                size="small"
-                startIcon={<InsightsIcon sx={{ fontSize: 16 }} />}
-                onClick={handleOpenOverview}
-                disabled={
-                  !dashboardData ||
-                  !dashboardData.kpis ||
-                  Object.keys(dashboardData.kpis).length === 0
-                }
-                sx={{
-                  borderRadius: 2,
-                  px: 2,
-                  py: 0.75,
-                  fontWeight: 600,
-                  textTransform: "none",
-                  bgcolor: theme.palette.primary.main,
-                  "&:hover": {
-                    bgcolor: theme.palette.primary.dark,
-                  },
-                  "&:disabled": {
-                    bgcolor: alpha(theme.palette.primary.main, 0.3),
-                  },
-                }}
-                title="AI Overview of all metrics"
-              >
-                AI Overview
-              </Button>
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<InsightsIcon sx={{ fontSize: 16 }} />}
+              onClick={handleOpenOverview}
+              disabled={
+                !dashboardData ||
+                !dashboardData.kpis ||
+                Object.keys(dashboardData.kpis).length === 0
+              }
+              sx={{
+                borderRadius: 2,
+                px: 2,
+                py: 0.75,
+                fontWeight: 600,
+                textTransform: "none",
+                bgcolor: theme.palette.primary.main,
+                "&:hover": {
+                  bgcolor: theme.palette.primary.dark,
+                },
+                "&:disabled": {
+                  bgcolor: alpha(theme.palette.primary.main, 0.3),
+                },
+              }}
+              title="AI Overview of all metrics"
+            >
+              AI Overview
+            </Button>
             )}
             {!isPublic && (
               <IconButton
@@ -2509,21 +2765,21 @@ function ReportingDashboard({
             )}
             {/* Refresh button - only show in admin view */}
             {!isPublic && (
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={<RefreshIcon sx={{ fontSize: 16 }} />}
-                onClick={loadAllData}
-                sx={{
-                  borderRadius: 2,
-                  px: 2,
-                  py: 0.75,
-                  fontWeight: 600,
-                  bgcolor: "background.paper",
-                }}
-              >
-                Refresh
-              </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<RefreshIcon sx={{ fontSize: 16 }} />}
+              onClick={loadAllData}
+              sx={{
+                borderRadius: 2,
+                px: 2,
+                py: 0.75,
+                fontWeight: 600,
+                bgcolor: "background.paper",
+              }}
+            >
+              Refresh
+            </Button>
             )}
           </Box>
         </Box>
@@ -2612,7 +2868,7 @@ function ReportingDashboard({
                     label="Start Date"
                     type="date"
                     size="small"
-                    value={startDate || ''}
+                    value={startDate || ""}
                     onChange={(e) => {
                       if (e.target.value) {
                         setStartDate(e.target.value);
@@ -2626,7 +2882,7 @@ function ReportingDashboard({
                     label="End Date"
                     type="date"
                     size="small"
-                    value={endDate || ''}
+                    value={endDate || ""}
                     onChange={(e) => {
                       if (e.target.value) {
                         setEndDate(e.target.value);
@@ -2644,16 +2900,18 @@ function ReportingDashboard({
                     <FormControl size="small" sx={{ minWidth: 280 }}>
                       <InputLabel>Select or Create Link</InputLabel>
                       <Select
-                        value={editingLink?.id || ''}
+                        value={editingLink?.id || ""}
                         label="Select or Create Link"
                         onChange={(e) => {
                           const linkId = e.target.value;
-                          if (linkId === 'new') {
+                          if (linkId === "new") {
                             // Create new link
                             handleCreateLink();
                           } else if (linkId) {
                             // Edit existing link - automatically open dialog
-                            const selectedLink = dashboardLinks.find(link => link.id === linkId);
+                            const selectedLink = dashboardLinks.find(
+                              (link) => link.id === linkId
+                            );
                             if (selectedLink) {
                               handleEditLink(selectedLink);
                             }
@@ -2661,19 +2919,19 @@ function ReportingDashboard({
                             // Clear selection
                             setEditingLink(null);
                             setLinkFormData({
-                              name: '',
-                              description: '',
-                              start_date: startDate || '',
-                              end_date: endDate || '',
+                              name: "",
+                              description: "",
+                              start_date: startDate || "",
+                              end_date: endDate || "",
                               enabled: true,
-                              expires_at: '',
-                              slug: ''
+                              expires_at: "",
+                              slug: "",
                             });
                             // Close dialog if open
                             setLinkDialogOpen(false);
                           }
                         }}
-                        sx={{ textTransform: 'none' }}
+                        sx={{ textTransform: "none" }}
                         disabled={loadingLinks}
                       >
                         <MenuItem value="new">
@@ -2684,21 +2942,32 @@ function ReportingDashboard({
                         </MenuItem>
                         {dashboardLinks.length > 0 && (
                           <MenuItem value="" disabled>
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                            >
                               ─── Existing Links ───
                             </Typography>
                           </MenuItem>
                         )}
                         {dashboardLinks.map((link) => (
                           <MenuItem key={link.id} value={link.id}>
-                            <Box display="flex" flexDirection="column" alignItems="flex-start">
+                            <Box
+                              display="flex"
+                              flexDirection="column"
+                              alignItems="flex-start"
+                            >
                               <Typography variant="body2" fontWeight={500}>
                                 {link.name || link.slug || `Link ${link.id}`}
                               </Typography>
                               {link.description && (
-                                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ fontSize: "0.7rem" }}
+                                >
                                   {link.description.substring(0, 50)}
-                                  {link.description.length > 50 ? '...' : ''}
+                                  {link.description.length > 50 ? "..." : ""}
                                 </Typography>
                               )}
                             </Box>
@@ -2706,15 +2975,15 @@ function ReportingDashboard({
                         ))}
                       </Select>
                     </FormControl>
-                    <Button
+                      <Button
                       variant={editingLink ? "contained" : "outlined"}
-                      size="small"
+                        size="small"
                       onClick={handleOpenEditDialog}
-                      startIcon={<LinkIcon />}
-                      sx={{ textTransform: "none" }}
-                    >
-                      {editingLink ? 'Edit Link' : 'Create Link'}
-                    </Button>
+                        startIcon={<LinkIcon />}
+                        sx={{ textTransform: "none" }}
+                      >
+                      {editingLink ? "Edit Link" : "Create Link"}
+                      </Button>
                     <Button
                       variant="outlined"
                       size="small"
@@ -2815,16 +3084,16 @@ function ReportingDashboard({
 
       {/* Tab Navigation - Always show in public view */}
       {isPublic && (
-        <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3, px: 3 }}>
-          <Tabs 
-            value={activeTab} 
+        <Box sx={{ borderBottom: 1, borderColor: "divider", mb: 3, px: 3 }}>
+          <Tabs
+            value={activeTab}
             onChange={(e, newValue) => setActiveTab(newValue)}
             sx={{
-              '& .MuiTab-root': {
-                textTransform: 'none',
+              "& .MuiTab-root": {
+                textTransform: "none",
                 fontWeight: 600,
                 minHeight: 48,
-              }
+              },
             }}
           >
             <Tab label="Executive Summary" />
@@ -2855,28 +3124,29 @@ function ReportingDashboard({
                     Executive Summary Not Available
                   </Typography>
                   <Typography variant="body2">
-                    The executive summary for this reporting period is not yet available. Please check the Detailed Metrics tab for current performance data.
+                    The executive summary for this reporting period is not yet
+                    available. Please check the Detailed Metrics tab for current
+                    performance data.
                   </Typography>
                 </Alert>
               )}
             </Box>
           )}
-          
+
           {/* Detailed Metrics Tab Content - Show when not public, or tab 1 is active in public view */}
           {(!isPublic || activeTab === 1) && (
-            <>
-              {/* Google Analytics 4 Section */}
+        <>
+          {/* Google Analytics 4 Section */}
           {isSectionVisible("ga4") &&
             // Show section if it has KPIs (and KPIs are selected in public view) OR charts (and charts are selected in public view)
             ((shouldShowSectionKPIs("ga4") &&
-              (dashboardData?.kpis?.users || dashboardData?.kpis?.sessions)) ||
+                  (dashboardData?.kpis?.users ||
+                    dashboardData?.kpis?.sessions)) ||
               (shouldShowSectionCharts("ga4") &&
-                dashboardData?.chart_data?.ga4_traffic_overview)) && (
+                    dashboardData?.chart_data?.ga4_daily_comparison)) && (
               <SectionContainer
                 title={
-                  isPublic
-                    ? "Website Analytics "
-                    : "Google Analytics 4"
+                      isPublic ? "Website Analytics " : "Google Analytics 4"
                 }
                 description="Acquisition & User Behavior Insights"
                 loading={loading}
@@ -2896,14 +3166,14 @@ function ReportingDashboard({
                   {/* Only show Performance Metrics section if KPIs are selected (in public view) */}
                   {shouldShowSectionKPIs("ga4") && (
                     <>
-                      <Typography
+                          {/* <Typography
                         variant="h6"
                         fontWeight={600}
                         mb={2}
                         sx={{ fontSize: "1.125rem", letterSpacing: "-0.01em" }}
                       >
                         Performance Metrics
-                      </Typography>
+                      </Typography> */}
                       <Grid container spacing={3} sx={{ mb: 4 }}>
                         {/* Users KPI */}
                         {dashboardData?.kpis?.users &&
@@ -2922,7 +3192,8 @@ function ReportingDashboard({
                                     boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
                                     transition: "all 0.2s ease-in-out",
                                     "&:hover": {
-                                      boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                                          boxShadow:
+                                            "0 4px 12px rgba(0,0,0,0.08)",
                                     },
                                   }}
                                 >
@@ -2943,7 +3214,10 @@ function ReportingDashboard({
                                       >
                                         Active users
                                       </Typography>
-                                      <IconButton size="small" sx={{ p: 0.5 }}>
+                                          <IconButton
+                                            size="small"
+                                            sx={{ p: 0.5 }}
+                                          >
                                         <TrendingUpIcon
                                           sx={{
                                             fontSize: 16,
@@ -2964,7 +3238,8 @@ function ReportingDashboard({
                                     >
                                       {(() => {
                                         const value =
-                                          dashboardData.kpis.users.value || 0;
+                                              dashboardData.kpis.users.value ||
+                                              0;
                                         if (value >= 1000) {
                                           return `${(value / 1000).toFixed(
                                             1
@@ -2980,7 +3255,8 @@ function ReportingDashboard({
                                         alignItems: "center",
                                       }}
                                     >
-                                      {dashboardData.kpis.users.change !==
+                                      {shouldShowChangePeriod("ga4") &&
+                                        dashboardData.kpis.users.change !==
                                         undefined &&
                                         dashboardData.kpis.users.change !==
                                           null &&
@@ -3006,7 +3282,8 @@ function ReportingDashboard({
                                               }}
                                             >
                                               {Math.abs(
-                                                dashboardData.kpis.users.change
+                                                    dashboardData.kpis.users
+                                                      .change
                                               ).toFixed(1)}
                                               %
                                             </Typography>
@@ -3036,7 +3313,8 @@ function ReportingDashboard({
                                     boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
                                     transition: "all 0.2s ease-in-out",
                                     "&:hover": {
-                                      boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                                          boxShadow:
+                                            "0 4px 12px rgba(0,0,0,0.08)",
                                     },
                                   }}
                                 >
@@ -3057,7 +3335,10 @@ function ReportingDashboard({
                                       >
                                         Sessions
                                       </Typography>
-                                      <IconButton size="small" sx={{ p: 0.5 }}>
+                                          <IconButton
+                                            size="small"
+                                            sx={{ p: 0.5 }}
+                                          >
                                         <BarChartIcon
                                           sx={{
                                             fontSize: 16,
@@ -3078,8 +3359,8 @@ function ReportingDashboard({
                                     >
                                       {(() => {
                                         const value =
-                                          dashboardData.kpis.sessions.value ||
-                                          0;
+                                              dashboardData.kpis.sessions
+                                                .value || 0;
                                         if (value >= 1000) {
                                           return `${(value / 1000).toFixed(
                                             1
@@ -3095,12 +3376,13 @@ function ReportingDashboard({
                                         alignItems: "center",
                                       }}
                                     >
-                                      {dashboardData.kpis.sessions.change !==
-                                        undefined &&
-                                        dashboardData.kpis.sessions.change !==
-                                          null &&
-                                        dashboardData.kpis.sessions.change >=
-                                          0 && (
+                                          {shouldShowChangePeriod("ga4") &&
+                                            dashboardData.kpis.sessions
+                                              .change !== undefined &&
+                                            dashboardData.kpis.sessions
+                                              .change !== null &&
+                                            dashboardData.kpis.sessions
+                                              .change >= 0 && (
                                           <Box
                                             display="flex"
                                             alignItems="center"
@@ -3152,7 +3434,8 @@ function ReportingDashboard({
                                     boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
                                     transition: "all 0.2s ease-in-out",
                                     "&:hover": {
-                                      boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                                          boxShadow:
+                                            "0 4px 12px rgba(0,0,0,0.08)",
                                     },
                                   }}
                                 >
@@ -3173,7 +3456,10 @@ function ReportingDashboard({
                                       >
                                         New users
                                       </Typography>
-                                      <IconButton size="small" sx={{ p: 0.5 }}>
+                                          <IconButton
+                                            size="small"
+                                            sx={{ p: 0.5 }}
+                                          >
                                         <PersonAddIcon
                                           sx={{
                                             fontSize: 16,
@@ -3194,8 +3480,8 @@ function ReportingDashboard({
                                     >
                                       {(() => {
                                         const value =
-                                          dashboardData.kpis.new_users.value ||
-                                          0;
+                                              dashboardData.kpis.new_users
+                                                .value || 0;
                                         if (value >= 1000) {
                                           return `${(value / 1000).toFixed(
                                             1
@@ -3211,11 +3497,394 @@ function ReportingDashboard({
                                         alignItems: "center",
                                       }}
                                     >
-                                      {dashboardData.kpis.new_users.change !==
+                                          {shouldShowChangePeriod("ga4") &&
+                                            dashboardData.kpis.new_users
+                                              .change !== undefined &&
+                                            dashboardData.kpis.new_users
+                                              .change !== null &&
+                                            dashboardData.kpis.new_users
+                                              .change >= 0 && (
+                                              <Box
+                                                display="flex"
+                                                alignItems="center"
+                                                gap={0.5}
+                                              >
+                                                <TrendingUpIcon
+                                                  sx={{
+                                                    fontSize: 14,
+                                                    color: "#34A853",
+                                                  }}
+                                                />
+                                                <Typography
+                                                  variant="body2"
+                                                  sx={{
+                                                    fontSize: "0.875rem",
+                                                    fontWeight: 600,
+                                                    color: "#34A853",
+                                                  }}
+                                                >
+                                                  {Math.abs(
+                                                    dashboardData.kpis.new_users
+                                                      .change
+                                                  ).toFixed(1)}
+                                                  %
+                                                </Typography>
+                                              </Box>
+                                            )}
+                                        </Box>
+                                      </CardContent>
+                                    </Card>
+                                  </motion.div>
+                                </Grid>
+                              )}
+
+                            {/* Engaged Sessions */}
+                            {dashboardData?.kpis?.engaged_sessions &&
+                              shouldShowKPI("engaged_sessions") && (
+                                <Grid item xs={12} sm={6} md={3}>
+                                  <motion.div
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ duration: 0.3, delay: 0.3 }}
+                                  >
+                                    <Card
+                                      sx={{
+                                        background: "#FFFFFF",
+                                        border: `1px solid ${theme.palette.divider}`,
+                                        borderRadius: 2,
+                                        boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                                        transition: "all 0.2s ease-in-out",
+                                        "&:hover": {
+                                          boxShadow:
+                                            "0 4px 12px rgba(0,0,0,0.08)",
+                                        },
+                                      }}
+                                    >
+                                      <CardContent sx={{ p: 2.5 }}>
+                                        <Box
+                                          display="flex"
+                                          alignItems="center"
+                                          justifyContent="space-between"
+                                          mb={1.5}
+                                        >
+                                          <Typography
+                                            variant="body2"
+                                            color="text.secondary"
+                                            sx={{
+                                              fontSize: "0.875rem",
+                                              fontWeight: 500,
+                                            }}
+                                          >
+                                            Engaged Sessions
+                                          </Typography>
+                                          <IconButton
+                                            size="small"
+                                            sx={{ p: 0.5 }}
+                                          >
+                                            <PeopleIcon
+                                              sx={{
+                                                fontSize: 16,
+                                                color: "text.secondary",
+                                              }}
+                                            />
+                                          </IconButton>
+                                        </Box>
+                                        <Typography
+                                          variant="h4"
+                                          fontWeight={700}
+                                          sx={{
+                                            fontSize: "1.75rem",
+                                            letterSpacing: "-0.02em",
+                                            mb: 1,
+                                            color: "text.primary",
+                                          }}
+                                        >
+                                          {(() => {
+                                            const value =
+                                              dashboardData.kpis
+                                                .engaged_sessions.value || 0;
+                                            if (value >= 1000) {
+                                              return `${(value / 1000).toFixed(
+                                                1
+                                              )}K`;
+                                            }
+                                            return value.toLocaleString();
+                                          })()}
+                                        </Typography>
+                                        <Box
+                                          sx={{
+                                            minHeight: "24px",
+                                            display: "flex",
+                                            alignItems: "center",
+                                          }}
+                                        >
+                                          {shouldShowChangePeriod("ga4") &&
+                                            dashboardData.kpis.engaged_sessions
+                                              .change !== undefined &&
+                                            dashboardData.kpis.engaged_sessions
+                                              .change !== null &&
+                                            dashboardData.kpis.engaged_sessions
+                                              .change >= 0 && (
+                                              <Box
+                                                display="flex"
+                                                alignItems="center"
+                                                gap={0.5}
+                                              >
+                                                <TrendingUpIcon
+                                                  sx={{
+                                                    fontSize: 14,
+                                                    color: "#34A853",
+                                                  }}
+                                                />
+                                                <Typography
+                                                  variant="body2"
+                                                  sx={{
+                                                    fontSize: "0.875rem",
+                                                    fontWeight: 600,
+                                                    color: "#34A853",
+                                                  }}
+                                                >
+                                                  {Math.abs(
+                                                    dashboardData.kpis
+                                                      .engaged_sessions.change
+                                                  ).toFixed(1)}
+                                                  %
+                                                </Typography>
+                                              </Box>
+                                            )}
+                                        </Box>
+                                      </CardContent>
+                                    </Card>
+                                  </motion.div>
+                                </Grid>
+                              )}
+
+                            {/* Bounce Rate */}
+                            {dashboardData?.kpis?.bounce_rate &&
+                              shouldShowKPI("bounce_rate") && (
+                                <Grid item xs={12} sm={6} md={3}>
+                                  <motion.div
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ duration: 0.3, delay: 0.35 }}
+                                  >
+                                    <Card
+                                      sx={{
+                                        background: "#FFFFFF",
+                                        border: `1px solid ${theme.palette.divider}`,
+                                        borderRadius: 2,
+                                        boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                                        transition: "all 0.2s ease-in-out",
+                                        "&:hover": {
+                                          boxShadow:
+                                            "0 4px 12px rgba(0,0,0,0.08)",
+                                        },
+                                      }}
+                                    >
+                                      <CardContent sx={{ p: 2.5 }}>
+                                        <Box
+                                          display="flex"
+                                          alignItems="center"
+                                          justifyContent="space-between"
+                                          mb={1.5}
+                                        >
+                                          <Typography
+                                            variant="body2"
+                                            color="text.secondary"
+                                            sx={{
+                                              fontSize: "0.875rem",
+                                              fontWeight: 500,
+                                            }}
+                                          >
+                                            Bounce Rate
+                                          </Typography>
+                                          <IconButton
+                                            size="small"
+                                            sx={{ p: 0.5 }}
+                                          >
+                                            <TrendingDownIcon
+                                              sx={{
+                                                fontSize: 16,
+                                                color: "text.secondary",
+                                              }}
+                                            />
+                                          </IconButton>
+                                        </Box>
+                                        <Typography
+                                          variant="h4"
+                                          fontWeight={700}
+                                          sx={{
+                                            fontSize: "1.75rem",
+                                            letterSpacing: "-0.02em",
+                                            mb: 1,
+                                            color: "text.primary",
+                                          }}
+                                        >
+                                          {(() => {
+                                            const kpi =
+                                              dashboardData.kpis.bounce_rate;
+                                            const value = kpi.value || 0;
+                                            if (kpi.format === "percentage") {
+                                              return `${(value * 100).toFixed(
+                                                1
+                                              )}%`;
+                                            }
+                                            return `${value.toFixed(1)}%`;
+                                          })()}
+                                        </Typography>
+                                        <Box
+                                          sx={{
+                                            minHeight: "24px",
+                                            display: "flex",
+                                            alignItems: "center",
+                                          }}
+                                        >
+                                          {shouldShowChangePeriod("ga4") &&
+                                            dashboardData.kpis.bounce_rate
+                                              .change !== undefined &&
+                                            dashboardData.kpis.bounce_rate
+                                              .change !== null &&
+                                            dashboardData.kpis.bounce_rate
+                                              .change <= 0 && (
+                                              <Box
+                                                display="flex"
+                                                alignItems="center"
+                                                gap={0.5}
+                                              >
+                                                <TrendingDownIcon
+                                                  sx={{
+                                                    fontSize: 14,
+                                                    color: "#34A853",
+                                                  }}
+                                                />
+                                                <Typography
+                                                  variant="body2"
+                                                  sx={{
+                                                    fontSize: "0.875rem",
+                                                    fontWeight: 600,
+                                                    color: "#34A853",
+                                                  }}
+                                                >
+                                                  {Math.abs(
+                                                    dashboardData.kpis
+                                                      .bounce_rate.change
+                                                  ).toFixed(1)}
+                                                  %
+                                                </Typography>
+                                              </Box>
+                                            )}
+                                        </Box>
+                                      </CardContent>
+                                    </Card>
+                                  </motion.div>
+                                </Grid>
+                              )}
+
+                            {/* Avg Session Duration */}
+                            {dashboardData?.kpis?.avg_session_duration &&
+                              shouldShowKPI("avg_session_duration") && (
+                                <Grid item xs={12} sm={6} md={3}>
+                                  <motion.div
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ duration: 0.3, delay: 0.4 }}
+                                  >
+                                    <Card
+                                      sx={{
+                                        background: "#FFFFFF",
+                                        border: `1px solid ${theme.palette.divider}`,
+                                        borderRadius: 2,
+                                        boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                                        transition: "all 0.2s ease-in-out",
+                                        "&:hover": {
+                                          boxShadow:
+                                            "0 4px 12px rgba(0,0,0,0.08)",
+                                        },
+                                      }}
+                                    >
+                                      {" "}
+                                      <CardContent sx={{ p: 2.5 }}>
+                                        <Box
+                                          display="flex"
+                                          alignItems="center"
+                                          justifyContent="space-between"
+                                          mb={1.5}
+                                        >
+                                          <Typography
+                                            variant="body2"
+                                            color="text.secondary"
+                                            sx={{
+                                              fontSize: "0.875rem",
+                                              fontWeight: 500,
+                                            }}
+                                          >
+                                            Avg Session Duration
+                                          </Typography>
+                                          <IconButton
+                                            size="small"
+                                            sx={{ p: 0.5 }}
+                                          >
+                                            <AccessTimeIcon
+                                              sx={{
+                                                fontSize: 16,
+                                                color: "text.secondary",
+                                              }}
+                                            />
+                                          </IconButton>
+                                        </Box>
+                                        <Typography
+                                          variant="h4"
+                                          fontWeight={700}
+                                          sx={{
+                                            fontSize: "1.75rem",
+                                            letterSpacing: "-0.02em",
+                                            mb: 1,
+                                            color: "text.primary",
+                                          }}
+                                        >
+                                          {(() => {
+                                            const kpi =
+                                              dashboardData.kpis
+                                                .avg_session_duration;
+                                            const duration = kpi.value || 0;
+                                            if (kpi.format === "duration") {
+                                              const minutes = Math.floor(
+                                                duration / 60
+                                              );
+                                              const seconds = Math.floor(
+                                                duration % 60
+                                              );
+                                              return `${minutes}:${seconds
+                                                .toString()
+                                                .padStart(2, "0")}`;
+                                            }
+                                            const minutes = Math.floor(
+                                              duration / 60
+                                            );
+                                            const seconds = Math.floor(
+                                              duration % 60
+                                            );
+                                            return `${minutes}:${seconds
+                                              .toString()
+                                              .padStart(2, "0")}`;
+                                          })()}
+                                        </Typography>
+                                        <Box
+                                          sx={{
+                                            minHeight: "24px",
+                                            display: "flex",
+                                            alignItems: "center",
+                                          }}
+                                        >
+                                          {shouldShowChangePeriod("ga4") &&
+                                            dashboardData.kpis
+                                              .avg_session_duration.change !==
                                         undefined &&
-                                        dashboardData.kpis.new_users.change !==
+                                            dashboardData.kpis
+                                              .avg_session_duration.change !==
                                           null &&
-                                        dashboardData.kpis.new_users.change >=
+                                            dashboardData.kpis
+                                              .avg_session_duration.change >=
                                           0 && (
                                           <Box
                                             display="flex"
@@ -3237,7 +3906,136 @@ function ReportingDashboard({
                                               }}
                                             >
                                               {Math.abs(
-                                                dashboardData.kpis.new_users
+                                                      dashboardData.kpis
+                                                        .avg_session_duration
+                                                  .change
+                                              ).toFixed(1)}
+                                              %
+                                            </Typography>
+                                          </Box>
+                                        )}
+                                    </Box>
+                                      </CardContent>
+                                    </Card>
+                                  </motion.div>
+                                </Grid>
+                              )}
+
+                            {/* Engagement Rate */}
+                            {dashboardData?.kpis?.ga4_engagement_rate &&
+                              shouldShowKPI("ga4_engagement_rate") && (
+                                <Grid item xs={12} sm={6} md={3}>
+                                  <motion.div
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ duration: 0.3, delay: 0.45 }}
+                                  >
+                                    <Card
+                                      sx={{
+                                        background: "#FFFFFF",
+                                        border: `1px solid ${theme.palette.divider}`,
+                                        borderRadius: 2,
+                                        boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                                        transition: "all 0.2s ease-in-out",
+                                        "&:hover": {
+                                          boxShadow:
+                                            "0 4px 12px rgba(0,0,0,0.08)",
+                                        },
+                                      }}
+                                    >
+                                      <CardContent sx={{ p: 2.5 }}>
+                                        <Box
+                                          display="flex"
+                                          alignItems="center"
+                                          justifyContent="space-between"
+                                          mb={1.5}
+                                        >
+                                          <Typography
+                                            variant="body2"
+                                            color="text.secondary"
+                                            sx={{
+                                              fontSize: "0.875rem",
+                                              fontWeight: 500,
+                                            }}
+                                          >
+                                            Engagement Rate
+                                          </Typography>
+                                          <IconButton
+                                            size="small"
+                                            sx={{ p: 0.5 }}
+                                          >
+                                            <TrendingUpIcon
+                                              sx={{
+                                                fontSize: 16,
+                                                color: "text.secondary",
+                                              }}
+                                            />
+                                          </IconButton>
+                                        </Box>
+                                        <Typography
+                                          variant="h4"
+                                          fontWeight={700}
+                                          sx={{
+                                            fontSize: "1.75rem",
+                                            letterSpacing: "-0.02em",
+                                            mb: 1,
+                                            color: "text.primary",
+                                          }}
+                                        >
+                                          {(() => {
+                                            const kpi =
+                                              dashboardData.kpis
+                                                .ga4_engagement_rate;
+                                            const value = kpi.value || 0;
+                                            if (kpi.format === "percentage") {
+                                              return `${(value * 100).toFixed(
+                                                1
+                                              )}%`;
+                                            }
+                                            return `${(value * 100).toFixed(
+                                              1
+                                            )}%`;
+                                          })()}
+                                        </Typography>
+                                        <Box
+                                          sx={{
+                                            minHeight: "24px",
+                                            display: "flex",
+                                            alignItems: "center",
+                                          }}
+                                        >
+                                          {shouldShowChangePeriod("ga4") &&
+                                            dashboardData.kpis
+                                              .ga4_engagement_rate.change !==
+                                              undefined &&
+                                            dashboardData.kpis
+                                              .ga4_engagement_rate.change !==
+                                              null &&
+                                            dashboardData.kpis
+                                              .ga4_engagement_rate.change >=
+                                              0 && (
+                                                <Box
+                                                  display="flex"
+                                                  alignItems="center"
+                                                  gap={0.5}
+                                                >
+                                                  <TrendingUpIcon
+                                                    sx={{
+                                                      fontSize: 14,
+                                                      color: "#34A853",
+                                                    }}
+                                                  />
+                                                  <Typography
+                                                    variant="body2"
+                                                    sx={{
+                                                      fontSize: "0.875rem",
+                                                      fontWeight: 600,
+                                                      color: "#34A853",
+                                                    }}
+                                                  >
+                                                    {Math.abs(
+                                                      dashboardData.kpis
+                                                        .ga4_engagement_rate
                                                   .change
                                               ).toFixed(1)}
                                               %
@@ -3258,7 +4056,7 @@ function ReportingDashboard({
                             <motion.div
                               initial={{ opacity: 0, y: 20 }}
                               animate={{ opacity: 1, y: 0 }}
-                              transition={{ duration: 0.3, delay: 0.25 }}
+                                    transition={{ duration: 0.3, delay: 0.5 }}
                             >
                               <Card
                                 sx={{
@@ -3268,7 +4066,8 @@ function ReportingDashboard({
                                   boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
                                   transition: "all 0.2s ease-in-out",
                                   "&:hover": {
-                                    boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                                          boxShadow:
+                                            "0 4px 12px rgba(0,0,0,0.08)",
                                   },
                                 }}
                               >
@@ -3289,7 +4088,10 @@ function ReportingDashboard({
                                     >
                                       Conversions
                                     </Typography>
-                                    <IconButton size="small" sx={{ p: 0.5 }}>
+                                          <IconButton
+                                            size="small"
+                                            sx={{ p: 0.5 }}
+                                          >
                                       <TrendingUpIcon
                                         sx={{
                                           fontSize: 16,
@@ -3309,10 +4111,13 @@ function ReportingDashboard({
                                     }}
                                   >
                                     {(() => {
-                                      const kpi = dashboardData.kpis.conversions;
+                                            const kpi =
+                                              dashboardData.kpis.conversions;
                                       const value = kpi.value || 0;
                                       if (value >= 1000) {
-                                        return `${(value / 1000).toFixed(1)}K`;
+                                              return `${(value / 1000).toFixed(
+                                                1
+                                              )}K`;
                                       }
                                       return value.toLocaleString();
                                     })()}
@@ -3325,8 +4130,10 @@ function ReportingDashboard({
                                     }}
                                   >
                                     {(() => {
-                                      const kpi = dashboardData.kpis.conversions;
+                                            const kpi =
+                                              dashboardData.kpis.conversions;
                                       return (
+                                        shouldShowChangePeriod("ga4") &&
                                         kpi.change !== undefined &&
                                         kpi.change !== null &&
                                         kpi.change >= 0 && (
@@ -3349,7 +4156,10 @@ function ReportingDashboard({
                                                 color: "#34A853",
                                               }}
                                             >
-                                              {Math.abs(kpi.change).toFixed(1)}%
+                                                    {Math.abs(
+                                                      kpi.change
+                                                    ).toFixed(1)}
+                                                    %
                                             </Typography>
                                           </Box>
                                         )
@@ -3366,7 +4176,9 @@ function ReportingDashboard({
                   )}
 
                   {/* GA4 Traffic Overview Cards - Additional Metrics */}
-                  {dashboardData?.chart_data?.ga4_traffic_overview &&
+                      {/* COMMENTED OUT: Traffic Overview cards moved to Performance Metrics section */}
+                      {false &&
+                        dashboardData?.chart_data?.ga4_traffic_overview &&
                     isChartVisible("ga4_traffic_overview") && (
                       <Grid container spacing={2.5} sx={{ mb: 4 }}>
                         {/* Total Sessions - Only show if sessions KPI is selected */}
@@ -3436,8 +4248,8 @@ function ReportingDashboard({
                                     }}
                                   >
                                     {dashboardData.chart_data
-                                      .ga4_traffic_overview.sessionsChange >=
-                                      0 && (
+                                          .ga4_traffic_overview
+                                          .sessionsChange >= 0 && (
                                       <Box
                                         display="flex"
                                         alignItems="center"
@@ -3652,8 +4464,12 @@ function ReportingDashboard({
                                         dashboardData.chart_data
                                           .ga4_traffic_overview
                                           .averageSessionDuration || 0;
-                                      const minutes = Math.floor(duration / 60);
-                                      const seconds = Math.floor(duration % 60);
+                                          const minutes = Math.floor(
+                                            duration / 60
+                                          );
+                                          const seconds = Math.floor(
+                                            duration % 60
+                                          );
                                       return `${minutes}:${seconds
                                         .toString()
                                         .padStart(2, "0")}`;
@@ -3770,8 +4586,8 @@ function ReportingDashboard({
                                   >
                                     {(
                                       (dashboardData.chart_data
-                                        .ga4_traffic_overview.engagementRate ||
-                                        0) * 100
+                                            .ga4_traffic_overview
+                                            .engagementRate || 0) * 100
                                     ).toFixed(1)}
                                     %
                                   </Typography>
@@ -3830,7 +4646,8 @@ function ReportingDashboard({
                     )}
 
                   {/* GA4 Performance Charts - Prominent Line Graphs */}
-                  {dashboardData.chart_data?.ga4_daily_comparison?.length > 0 &&
+                      {dashboardData.chart_data?.ga4_daily_comparison?.length >
+                        0 &&
                     isChartVisible("ga4_daily_comparison") && (
                       <Box sx={{ mt: 4 }}>
                         <Grid container spacing={3}>
@@ -3845,7 +4662,8 @@ function ReportingDashboard({
                             >
                               <LineChartEnhanced
                                 data={
-                                  dashboardData.chart_data.ga4_daily_comparison
+                                      dashboardData.chart_data
+                                        .ga4_daily_comparison
                                 }
                                 dataKey="date"
                                 lines={[
@@ -3895,7 +4713,8 @@ function ReportingDashboard({
                             >
                               <LineChartEnhanced
                                 data={
-                                  dashboardData.chart_data.ga4_daily_comparison
+                                      dashboardData.chart_data
+                                        .ga4_daily_comparison
                                 }
                                 dataKey="date"
                                 lines={[
@@ -3945,7 +4764,8 @@ function ReportingDashboard({
                             >
                               <LineChartEnhanced
                                 data={
-                                  dashboardData.chart_data.ga4_daily_comparison
+                                      dashboardData.chart_data
+                                        .ga4_daily_comparison
                                 }
                                 dataKey="date"
                                 lines={[
@@ -4064,7 +4884,10 @@ function ReportingDashboard({
                         animationDelay={0.9}
                       >
                         <BarChartEnhanced
-                          data={dashboardData.chart_data.top_pages.slice(0, 10)}
+                              data={dashboardData.chart_data.top_pages.slice(
+                                0,
+                                10
+                              )}
                           dataKey="pagePath"
                           horizontal={true}
                           bars={[
@@ -4171,7 +4994,9 @@ function ReportingDashboard({
                                               <Cell
                                                 key={`cell-${index}`}
                                                 fill={
-                                                  colors[index % colors.length]
+                                                      colors[
+                                                        index % colors.length
+                                                      ]
                                                 }
                                               />
                                             );
@@ -4236,7 +5061,10 @@ function ReportingDashboard({
                                 >
                                   Sessions by Channel
                                 </Typography>
-                                <ResponsiveContainer width="100%" height={300}>
+                                    <ResponsiveContainer
+                                      width="100%"
+                                      height={300}
+                                    >
                                   <BarChart
                                     data={dashboardData.chart_data.traffic_sources.slice(
                                       0,
@@ -4271,7 +5099,8 @@ function ReportingDashboard({
                                       contentStyle={{
                                         borderRadius: "8px",
                                         border: "none",
-                                        boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+                                            boxShadow:
+                                              "0 4px 12px rgba(0,0,0,0.1)",
                                         backgroundColor: "#FFFFFF",
                                       }}
                                       formatter={(value) => [
@@ -4389,7 +5218,8 @@ function ReportingDashboard({
 
                   {/* Geographic Breakdown - Bar Chart & Pie Chart */}
                   {dashboardData.chart_data?.geographic_breakdown &&
-                    dashboardData.chart_data.geographic_breakdown.length > 0 &&
+                        dashboardData.chart_data.geographic_breakdown.length >
+                          0 &&
                     isChartVisible("ga4_geographic_breakdown") && (
                       <Grid container spacing={3} sx={{ mb: 3 }}>
                         {/* Bar Chart */}
@@ -4481,15 +5311,15 @@ function ReportingDashboard({
                                     {
                                       name: "Bounced",
                                       value:
-                                        dashboardData.kpis.bounce_rate.value ||
-                                        0,
+                                            dashboardData.kpis.bounce_rate
+                                              .value || 0,
                                     },
                                     {
                                       name: "Engaged",
                                       value:
                                         100 -
-                                        (dashboardData.kpis.bounce_rate.value ||
-                                          0),
+                                            (dashboardData.kpis.bounce_rate
+                                              .value || 0),
                                     },
                                   ]}
                                   donut={true}
@@ -4512,13 +5342,15 @@ function ReportingDashboard({
                                     fontWeight={700}
                                     sx={{ fontSize: "2rem" }}
                                     color={
-                                      dashboardData.kpis.bounce_rate.value > 50
+                                          dashboardData.kpis.bounce_rate.value >
+                                          50
                                         ? "error.main"
                                         : "success.main"
                                     }
                                   >
                                     {(
-                                      dashboardData.kpis.bounce_rate.value || 0
+                                          dashboardData.kpis.bounce_rate
+                                            .value || 0
                                     ).toFixed(1)}
                                     %
                                   </Typography>
@@ -4698,10 +5530,12 @@ function ReportingDashboard({
 
               // Check if we have Scrunch data from separate endpoint
               const hasScrunchData =
-                scrunchData?.kpis && Object.keys(scrunchData.kpis).length > 0;
+                    scrunchData?.kpis &&
+                    Object.keys(scrunchData.kpis).length > 0;
               const hasScrunchChartData =
                 scrunchData?.chart_data &&
-                (scrunchData.chart_data.top_performing_prompts?.length > 0 ||
+                    (scrunchData.chart_data.top_performing_prompts?.length >
+                      0 ||
                   scrunchData.chart_data.scrunch_ai_insights?.length > 0);
 
               // Check if we have Scrunch data from main endpoint (fallback)
@@ -4713,12 +5547,14 @@ function ReportingDashboard({
                 : [];
               const hasScrunchFromMain =
                 scrunchKPIsFromMain.length > 0 ||
-                dashboardData?.chart_data?.top_performing_prompts?.length > 0 ||
+                    dashboardData?.chart_data?.top_performing_prompts?.length >
+                      0 ||
                 dashboardData?.chart_data?.scrunch_ai_insights?.length > 0;
 
               // Check if section has selected KPIs or charts
               const hasSelectedKPIs = shouldShowSectionKPIs("scrunch_ai");
-              const hasSelectedCharts = shouldShowSectionCharts("scrunch_ai");
+                  const hasSelectedCharts =
+                    shouldShowSectionCharts("scrunch_ai");
 
               const shouldShow =
                 (loadingScrunch ||
@@ -4742,7 +5578,8 @@ function ReportingDashboard({
                   ? Object.keys(dashboardData.kpis)
                   : [],
                 hasTopPrompts:
-                  !!dashboardData?.chart_data?.top_performing_prompts?.length,
+                      !!dashboardData?.chart_data?.top_performing_prompts
+                        ?.length,
                 hasInsights:
                   !!dashboardData?.chart_data?.scrunch_ai_insights?.length,
               });
@@ -4750,11 +5587,7 @@ function ReportingDashboard({
               return shouldShow;
             })() && (
               <SectionContainer
-                title={
-                  isPublic
-                    ? "AI Visibility"
-                    : "Scrunch AI"
-                }
+                    title={isPublic ? "AI Visibility" : "Scrunch AI"}
                 description="AI Search Presence & Competitor Insights"
                 loading={loadingScrunch}
               >
@@ -4771,7 +5604,8 @@ function ReportingDashboard({
                     scrunchData?.chart_data &&
                     (scrunchData.chart_data.top_performing_prompts?.length >
                       0 ||
-                      scrunchData.chart_data.scrunch_ai_insights?.length > 0);
+                          scrunchData.chart_data.scrunch_ai_insights?.length >
+                            0);
 
                   // Use scrunchData if it has KPIs or chart data
                   if (
@@ -4793,7 +5627,8 @@ function ReportingDashboard({
                         hasInsights:
                           !!scrunchChartData.scrunch_ai_insights?.length,
                         topPromptsCount:
-                          scrunchChartData.top_performing_prompts?.length || 0,
+                              scrunchChartData.top_performing_prompts?.length ||
+                              0,
                         insightsCount:
                           scrunchChartData.scrunch_ai_insights?.length || 0,
                       }
@@ -4801,12 +5636,12 @@ function ReportingDashboard({
                   } else if (dashboardData?.kpis) {
                     // Fall back to dashboardData if scrunchData is not available
                     // Filter only Scrunch KPIs from dashboardData
-                    const scrunchKeys = Object.keys(dashboardData.kpis).filter(
-                      (k) => {
+                        const scrunchKeys = Object.keys(
+                          dashboardData.kpis
+                        ).filter((k) => {
                         const kpi = dashboardData.kpis[k];
                         return kpi?.source === "Scrunch";
-                      }
-                    );
+                        });
                     if (scrunchKeys.length > 0) {
                       scrunchKPIs = {};
                       scrunchKeys.forEach((k) => {
@@ -4820,7 +5655,8 @@ function ReportingDashboard({
                         {
                           kpiCount: scrunchKeys.length,
                           hasTopPrompts:
-                            !!scrunchChartData.top_performing_prompts?.length,
+                                !!scrunchChartData.top_performing_prompts
+                                  ?.length,
                           hasInsights:
                             !!scrunchChartData.scrunch_ai_insights?.length,
                         }
@@ -4864,7 +5700,8 @@ function ReportingDashboard({
                     return (
                       <Box p={3}>
                         <Typography color="text.secondary">
-                          No Scrunch data available for the selected date range.
+                              No Scrunch data available for the selected date
+                              range.
                         </Typography>
                       </Box>
                     );
@@ -5058,7 +5895,11 @@ function ReportingDashboard({
                                           >
                                             {prompt.text || "N/A"}
                                           </Typography>
-                                          <Box display="flex" gap={2} mt={1.5}>
+                                              <Box
+                                                display="flex"
+                                                gap={2}
+                                                mt={1.5}
+                                              >
                                             <Typography
                                               variant="caption"
                                               color="text.secondary"
@@ -5079,7 +5920,8 @@ function ReportingDashboard({
                                                 fontWeight: 500,
                                               }}
                                             >
-                                              {prompt.variants || 0} variants
+                                                  {prompt.variants || 0}{" "}
+                                                  variants
                                             </Typography>
                                           </Box>
                                         </Paper>
@@ -5114,7 +5956,8 @@ function ReportingDashboard({
 
                         // Calculate pagination
                         const totalInsights = allInsights.length;
-                        const startIndex = insightsPage * insightsRowsPerPage;
+                            const startIndex =
+                              insightsPage * insightsRowsPerPage;
                         const endIndex = startIndex + insightsRowsPerPage;
                         const paginatedInsights = allInsights.slice(
                           startIndex,
@@ -5122,7 +5965,10 @@ function ReportingDashboard({
                         );
 
                         // Reset page if current page is out of bounds
-                        if (insightsPage > 0 && startIndex >= totalInsights) {
+                            if (
+                              insightsPage > 0 &&
+                              startIndex >= totalInsights
+                            ) {
                           setInsightsPage(0);
                         }
 
@@ -5155,7 +6001,8 @@ function ReportingDashboard({
                                         letterSpacing: "-0.01em",
                                       }}
                                     >
-                                      AI Search Presence & Competitor Insights{" "}
+                                          AI Search Presence & Competitor
+                                          Insights{" "}
                                     </Typography>
                                   </Box>
                                   <TableContainer>
@@ -5244,17 +6091,20 @@ function ReportingDashboard({
                                         </TableRow>
                                       </TableHead>
                                       <TableBody>
-                                        {paginatedInsights.map((insight) => (
+                                            {paginatedInsights.map(
+                                              (insight) => (
                                           <TableRow
                                             key={
-                                              insight.id || insight.seedPrompt
+                                                    insight.id ||
+                                                    insight.seedPrompt
                                             }
                                             hover
                                             sx={{
                                               transition: "all 0.2s",
                                               "&:hover": {
                                                 bgcolor: alpha(
-                                                  theme.palette.primary.main,
+                                                        theme.palette.primary
+                                                          .main,
                                                   0.02
                                                 ),
                                               },
@@ -5271,8 +6121,8 @@ function ReportingDashboard({
                                                     lineHeight: 1.4,
                                                   }}
                                                 >
-                                                  {insight.seedPrompt.length >
-                                                  60
+                                                        {insight.seedPrompt
+                                                          .length > 60
                                                     ? insight.seedPrompt.substring(
                                                         0,
                                                         60
@@ -5356,7 +6206,8 @@ function ReportingDashboard({
                                                     mb: 0.25,
                                                   }}
                                                 >
-                                                  {insight.competitors || 0}{" "}
+                                                        {insight.competitors ||
+                                                          0}{" "}
                                                   active
                                                 </Typography>
                                               </Box>
@@ -5370,20 +6221,20 @@ function ReportingDashboard({
                                                     insight.stage ===
                                                     "Awareness"
                                                       ? alpha(
-                                                          theme.palette.info
-                                                            .main,
+                                                                theme.palette
+                                                                  .info.main,
                                                           0.1
                                                         )
                                                       : insight.stage ===
                                                         "Evaluation"
                                                       ? alpha(
-                                                          theme.palette.warning
-                                                            .main,
+                                                                theme.palette
+                                                                  .warning.main,
                                                           0.1
                                                         )
                                                       : alpha(
-                                                          theme.palette.success
-                                                            .main,
+                                                                theme.palette
+                                                                  .success.main,
                                                           0.1
                                                         ),
                                                   color:
@@ -5401,7 +6252,8 @@ function ReportingDashboard({
                                               />
                                             </TableCell>
                                           </TableRow>
-                                        ))}
+                                              )
+                                            )}
                                       </TableBody>
                                     </Table>
                                   </TableContainer>
@@ -5428,11 +6280,13 @@ function ReportingDashboard({
                                         "& .MuiTablePagination-toolbar": {
                                           px: 2,
                                         },
-                                        "& .MuiTablePagination-selectLabel": {
+                                            "& .MuiTablePagination-selectLabel":
+                                              {
                                           fontSize: "0.875rem",
                                           color: "text.secondary",
                                         },
-                                        "& .MuiTablePagination-displayedRows": {
+                                            "& .MuiTablePagination-displayedRows":
+                                              {
                                           fontSize: "0.875rem",
                                         },
                                       }}
@@ -5474,19 +6328,24 @@ function ReportingDashboard({
                             <Grid container spacing={2.5} sx={{ mb: 3 }}>
                               {/* Platform Distribution - Donut Chart */}
                         {brandAnalytics.platform_distribution &&
-                          Object.keys(brandAnalytics.platform_distribution)
-                            .length > 0 && (
+                                    Object.keys(
+                                      brandAnalytics.platform_distribution
+                                    ).length > 0 && (
                             <Grid item xs={12} md={6}>
                               <motion.div
                                 initial={{ opacity: 0, y: 20 }}
                                 animate={{ opacity: 1, y: 0 }}
-                                transition={{ duration: 0.5, delay: 0.7 }}
+                                          transition={{
+                                            duration: 0.5,
+                                            delay: 0.7,
+                                          }}
                               >
                                 <Card
                                   sx={{
                                     borderRadius: 2,
                                     border: `1px solid ${theme.palette.divider}`,
-                                    boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                                              boxShadow:
+                                                "0 1px 3px rgba(0,0,0,0.05)",
                                   }}
                                 >
                                   <CardContent sx={{ p: 3 }}>
@@ -5520,10 +6379,12 @@ function ReportingDashboard({
                                           <Pie
                                             data={Object.entries(
                                               brandAnalytics.platform_distribution
-                                            ).map(([name, value]) => ({
+                                                      ).map(
+                                                        ([name, value]) => ({
                                               name,
                                               value,
-                                            }))}
+                                                        })
+                                                      )}
                                             cx="50%"
                                             cy="45%"
                                             labelLine={false}
@@ -5550,7 +6411,8 @@ function ReportingDashboard({
                                                   key={`cell-${index}`}
                                                   fill={
                                                     softColors[
-                                                      index % softColors.length
+                                                                index %
+                                                                  softColors.length
                                                     ]
                                                   }
                                                 />
@@ -5563,7 +6425,8 @@ function ReportingDashboard({
                                               border: "none",
                                               boxShadow:
                                                 "0 4px 12px rgba(0,0,0,0.1)",
-                                              backgroundColor: "#FFFFFF",
+                                                        backgroundColor:
+                                                          "#FFFFFF",
                                             }}
                                           />
                                           <Legend
@@ -5574,7 +6437,8 @@ function ReportingDashboard({
                                             iconType="circle"
                                             formatter={(value) => {
                                               const maxLength = 20;
-                                              return value.length > maxLength
+                                                        return value.length >
+                                                          maxLength
                                                 ? value.substring(
                                                     0,
                                                     maxLength
@@ -5593,19 +6457,24 @@ function ReportingDashboard({
 
                         {/* Stage Distribution - Pie Chart */}
                         {brandAnalytics.stage_distribution &&
-                          Object.keys(brandAnalytics.stage_distribution)
-                            .length > 0 && (
+                                    Object.keys(
+                                      brandAnalytics.stage_distribution
+                                    ).length > 0 && (
                             <Grid item xs={12} md={6}>
                               <motion.div
                                 initial={{ opacity: 0, y: 20 }}
                                 animate={{ opacity: 1, y: 0 }}
-                                transition={{ duration: 0.5, delay: 0.8 }}
+                                          transition={{
+                                            duration: 0.5,
+                                            delay: 0.8,
+                                          }}
                               >
                                 <Card
                                   sx={{
                                     borderRadius: 2,
                                     border: `1px solid ${theme.palette.divider}`,
-                                    boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                                              boxShadow:
+                                                "0 1px 3px rgba(0,0,0,0.05)",
                                   }}
                                 >
                                   <CardContent sx={{ p: 3 }}>
@@ -5639,10 +6508,12 @@ function ReportingDashboard({
                                           <Pie
                                             data={Object.entries(
                                               brandAnalytics.stage_distribution
-                                            ).map(([name, value]) => ({
+                                                      ).map(
+                                                        ([name, value]) => ({
                                               name,
                                               value,
-                                            }))}
+                                                        })
+                                                      )}
                                             cx="50%"
                                             cy="45%"
                                             labelLine={false}
@@ -5666,7 +6537,8 @@ function ReportingDashboard({
                                                   key={`cell-${index}`}
                                                   fill={
                                                     softColors[
-                                                      index % softColors.length
+                                                                index %
+                                                                  softColors.length
                                                     ]
                                                   }
                                                 />
@@ -5679,7 +6551,8 @@ function ReportingDashboard({
                                               border: "none",
                                               boxShadow:
                                                 "0 4px 12px rgba(0,0,0,0.1)",
-                                              backgroundColor: "#FFFFFF",
+                                                        backgroundColor:
+                                                          "#FFFFFF",
                                             }}
                                           />
                                           <Legend
@@ -5690,7 +6563,8 @@ function ReportingDashboard({
                                             iconType="circle"
                                             formatter={(value) => {
                                               const maxLength = 20;
-                                              return value.length > maxLength
+                                                        return value.length >
+                                                          maxLength
                                                 ? value.substring(
                                                     0,
                                                     maxLength
@@ -5709,20 +6583,27 @@ function ReportingDashboard({
 
                         {/* Brand Sentiment - Donut Chart */}
                         {brandAnalytics.brand_sentiment &&
-                          Object.keys(brandAnalytics.brand_sentiment).filter(
-                            (key) => brandAnalytics.brand_sentiment[key] > 0
+                                    Object.keys(
+                                      brandAnalytics.brand_sentiment
+                                    ).filter(
+                                      (key) =>
+                                        brandAnalytics.brand_sentiment[key] > 0
                           ).length > 0 && (
                             <Grid item xs={12} md={6}>
                               <motion.div
                                 initial={{ opacity: 0, y: 20 }}
                                 animate={{ opacity: 1, y: 0 }}
-                                transition={{ duration: 0.5, delay: 0.9 }}
+                                          transition={{
+                                            duration: 0.5,
+                                            delay: 0.9,
+                                          }}
                               >
                                 <Card
                                   sx={{
                                     borderRadius: 2,
                                     border: `1px solid ${theme.palette.divider}`,
-                                    boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                                              boxShadow:
+                                                "0 1px 3px rgba(0,0,0,0.05)",
                                   }}
                                 >
                                   <CardContent sx={{ p: 3 }}>
@@ -5758,14 +6639,19 @@ function ReportingDashboard({
                                               brandAnalytics.brand_sentiment
                                             )
                                               .filter(
-                                                ([name, value]) => value > 0
+                                                          ([name, value]) =>
+                                                            value > 0
                                               )
-                                              .map(([name, value]) => ({
+                                                        .map(
+                                                          ([name, value]) => ({
                                                 name:
-                                                  name.charAt(0).toUpperCase() +
+                                                              name
+                                                                .charAt(0)
+                                                                .toUpperCase() +
                                                   name.slice(1),
                                                 value,
-                                              }))}
+                                                          })
+                                                        )}
                                             cx="50%"
                                             cy="45%"
                                             labelLine={false}
@@ -5779,7 +6665,8 @@ function ReportingDashboard({
                                               brandAnalytics.brand_sentiment
                                             )
                                               .filter(
-                                                ([name, value]) => value > 0
+                                                          ([name, value]) =>
+                                                            value > 0
                                               )
                                               .map((entry, index) => {
                                                 const colors = {
@@ -5810,7 +6697,8 @@ function ReportingDashboard({
                                               border: "none",
                                               boxShadow:
                                                 "0 4px 12px rgba(0,0,0,0.1)",
-                                              backgroundColor: "#FFFFFF",
+                                                        backgroundColor:
+                                                          "#FFFFFF",
                                             }}
                                           />
                                           <Legend
@@ -5821,7 +6709,8 @@ function ReportingDashboard({
                                             iconType="circle"
                                             formatter={(value) => {
                                               const maxLength = 20;
-                                              return value.length > maxLength
+                                                        return value.length >
+                                                          maxLength
                                                 ? value.substring(
                                                     0,
                                                     maxLength
@@ -5842,18 +6731,26 @@ function ReportingDashboard({
                       {/* Top Competitors - List */}
                       {brandAnalytics.top_competitors &&
                         brandAnalytics.top_competitors.length > 0 && (
-                          <Grid container spacing={2.5} sx={{ mb: 3 }}>
+                                    <Grid
+                                      container
+                                      spacing={2.5}
+                                      sx={{ mb: 3 }}
+                                    >
                             <Grid item xs={12} md={6}>
                               <motion.div
                                 initial={{ opacity: 0, y: 20 }}
                                 animate={{ opacity: 1, y: 0 }}
-                                transition={{ duration: 0.5, delay: 1.1 }}
+                                          transition={{
+                                            duration: 0.5,
+                                            delay: 1.1,
+                                          }}
                               >
                                 <Card
                                   sx={{
                                     borderRadius: 2,
                                     border: `1px solid ${theme.palette.divider}`,
-                                    boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                                              boxShadow:
+                                                "0 1px 3px rgba(0,0,0,0.05)",
                                   }}
                                 >
                                   <CardContent sx={{ p: 3 }}>
@@ -5881,7 +6778,8 @@ function ReportingDashboard({
                                               borderRadius: 1.5,
                                               transition: "all 0.2s",
                                               "&:hover": {
-                                                transform: "translateX(2px)",
+                                                          transform:
+                                                            "translateX(2px)",
                                                 boxShadow:
                                                   "0 2px 8px rgba(0,0,0,0.05)",
                                               },
@@ -5898,15 +6796,18 @@ function ReportingDashboard({
                                                 gap={1}
                                               >
                                                 <Chip
-                                                  label={`#${idx + 1}`}
+                                                            label={`#${
+                                                              idx + 1
+                                                            }`}
                                                   size="small"
                                                   sx={{
                                                     bgcolor:
-                                                      theme.palette.primary
-                                                        .main,
+                                                                theme.palette
+                                                                  .primary.main,
                                                     color: "white",
                                                     fontWeight: 700,
-                                                    fontSize: "0.7rem",
+                                                              fontSize:
+                                                                "0.7rem",
                                                     height: 20,
                                                     minWidth: 28,
                                                   }}
@@ -5914,7 +6815,10 @@ function ReportingDashboard({
                                                 <Typography
                                                   variant="body2"
                                                   fontWeight={600}
-                                                  sx={{ fontSize: "0.875rem" }}
+                                                            sx={{
+                                                              fontSize:
+                                                                "0.875rem",
+                                                            }}
                                                 >
                                                   {comp.name}
                                                 </Typography>
@@ -5923,7 +6827,10 @@ function ReportingDashboard({
                                                 variant="body2"
                                                 fontWeight={700}
                                                 color="primary.main"
-                                                sx={{ fontSize: "0.875rem" }}
+                                                          sx={{
+                                                            fontSize:
+                                                              "0.875rem",
+                                                          }}
                                               >
                                                 {comp.count.toLocaleString()}
                                               </Typography>
@@ -5938,18 +6845,23 @@ function ReportingDashboard({
 
                             {/* Top Topics - Chips List */}
                             {brandAnalytics.top_topics &&
-                              brandAnalytics.top_topics.length > 0 && (
+                                        brandAnalytics.top_topics.length >
+                                          0 && (
                                 <Grid item xs={12} md={6}>
                                   <motion.div
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
-                                    transition={{ duration: 0.5, delay: 1.2 }}
+                                              transition={{
+                                                duration: 0.5,
+                                                delay: 1.2,
+                                              }}
                                   >
                                     <Card
                                       sx={{
                                         borderRadius: 2,
                                         border: `1px solid ${theme.palette.divider}`,
-                                        boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                                                  boxShadow:
+                                                    "0 1px 3px rgba(0,0,0,0.05)",
                                       }}
                                     >
                                       <CardContent sx={{ p: 3 }}>
@@ -5975,17 +6887,19 @@ function ReportingDashboard({
                                                 size="small"
                                                 sx={{
                                                   bgcolor: alpha(
-                                                    theme.palette.primary.main,
+                                                              theme.palette
+                                                                .primary.main,
                                                     0.08
                                                   ),
-                                                  color: "primary.main",
+                                                            color:
+                                                              "primary.main",
                                                   fontWeight: 600,
                                                   fontSize: "0.75rem",
                                                   height: 28,
                                                   "&:hover": {
                                                     bgcolor: alpha(
-                                                      theme.palette.primary
-                                                        .main,
+                                                                theme.palette
+                                                                  .primary.main,
                                                       0.15
                                                     ),
                                                   },
@@ -6027,9 +6941,7 @@ function ReportingDashboard({
                 shouldShowSectionCharts("agency_analytics")) && (
                 <SectionContainer
                   title={
-                    isPublic
-                      ? "Organic Visibility"
-                      : "Agency Analytics"
+                        isPublic ? "Organic Visibility" : "Agency Analytics"
                   }
                   description="Keyword Ranking Trends, Growth & Position Insights"
                 >
@@ -6247,7 +7159,8 @@ function ReportingDashboard({
                 {
                   key: "ga4",
                   label: "Website Analytics",
-                  description: "Google Analytics 4 - Website traffic, engagement, and conversion metrics",
+                  description:
+                    "Google Analytics 4 - Website traffic, engagement, and conversion metrics",
                   icon: AnalyticsIcon,
                   color: getSourceColor("GA4"),
                 },
@@ -6262,7 +7175,8 @@ function ReportingDashboard({
                 {
                   key: "scrunch_ai",
                   label: "AI Visibility",
-                  description: "Scrunch AI - AI platform presence, engagement, competitor insights (includes Brand Analytics and Advanced Query Visualizations as sub-sections)",
+                  description:
+                    "Scrunch AI - AI platform presence, engagement, competitor insights (includes Brand Analytics and Advanced Query Visualizations as sub-sections)",
                   icon: AnalyticsIcon,
                   color: getSourceColor("Scrunch"),
                 },
@@ -6276,19 +7190,25 @@ function ReportingDashboard({
                 },
               ].map((section) => {
                 // For "All Performance Metrics", use all KPIs from KPI_ORDER
-                const sectionKPIs = section.key === "all_performance_metrics" 
+                const sectionKPIs =
+                  section.key === "all_performance_metrics"
                   ? KPI_ORDER.filter((key) => {
                       const allKPIs = {
                         ...(dashboardData?.kpis || {}),
                         ...(scrunchData?.kpis || {}),
                       };
-                      return allKPIs[key] && key !== "competitive_benchmarking";
+                        return (
+                          allKPIs[key] && key !== "competitive_benchmarking"
+                        );
                     })
                   : getDashboardSectionKPIs(section.key);
                 const sectionCharts = getDashboardSectionCharts(section.key);
                 // For "All Performance Metrics", use tempSelectedPerformanceMetricsKPIs
-                const selectedKPICount = section.key === "all_performance_metrics"
-                  ? sectionKPIs.filter((k) => tempSelectedPerformanceMetricsKPIs.has(k)).length
+                const selectedKPICount =
+                  section.key === "all_performance_metrics"
+                    ? sectionKPIs.filter((k) =>
+                        tempSelectedPerformanceMetricsKPIs.has(k)
+                      ).length
                   : sectionKPIs.filter((k) => tempSelectedKPIs.has(k)).length;
                 const totalKPICount = sectionKPIs.length;
                 const selectedChartCount = sectionCharts.filter((c) =>
@@ -6297,11 +7217,17 @@ function ReportingDashboard({
                 const totalChartCount = sectionCharts.length;
                 const isExpanded = expandedSections.has(section.key);
                 // For "All Performance Metrics", check tempSelectedPerformanceMetricsKPIs
-                const allKPIsSelected = section.key === "all_performance_metrics"
-                  ? sectionKPIs.every((k) => tempSelectedPerformanceMetricsKPIs.has(k))
+                const allKPIsSelected =
+                  section.key === "all_performance_metrics"
+                    ? sectionKPIs.every((k) =>
+                        tempSelectedPerformanceMetricsKPIs.has(k)
+                      )
                   : areAllDashboardSectionKPIsSelected(section.key);
-                const someKPIsSelected = section.key === "all_performance_metrics"
-                  ? sectionKPIs.some((k) => tempSelectedPerformanceMetricsKPIs.has(k)) && !allKPIsSelected
+                const someKPIsSelected =
+                  section.key === "all_performance_metrics"
+                    ? sectionKPIs.some((k) =>
+                        tempSelectedPerformanceMetricsKPIs.has(k)
+                      ) && !allKPIsSelected
                   : areSomeDashboardSectionKPIsSelected(section.key);
                 const allChartsSelected =
                   sectionCharts.length > 0 &&
@@ -6366,7 +7292,10 @@ function ReportingDashboard({
                             <Checkbox
                               checked={tempVisibleSections.has(section.key)}
                               onChange={(e) =>
-                                handleSectionChange(section.key, e.target.checked)
+                                handleSectionChange(
+                                  section.key,
+                                  e.target.checked
+                                )
                               }
                               onClick={(e) => e.stopPropagation()}
                               sx={{
@@ -6437,14 +7366,24 @@ function ReportingDashboard({
                                   checked={allKPIsSelected}
                                   indeterminate={someKPIsSelected}
                                   onChange={(e) => {
-                                    if (section.key === "all_performance_metrics") {
-                                      const newSelected = new Set(tempSelectedPerformanceMetricsKPIs);
+                                    if (
+                                      section.key === "all_performance_metrics"
+                                    ) {
+                                      const newSelected = new Set(
+                                        tempSelectedPerformanceMetricsKPIs
+                                      );
                                       if (e.target.checked) {
-                                        sectionKPIs.forEach((k) => newSelected.add(k));
+                                        sectionKPIs.forEach((k) =>
+                                          newSelected.add(k)
+                                        );
                                       } else {
-                                        sectionKPIs.forEach((k) => newSelected.delete(k));
+                                        sectionKPIs.forEach((k) =>
+                                          newSelected.delete(k)
+                                        );
                                       }
-                                      setTempSelectedPerformanceMetricsKPIs(newSelected);
+                                      setTempSelectedPerformanceMetricsKPIs(
+                                        newSelected
+                                      );
                                     } else {
                                       handleDashboardSectionKPIsChange(
                                         section.key,
@@ -6497,20 +7436,35 @@ function ReportingDashboard({
                                     key={key}
                                     control={
                                       <Checkbox
-                                        checked={section.key === "all_performance_metrics"
-                                          ? tempSelectedPerformanceMetricsKPIs.has(key)
-                                          : tempSelectedKPIs.has(key)}
+                                        checked={
+                                          section.key ===
+                                          "all_performance_metrics"
+                                            ? tempSelectedPerformanceMetricsKPIs.has(
+                                                key
+                                              )
+                                            : tempSelectedKPIs.has(key)
+                                        }
                                         onChange={(e) => {
-                                          if (section.key === "all_performance_metrics") {
-                                            const newSelected = new Set(tempSelectedPerformanceMetricsKPIs);
+                                          if (
+                                            section.key ===
+                                            "all_performance_metrics"
+                                          ) {
+                                            const newSelected = new Set(
+                                              tempSelectedPerformanceMetricsKPIs
+                                            );
                                             if (e.target.checked) {
                                               newSelected.add(key);
                                             } else {
                                               newSelected.delete(key);
                                             }
-                                            setTempSelectedPerformanceMetricsKPIs(newSelected);
+                                            setTempSelectedPerformanceMetricsKPIs(
+                                              newSelected
+                                            );
                                           } else {
-                                            handleKPIChange(key, e.target.checked);
+                                            handleKPIChange(
+                                              key,
+                                              e.target.checked
+                                            );
                                           }
                                         }}
                                         disabled={!isAvailable}
@@ -6641,11 +7595,19 @@ function ReportingDashboard({
                                   chart.key
                                 );
                                 // Group sub-sections under scrunch_ai visually
-                                const isSubSection = section.key === "scrunch_ai" && 
-                                  (chart.key === "brand_analytics_charts" || chart.key === "scrunch_visualizations");
-                                const isFirstSubSection = isSubSection && 
+                                const isSubSection =
+                                  section.key === "scrunch_ai" &&
+                                  (chart.key === "brand_analytics_charts" ||
+                                    chart.key === "scrunch_visualizations");
+                                const isFirstSubSection =
+                                  isSubSection &&
                                   index > 0 && 
-                                  !(sectionCharts[index - 1].key === "brand_analytics_charts" || sectionCharts[index - 1].key === "scrunch_visualizations");
+                                  !(
+                                    sectionCharts[index - 1].key ===
+                                      "brand_analytics_charts" ||
+                                    sectionCharts[index - 1].key ===
+                                      "scrunch_visualizations"
+                                  );
                                 
                                 return (
                                   <Box key={chart.key}>
@@ -6692,7 +7654,11 @@ function ReportingDashboard({
                                       }
                                       label={
                                         <Box>
-                                          <Box display="flex" alignItems="center" gap={0.5}>
+                                          <Box
+                                            display="flex"
+                                            alignItems="center"
+                                            gap={0.5}
+                                          >
                                             <Typography
                                               variant="body2"
                                               fontWeight={500}
@@ -6707,7 +7673,10 @@ function ReportingDashboard({
                                                 sx={{
                                                   height: 16,
                                                   fontSize: "0.6rem",
-                                                  bgcolor: alpha(section.color, 0.1),
+                                                  bgcolor: alpha(
+                                                    section.color,
+                                                    0.1
+                                                  ),
                                                   color: section.color,
                                                   fontWeight: 500,
                                                 }}
@@ -6747,6 +7716,56 @@ function ReportingDashboard({
                               This section has no selectable KPIs or charts.
                             </Typography>
                           )}
+
+                        {/* Show Change Period Toggle */}
+                        <Box
+                          mt={3}
+                          pt={2}
+                          borderTop={`1px solid ${theme.palette.divider}`}
+                        >
+                          <FormControlLabel
+                            control={
+                              <Checkbox
+                                checked={tempShowChangePeriod[section.key] !== false}
+                                onChange={(e) => {
+                                  setTempShowChangePeriod({
+                                    ...tempShowChangePeriod,
+                                    [section.key]: e.target.checked,
+                                  });
+                                }}
+                                size="small"
+                                sx={{
+                                  color: section.color,
+                                  "&.Mui-checked": {
+                                    color: section.color,
+                                  },
+                                }}
+                              />
+                            }
+                            label={
+                              <Box>
+                                <Typography
+                                  variant="body2"
+                                  fontWeight={600}
+                                  sx={{ fontSize: "0.875rem" }}
+                                >
+                                  Show Change Period
+                                </Typography>
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ fontSize: "0.75rem" }}
+                                >
+                                  Display percentage change indicators for KPIs in this section
+                                </Typography>
+                              </Box>
+                            }
+                            sx={{
+                              width: "100%",
+                              alignItems: "flex-start",
+                            }}
+                          />
+                        </Box>
                       </Box>
                     </AccordionDetails>
                   </Accordion>
@@ -6761,7 +7780,9 @@ function ReportingDashboard({
           <Button
             onClick={() => {
               setTempSelectedKPIs(new Set(selectedKPIs));
-              setTempSelectedPerformanceMetricsKPIs(new Set(selectedPerformanceMetricsKPIs));
+              setTempSelectedPerformanceMetricsKPIs(
+                new Set(selectedPerformanceMetricsKPIs)
+              );
               setTempVisibleSections(new Set(visibleSections));
               setTempSelectedCharts(new Set(selectedCharts));
               setShowKPISelector(false);
@@ -6798,13 +7819,13 @@ function ReportingDashboard({
         PaperProps={{
           sx: {
             borderRadius: 2,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+            boxShadow: "0 8px 32px rgba(0,0,0,0.12)",
           },
         }}
       >
         <DialogTitle>
           <Typography variant="h6" fontWeight={600}>
-            {editingLink ? 'Edit Dashboard Link' : 'Create Dashboard Link'}
+            {editingLink ? "Edit Dashboard Link" : "Create Dashboard Link"}
           </Typography>
         </DialogTitle>
         <DialogContent>
@@ -6812,14 +7833,21 @@ function ReportingDashboard({
             <TextField
               label="Name (optional)"
               value={linkFormData.name}
-              onChange={(e) => setLinkFormData({ ...linkFormData, name: e.target.value })}
+              onChange={(e) =>
+                setLinkFormData({ ...linkFormData, name: e.target.value })
+              }
               fullWidth
               helperText="Friendly name for this link"
             />
             <TextField
               label="Description (optional)"
               value={linkFormData.description}
-              onChange={(e) => setLinkFormData({ ...linkFormData, description: e.target.value })}
+              onChange={(e) =>
+                setLinkFormData({
+                  ...linkFormData,
+                  description: e.target.value,
+                })
+              }
               fullWidth
               multiline
               rows={2}
@@ -6830,7 +7858,12 @@ function ReportingDashboard({
                 label="Start Date"
                 type="date"
                 value={linkFormData.start_date}
-                onChange={(e) => setLinkFormData({ ...linkFormData, start_date: e.target.value })}
+                onChange={(e) =>
+                  setLinkFormData({
+                    ...linkFormData,
+                    start_date: e.target.value,
+                  })
+                }
                 fullWidth
                 required
                 InputLabelProps={{ shrink: true }}
@@ -6839,7 +7872,9 @@ function ReportingDashboard({
                 label="End Date"
                 type="date"
                 value={linkFormData.end_date}
-                onChange={(e) => setLinkFormData({ ...linkFormData, end_date: e.target.value })}
+                onChange={(e) =>
+                  setLinkFormData({ ...linkFormData, end_date: e.target.value })
+                }
                 fullWidth
                 required
                 InputLabelProps={{ shrink: true }}
@@ -6848,7 +7883,9 @@ function ReportingDashboard({
             <TextField
               label="Slug (optional)"
               value={linkFormData.slug}
-              onChange={(e) => setLinkFormData({ ...linkFormData, slug: e.target.value })}
+              onChange={(e) =>
+                setLinkFormData({ ...linkFormData, slug: e.target.value })
+              }
               fullWidth
               helperText="Leave empty to auto-generate. Must be unique."
             />
@@ -6856,7 +7893,9 @@ function ReportingDashboard({
               label="Expires At (optional)"
               type="datetime-local"
               value={linkFormData.expires_at}
-              onChange={(e) => setLinkFormData({ ...linkFormData, expires_at: e.target.value })}
+              onChange={(e) =>
+                setLinkFormData({ ...linkFormData, expires_at: e.target.value })
+              }
               fullWidth
               InputLabelProps={{ shrink: true }}
               helperText="Optional expiration date and time"
@@ -6865,14 +7904,21 @@ function ReportingDashboard({
               control={
                 <Checkbox
                   checked={linkFormData.enabled}
-                  onChange={(e) => setLinkFormData({ ...linkFormData, enabled: e.target.checked })}
+                  onChange={(e) =>
+                    setLinkFormData({
+                      ...linkFormData,
+                      enabled: e.target.checked,
+                    })
+                  }
                 />
               }
               label="Enabled"
             />
             <Alert severity="info">
               <Typography variant="body2">
-                Current KPI selections will be saved with this link. You can modify KPIs in the selector and update this link to save changes.
+                Current KPI selections will be saved with this link. You can
+                modify KPIs in the selector and update this link to save
+                changes.
               </Typography>
             </Alert>
           </Box>
@@ -6883,17 +7929,19 @@ function ReportingDashboard({
               setLinkDialogOpen(false);
               // Don't clear editingLink - keep it selected in dropdown
             }}
-            sx={{ textTransform: 'none' }}
+            sx={{ textTransform: "none" }}
           >
             Cancel
           </Button>
           <Button
             onClick={handleSaveLink}
             variant="contained"
-            disabled={loading || !linkFormData.start_date || !linkFormData.end_date}
-            sx={{ textTransform: 'none' }}
+            disabled={
+              loading || !linkFormData.start_date || !linkFormData.end_date
+            }
+            sx={{ textTransform: "none" }}
           >
-            {loading ? 'Saving...' : editingLink ? 'Update' : 'Create'}
+            {loading ? "Saving..." : editingLink ? "Update" : "Create"}
           </Button>
         </DialogActions>
       </Dialog>
@@ -6912,13 +7960,17 @@ function ReportingDashboard({
         PaperProps={{
           sx: {
             borderRadius: 2,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+            boxShadow: "0 8px 32px rgba(0,0,0,0.12)",
           },
         }}
       >
         <DialogTitle>
           <Typography variant="h6" fontWeight={600}>
-            {selectedLinkForMetrics ? `Metrics: ${selectedLinkForMetrics.name || selectedLinkForMetrics.slug}` : 'All Links Metrics'}
+            {selectedLinkForMetrics
+              ? `Metrics: ${
+                  selectedLinkForMetrics.name || selectedLinkForMetrics.slug
+                }`
+              : "All Links Metrics"}
           </Typography>
         </DialogTitle>
         <DialogContent>
@@ -6931,21 +7983,42 @@ function ReportingDashboard({
               <Typography variant="h6" mb={2}>
                 Total Opens: {linkMetrics.total_opens || 0}
               </Typography>
-              {linkMetrics.recent_opens && linkMetrics.recent_opens.length > 0 && (
+              {linkMetrics.recent_opens &&
+                linkMetrics.recent_opens.length > 0 && (
                 <Box>
                   <Typography variant="subtitle2" fontWeight={600} mb={1}>
                     Recent Opens
                   </Typography>
                   <List>
-                    {linkMetrics.recent_opens.slice(0, 10).map((open, idx) => (
-                      <ListItem key={idx} sx={{ borderBottom: `1px solid ${theme.palette.divider}` }}>
+                      {linkMetrics.recent_opens
+                        .slice(0, 10)
+                        .map((open, idx) => (
+                          <ListItem
+                            key={idx}
+                            sx={{
+                              borderBottom: `1px solid ${theme.palette.divider}`,
+                            }}
+                          >
                         <ListItemText
-                          primary={new Date(open.opened_at).toLocaleString()}
+                              primary={new Date(
+                                open.opened_at
+                              ).toLocaleString()}
                           secondary={
                             <Box>
-                              {open.ip_address && <Typography variant="caption" display="block">IP: {open.ip_address}</Typography>}
+                                  {open.ip_address && (
+                                    <Typography
+                                      variant="caption"
+                                      display="block"
+                                    >
+                                      IP: {open.ip_address}
+                                    </Typography>
+                                  )}
                               {open.user_agent && (
-                                <Typography variant="caption" display="block" sx={{ wordBreak: 'break-all' }}>
+                                    <Typography
+                                      variant="caption"
+                                      display="block"
+                                      sx={{ wordBreak: "break-all" }}
+                                    >
                                   {open.user_agent.substring(0, 100)}
                                 </Typography>
                               )}
@@ -6966,14 +8039,20 @@ function ReportingDashboard({
               <Typography variant="body2" color="text.secondary" mb={2}>
                 Across {allLinksMetrics.total_links || 0} links
               </Typography>
-              {allLinksMetrics.opens_per_link && allLinksMetrics.opens_per_link.length > 0 && (
+              {allLinksMetrics.opens_per_link &&
+                allLinksMetrics.opens_per_link.length > 0 && (
                 <Box>
                   <Typography variant="subtitle2" fontWeight={600} mb={1}>
                     Opens per Link
                   </Typography>
                   <List>
                     {allLinksMetrics.opens_per_link.map((linkData) => (
-                      <ListItem key={linkData.link_id} sx={{ borderBottom: `1px solid ${theme.palette.divider}` }}>
+                        <ListItem
+                          key={linkData.link_id}
+                          sx={{
+                            borderBottom: `1px solid ${theme.palette.divider}`,
+                          }}
+                        >
                         <ListItemText
                           primary={linkData.name || linkData.slug}
                           secondary={`${linkData.opens || 0} opens`}
@@ -6985,9 +8064,7 @@ function ReportingDashboard({
               )}
             </Box>
           ) : (
-            <Alert severity="info">
-              No metrics available
-            </Alert>
+            <Alert severity="info">No metrics available</Alert>
           )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
@@ -6998,7 +8075,7 @@ function ReportingDashboard({
               setAllLinksMetrics(null);
               setSelectedLinkForMetrics(null);
             }}
-            sx={{ textTransform: 'none' }}
+            sx={{ textTransform: "none" }}
           >
             Close
           </Button>
@@ -7032,7 +8109,9 @@ function ReportingDashboard({
         >
           <InsightsIcon sx={{ color: theme.palette.primary.main }} />
           <Typography variant="h6" fontWeight={600}>
-            {overviewData?.executive_summary ? "Executive Summary" : "AI Overview - All Metrics"}
+            {overviewData?.executive_summary
+              ? "Executive Summary"
+              : "AI Overview - All Metrics"}
           </Typography>
         </DialogTitle>
         <DialogContent>
@@ -7075,29 +8154,32 @@ function ReportingDashboard({
 
               {/* AI Generated Overview - Show Executive Summary if available, otherwise show old format */}
               {overviewData.executive_summary ? (
-                <ExecutiveSummary summary={overviewData.executive_summary} theme={theme} />
+                <ExecutiveSummary
+                  summary={overviewData.executive_summary}
+                  theme={theme}
+                />
               ) : overviewData.overview ? (
-                <Paper
-                  elevation={0}
+              <Paper
+                elevation={0}
+                sx={{
+                  p: 3,
+                  bgcolor: alpha(theme.palette.primary.main, 0.05),
+                  border: `1px solid ${theme.palette.divider}`,
+                  borderRadius: 2,
+                  mb: 3,
+                }}
+              >
+                <Typography
+                  variant="body1"
                   sx={{
-                    p: 3,
-                    bgcolor: alpha(theme.palette.primary.main, 0.05),
-                    border: `1px solid ${theme.palette.divider}`,
-                    borderRadius: 2,
-                    mb: 3,
+                    whiteSpace: "pre-line",
+                    lineHeight: 1.8,
+                    fontSize: "0.95rem",
                   }}
                 >
-                  <Typography
-                    variant="body1"
-                    sx={{
-                      whiteSpace: "pre-line",
-                      lineHeight: 1.8,
-                      fontSize: "0.95rem",
-                    }}
-                  >
-                    {overviewData.overview}
-                  </Typography>
-                </Paper>
+                  {overviewData.overview}
+                </Typography>
+              </Paper>
               ) : (
                 <Alert severity="info">
                   No overview data available. Please try again.
@@ -7105,7 +8187,9 @@ function ReportingDashboard({
               )}
 
               {/* Metrics Summary by Source - Only show if not showing Executive Summary */}
-              {!overviewData.executive_summary && overviewData.metrics && overviewData.metrics.length > 0 && (
+              {!overviewData.executive_summary &&
+                overviewData.metrics &&
+                overviewData.metrics.length > 0 && (
                 <Box>
                   <Typography variant="subtitle1" fontWeight={600} mb={2}>
                     Metrics Summary
@@ -7182,7 +8266,8 @@ function ReportingDashboard({
                                             : metric.change < 0
                                             ? "↓"
                                             : "→"}{" "}
-                                          {Math.abs(metric.change).toFixed(1)}%)
+                                            {Math.abs(metric.change).toFixed(1)}
+                                            %)
                                         </span>
                                       )}
                                   </Typography>
