@@ -43,6 +43,7 @@ import {
   Clear as ClearIcon,
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon,
+  BarChart as BarChartIcon,
 } from '@mui/icons-material';
 import { clientAPI } from '../services/api';
 import { debugLog, debugError } from '../utils/debug';
@@ -80,6 +81,12 @@ function DashboardLinksManagement() {
   });
   const [saving, setSaving] = useState(false);
 
+  // Tracking metrics dialog states
+  const [trackingDialogOpen, setTrackingDialogOpen] = useState(false);
+  const [trackingLink, setTrackingLink] = useState(null);
+  const [trackingMetrics, setTrackingMetrics] = useState(null);
+  const [loadingMetrics, setLoadingMetrics] = useState(false);
+
   // Load all clients and their dashboard links
   useEffect(() => {
     loadAllLinks();
@@ -102,42 +109,34 @@ function DashboardLinksManagement() {
     setLoading(true);
     setError(null);
     try {
-      // First, load all clients
-      const clientsResponse = await clientAPI.getClients(1, 1000, ''); // Get up to 1000 clients
+      // Load all clients and all dashboard links in parallel
+      const [clientsResponse, linksResponse] = await Promise.all([
+        clientAPI.getClients(1, 1000, ''), // Get up to 1000 clients
+        clientAPI.listAllDashboardLinks() // Get all dashboard links in a single API call
+      ]);
+      
       const clientsList = clientsResponse.items || [];
       setClients(clientsList);
 
-      // Then, load dashboard links for each client with their KPI selections
-      const linksPromises = clientsList.map(async (client) => {
-        try {
-          const linksResponse = await clientAPI.listDashboardLinks(client.id);
-          const links = await Promise.all((linksResponse.items || []).map(async (link) => {
-            // Fetch KPI selections for this link
-            let kpiSelections = null;
-            try {
-              kpiSelections = await clientAPI.getDashboardLinkKPISelections(client.id, link.id);
-            } catch (err) {
-              debugError(`Error loading KPI selections for link ${link.id}:`, err);
-              // Continue without KPI selections if fetch fails
-            }
-            return {
-              ...link,
-              client_id: client.id,
-              client_name: client.company_name,
-              kpi_selections: kpiSelections,
-            };
-          }));
-          return links;
-        } catch (err) {
-          debugError(`Error loading links for client ${client.id}:`, err);
-          return [];
-        }
+      // Create a map of client IDs to client names for quick lookup
+      const clientsMap = new Map();
+      clientsList.forEach(client => {
+        clientsMap.set(client.id, client.company_name);
       });
 
-      const allLinksArrays = await Promise.all(linksPromises);
-      const flattenedLinks = allLinksArrays.flat();
-      setAllLinks(flattenedLinks);
-      debugLog('Loaded all dashboard links:', flattenedLinks.length);
+      // Process links - KPI selections and client info are already included from backend
+      const allLinks = (linksResponse.items || []).map((link) => ({
+        ...link,
+        // Ensure client_id and client_name are set (backend should provide these, but ensure they exist)
+        client_id: link.client_id || null,
+        client_name: link.client_name || clientsMap.get(link.client_id) || 'Unknown',
+        // Use kpi_selection from backend response (already included)
+        // Map to kpi_selections for consistency with component usage
+        kpi_selections: link.kpi_selection || null,
+      }));
+
+      setAllLinks(allLinks);
+      debugLog('Loaded all dashboard links:', allLinks.length);
     } catch (err) {
       debugError('Error loading dashboard links:', err);
       setError('Failed to load dashboard links');
@@ -338,6 +337,30 @@ function DashboardLinksManagement() {
     }
   };
 
+  const handleOpenTrackingDialog = async (link) => {
+    if (!link.client_id) return;
+    setTrackingLink(link);
+    setTrackingDialogOpen(true);
+    setLoadingMetrics(true);
+    setTrackingMetrics(null);
+    
+    try {
+      const metrics = await clientAPI.getDashboardLinkMetrics(link.client_id, link.id);
+      setTrackingMetrics(metrics);
+      debugLog("Tracking metrics loaded:", metrics);
+    } catch (err) {
+      debugError("Error loading tracking metrics:", err);
+      setError(err.response?.data?.detail || err.message || "Failed to load tracking metrics");
+      setTrackingMetrics({
+        total_opens: 0,
+        opens_over_time: [],
+        recent_opens: []
+      });
+    } finally {
+      setLoadingMetrics(false);
+    }
+  };
+
   return (
     <Box sx={{ p: 3 }}>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
@@ -393,8 +416,7 @@ function DashboardLinksManagement() {
           </Box>
         </Box>
         <Collapse in={filtersExpanded}>
-          <Box display="flex" flexDirection="column" gap={2} mt={2}>
-            <Box display="flex" gap={2} flexWrap="wrap">
+          <Box display="flex" gap={2} flexWrap="wrap" alignItems="center" mt={2}>
             <Autocomplete
               size="small"
               sx={{ minWidth: 250 }}
@@ -418,60 +440,42 @@ function DashboardLinksManagement() {
                 <MenuItem value="inactive">Inactive</MenuItem>
               </Select>
             </FormControl>
-          </Box>
-          
-          <Box>
-            <Typography variant="subtitle2" fontWeight={600} mb={1}>
-              Date Created
-            </Typography>
-            <Box display="flex" gap={2}>
-              <TextField
-                label="From"
-                type="date"
-                size="small"
-                value={dateCreatedFrom}
-                onChange={(e) => setDateCreatedFrom(e.target.value)}
-                InputLabelProps={{ shrink: true }}
-                sx={{ minWidth: 150 }}
-              />
-              <TextField
-                label="To"
-                type="date"
-                size="small"
-                value={dateCreatedTo}
-                onChange={(e) => setDateCreatedTo(e.target.value)}
-                InputLabelProps={{ shrink: true }}
-                sx={{ minWidth: 150 }}
-              />
-            </Box>
-          </Box>
-
-          <Box>
-            <Typography variant="subtitle2" fontWeight={600} mb={1}>
-              Expiration Date
-            </Typography>
-            <Box display="flex" gap={2}>
-              <TextField
-                label="From"
-                type="date"
-                size="small"
-                value={expirationDateFrom}
-                onChange={(e) => setExpirationDateFrom(e.target.value)}
-                InputLabelProps={{ shrink: true }}
-                sx={{ minWidth: 150 }}
-              />
-              <TextField
-                label="To"
-                type="date"
-                size="small"
-                value={expirationDateTo}
-                onChange={(e) => setExpirationDateTo(e.target.value)}
-                InputLabelProps={{ shrink: true }}
-                sx={{ minWidth: 150 }}
-              />
-            </Box>
-          </Box>
-
+            <TextField
+              label="Date Created From"
+              type="date"
+              size="small"
+              value={dateCreatedFrom}
+              onChange={(e) => setDateCreatedFrom(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              sx={{ minWidth: 180 }}
+            />
+            <TextField
+              label="Date Created To"
+              type="date"
+              size="small"
+              value={dateCreatedTo}
+              onChange={(e) => setDateCreatedTo(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              sx={{ minWidth: 180 }}
+            />
+            <TextField
+              label="Expiration From"
+              type="date"
+              size="small"
+              value={expirationDateFrom}
+              onChange={(e) => setExpirationDateFrom(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              sx={{ minWidth: 180 }}
+            />
+            <TextField
+              label="Expiration To"
+              type="date"
+              size="small"
+              value={expirationDateTo}
+              onChange={(e) => setExpirationDateTo(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              sx={{ minWidth: 180 }}
+            />
           </Box>
         </Collapse>
       </Paper>
@@ -616,6 +620,15 @@ function DashboardLinksManagement() {
                           }}
                         >
                           <LinkIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="View Tracking Metrics">
+                        <IconButton
+                          size="small"
+                          onClick={() => handleOpenTrackingDialog(link)}
+                          color="info"
+                        >
+                          <BarChartIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
                       <Tooltip title="Edit Link">
@@ -763,6 +776,189 @@ function DashboardLinksManagement() {
             sx={{ textTransform: 'none' }}
           >
             {saving ? 'Saving...' : 'Update'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Tracking Metrics Dialog */}
+      <Dialog
+        open={trackingDialogOpen}
+        onClose={() => setTrackingDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 2,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+          },
+        }}
+      >
+        <DialogTitle>
+          <Typography variant="h6" fontWeight={600}>
+            Tracking Metrics - {trackingLink?.name || trackingLink?.slug || 'Dashboard Link'}
+          </Typography>
+          {trackingLink && (
+            <Typography variant="caption" color="text.secondary">
+              Client: {trackingLink.client_name || 'N/A'} | Slug: {trackingLink.slug}
+            </Typography>
+          )}
+        </DialogTitle>
+        <DialogContent>
+          {loadingMetrics ? (
+            <Box display="flex" justifyContent="center" py={4}>
+              <CircularProgress />
+            </Box>
+          ) : trackingMetrics ? (
+            <Box display="flex" flexDirection="column" gap={3} mt={1}>
+              {/* Summary Cards */}
+              <Box display="flex" gap={2}>
+                <Paper
+                  elevation={0}
+                  sx={{
+                    p: 2,
+                    flex: 1,
+                    bgcolor: alpha(theme.palette.primary.main, 0.08),
+                    borderRadius: 2,
+                  }}
+                >
+                  <Typography variant="h4" fontWeight={700} color="primary">
+                    {trackingMetrics.total_opens || 0}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Total Opens
+                  </Typography>
+                </Paper>
+                <Paper
+                  elevation={0}
+                  sx={{
+                    p: 2,
+                    flex: 1,
+                    bgcolor: alpha(theme.palette.success.main, 0.08),
+                    borderRadius: 2,
+                  }}
+                >
+                  <Typography variant="h4" fontWeight={700} color="success.main">
+                    {trackingMetrics.recent_opens?.length || 0}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Recent Opens (Last 50)
+                  </Typography>
+                </Paper>
+              </Box>
+
+              {/* Opens Over Time */}
+              {trackingMetrics.opens_over_time && trackingMetrics.opens_over_time.length > 0 && (
+                <Box>
+                  <Typography variant="h6" fontWeight={600} gutterBottom>
+                    Opens Over Time
+                  </Typography>
+                  <TableContainer component={Paper} variant="outlined">
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.04) }}>
+                          <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Opens</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {trackingMetrics.opens_over_time.map((item, index) => (
+                          <TableRow key={index} hover>
+                            <TableCell>{formatDate(item.date)}</TableCell>
+                            <TableCell align="right">{item.opens}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Box>
+              )}
+
+              {/* Recent Opens */}
+              {trackingMetrics.recent_opens && trackingMetrics.recent_opens.length > 0 && (
+                <Box>
+                  <Typography variant="h6" fontWeight={600} gutterBottom>
+                    Recent Opens
+                  </Typography>
+                  <TableContainer component={Paper} variant="outlined">
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.04) }}>
+                          <TableCell sx={{ fontWeight: 700 }}>Opened At</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>IP Address</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>User Agent</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Referer</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {trackingMetrics.recent_opens.map((open, index) => (
+                          <TableRow key={index} hover>
+                            <TableCell>
+                              <Typography variant="body2">
+                                {formatDateTime(open.opened_at)}
+                              </Typography>
+                            </TableCell>
+                            <TableCell>
+                              <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                                {open.ip_address || 'N/A'}
+                              </Typography>
+                            </TableCell>
+                            <TableCell>
+                              <Tooltip title={open.user_agent || 'N/A'}>
+                                <Typography
+                                  variant="body2"
+                                  sx={{
+                                    maxWidth: 200,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  {open.user_agent || 'N/A'}
+                                </Typography>
+                              </Tooltip>
+                            </TableCell>
+                            <TableCell>
+                              <Tooltip title={open.referer || 'N/A'}>
+                                <Typography
+                                  variant="body2"
+                                  sx={{
+                                    maxWidth: 200,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  {open.referer || 'N/A'}
+                                </Typography>
+                              </Tooltip>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Box>
+              )}
+
+              {(!trackingMetrics.recent_opens || trackingMetrics.recent_opens.length === 0) && 
+               (!trackingMetrics.opens_over_time || trackingMetrics.opens_over_time.length === 0) && (
+                <Alert severity="info">
+                  No tracking data available for this dashboard link yet.
+                </Alert>
+              )}
+            </Box>
+          ) : (
+            <Alert severity="error">
+              Failed to load tracking metrics.
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button
+            onClick={() => setTrackingDialogOpen(false)}
+            sx={{ textTransform: 'none' }}
+          >
+            Close
           </Button>
         </DialogActions>
       </Dialog>

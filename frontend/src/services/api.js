@@ -649,6 +649,12 @@ export const clientAPI = {
     return response.data
   },
 
+  // List all dashboard links across all clients (admin) - optimized bulk endpoint
+  listAllDashboardLinks: async () => {
+    const response = await api.get(`/api/v1/data/dashboard-links`)
+    return response.data
+  },
+
   // List dashboard links for a client (admin)
   listDashboardLinks: async (clientId) => {
     const response = await api.get(`/api/v1/data/clients/${clientId}/dashboard-links`)
