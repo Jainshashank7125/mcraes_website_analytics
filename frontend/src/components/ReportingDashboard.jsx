@@ -317,6 +317,10 @@ function ReportingDashboard({
   const isPublic = !!publicSlug;
   const location = useLocation();
   const hasHandledNavigationClientId = useRef(false); // Track if we've handled clientId from navigation state
+  // Track previous client/brand IDs to detect actual client changes (not just date changes)
+  // Dashboard links should persist when only dates change, but be cleared when client changes
+  const prevClientIdRef = useRef(null);
+  const prevBrandIdRef = useRef(null);
   const [clients, setClients] = useState([]);
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [clientSearchTerm, setClientSearchTerm] = useState("");
@@ -486,6 +490,33 @@ function ReportingDashboard({
     const range = applyMonthSelection(monthSelection);
     if (!range) return;
     await loadAllData(range);
+  };
+
+  // Handle refresh button click - reloads all data and regenerates overview
+  const handleRefresh = async () => {
+    // Clear overview cache to force fresh fetch
+    setOverviewData(null);
+    setOverviewCacheKey(null);
+    setExecutiveSummary(null);
+    setExecutiveSummaryCacheKey(null);
+    
+    // Capture current client/brand IDs before reloading to ensure correct IDs are used
+    const currentClientId = selectedClientId;
+    const currentBrandId = selectedBrandId;
+    
+    // Reload all data (loadDashboardData will automatically call generateOverviewAutomatically)
+    await loadAllData();
+    
+    // Explicitly call overview API after data is loaded to ensure it's refreshed
+    // This is a safety measure in case auto-generation doesn't trigger
+    if (!isPublic && (currentClientId || currentBrandId)) {
+      // Wait for state to update after loadAllData completes
+      setTimeout(() => {
+        // generateOverviewAutomatically will use current state values if data is not provided
+        // But we pass the captured IDs to ensure they match the loaded data
+        generateOverviewAutomatically(null, currentClientId, currentBrandId);
+      }, 400);
+    }
   };
 
   // Helper to set dates based on month selection (admin only)
@@ -780,16 +811,53 @@ function ReportingDashboard({
     // For public mode, we can load data with just publicSlug
     // For admin mode, we need selectedClientId (client-centric) or selectedBrandId (fallback)
     if (selectedClientId || selectedBrandId || (isPublic && publicSlug)) {
-      // Clear previous data when switching clients/brands
+      // Check if client/brand actually changed (not just date)
+      const clientChanged = 
+        prevClientIdRef.current !== selectedClientId || 
+        prevBrandIdRef.current !== selectedBrandId;
+      
+      // Only clear dashboard links when client/brand changes, not when dates change
+      // Dashboard links are client-specific and should persist across date changes
+      if (clientChanged) {
+        debugLog("Client changed - clearing dashboard links", {
+          previousClientId: prevClientIdRef.current,
+          newClientId: selectedClientId,
+          previousBrandId: prevBrandIdRef.current,
+          newBrandId: selectedBrandId,
+        });
+        // Clear previous data when switching clients/brands
+        // IMPORTANT: Clear executive summary FIRST to prevent showing old client's data
+        setExecutiveSummary(null);
+        setExecutiveSummaryCacheKey(null);
+        setOverviewData(null);
+        setOverviewCacheKey(null);
+        // Clear dashboard links to prevent loading stale executive summaries from previous client
+        setDashboardLinks([]);
+        // Update refs to track current client
+        prevClientIdRef.current = selectedClientId;
+        prevBrandIdRef.current = selectedBrandId;
+      } else {
+        // When only dates change, clear overview/executive summary but keep dashboard links
+        debugLog("Only dates changed - keeping dashboard links", {
+          clientId: selectedClientId,
+          startDate,
+          endDate,
+          dashboardLinksCount: dashboardLinks.length,
+        });
+        setExecutiveSummary(null);
+        setExecutiveSummaryCacheKey(null);
+        setOverviewData(null);
+        setOverviewCacheKey(null);
+        // Dashboard links are NOT cleared - they persist across date changes
+      }
+      
+      // Always clear data and reload when dates or client changes
       setDashboardData(null);
       setScrunchData(null);
       setBrandAnalytics(null);
       setError(null);
       // Reset pagination when data changes
       setInsightsPage(0);
-      // Reset overview cache when client/brand or date range changes
-      setOverviewData(null);
-      setOverviewCacheKey(null);
       // Load all data sources in parallel including KPI selections
       loadAllData();
     }
@@ -800,6 +868,59 @@ function ReportingDashboard({
     endDate,
     isPublic,
     publicSlug,
+  ]);
+
+  // Ensure overview API is called when client changes and data is loaded (admin view only)
+  useEffect(() => {
+    // Only trigger in admin view when we have data and client/brand ID
+    if (
+      !isPublic &&
+      dashboardData &&
+      dashboardData.kpis &&
+      Object.keys(dashboardData.kpis).length > 0 &&
+      (selectedClientId || selectedBrandId)
+    ) {
+      // Create cache key to check if overview already exists for this client/brand and date range
+      const cacheKey = `${selectedClientId || selectedBrandId}-${startDate}-${endDate}`;
+      
+      // Only call overview API if we don't already have overview data for this cache key
+      // and we're not already loading
+      if (
+        (!overviewData || overviewCacheKey !== cacheKey) &&
+        !loadingOverview
+      ) {
+        // Use a small delay to avoid duplicate calls (since loadDashboardData also calls it)
+        const timeoutId = setTimeout(() => {
+          // Double-check conditions before calling (state might have changed)
+          if (
+            dashboardData &&
+            dashboardData.kpis &&
+            Object.keys(dashboardData.kpis).length > 0 &&
+            (selectedClientId || selectedBrandId) &&
+            (!overviewData || overviewCacheKey !== cacheKey) &&
+            !loadingOverview
+          ) {
+            generateOverviewAutomatically(
+              dashboardData,
+              selectedClientId,
+              selectedBrandId
+            );
+          }
+        }, 200);
+
+        return () => clearTimeout(timeoutId);
+      }
+    }
+  }, [
+    dashboardData,
+    selectedClientId,
+    selectedBrandId,
+    startDate,
+    endDate,
+    isPublic,
+    overviewData,
+    overviewCacheKey,
+    loadingOverview,
   ]);
 
   const loadClients = async (searchTerm = "", autoSelectFirst = false) => {
@@ -1064,7 +1185,7 @@ function ReportingDashboard({
   };
 
   // Generate overview automatically when KPIs are loaded (admin view only)
-  const generateOverviewAutomatically = async (kpiData = null) => {
+  const generateOverviewAutomatically = async (kpiData = null, clientId = null, brandId = null) => {
     // Use provided data or current dashboardData
     const dataToUse = kpiData || dashboardData;
     if (
@@ -1075,18 +1196,29 @@ function ReportingDashboard({
       return;
     }
 
+    // Use provided IDs or fall back to state values
+    const effectiveClientId = clientId !== null ? clientId : selectedClientId;
+    const effectiveBrandId = brandId !== null ? brandId : selectedBrandId;
+
     // Create cache key based on client/brand and date range
+    // Use client_id first (client-centric), then fall back to brand_id
     const cacheKey = `${
-      selectedClientId || selectedBrandId
+      effectiveClientId || effectiveBrandId
     }-${startDate}-${endDate}`;
 
-    // If we already have overview data for this cache key, don't fetch again
-    if (overviewData && overviewCacheKey === cacheKey) {
+    // If we already have overview data for this EXACT cache key, don't fetch again
+    // But if cache key doesn't match (e.g., different client), we should fetch
+    if (overviewData && overviewCacheKey === cacheKey && !loadingOverview) {
+      debugLog("Overview already exists for this cache key, skipping API call", {
+        cacheKey,
+        currentCacheKey: overviewCacheKey,
+      });
       return;
     }
 
-    // Don't fetch if already loading
-    if (loadingOverview) {
+    // Don't fetch if already loading (unless cache key changed, which means different client)
+    if (loadingOverview && overviewCacheKey === cacheKey) {
+      debugLog("Overview already loading for this cache key", { cacheKey });
       return;
     }
 
@@ -1095,24 +1227,34 @@ function ReportingDashboard({
 
     try {
       const overview = await openaiAPI.getOverallOverview(
-        selectedClientId,
-        selectedBrandId,
+        effectiveClientId,
+        effectiveBrandId,
         startDate || undefined,
         endDate || undefined
       );
+      
+      // Update overview state with the API response - ALWAYS replace previous data
       setOverviewData(overview);
       setOverviewCacheKey(cacheKey);
       setExpandedMetricsSources(new Set()); // Reset expanded state when new overview is loaded
 
-      // Store executive summary from response (structured JSON)
+      // ALWAYS update executive summary from API response, replacing any previous value
+      // This ensures that when client changes, the new executive summary replaces the old one
+      // Force update regardless of previous state to prevent stale data from persisting
       if (overview.executive_summary) {
+        debugLog("Setting executive summary from overview API response", {
+          clientId: effectiveClientId,
+          brandId: effectiveBrandId,
+          cacheKey,
+          previousCacheKey: executiveSummaryCacheKey,
+        });
         setExecutiveSummary(overview.executive_summary);
         setExecutiveSummaryCacheKey(cacheKey);
 
         // Auto-save executive summary to matching dashboard link (admin view only)
         if (
           !isPublic &&
-          selectedClientId &&
+          effectiveClientId &&
           startDate &&
           endDate &&
           dashboardLinks &&
@@ -1120,12 +1262,25 @@ function ReportingDashboard({
         ) {
           saveExecutiveSummaryToMatchingLink(overview.executive_summary);
         }
+      } else {
+        // Clear executive summary if overview response doesn't include it
+        setExecutiveSummary(null);
+        setExecutiveSummaryCacheKey(null);
       }
+      
+      debugLog("Overview API response received and state updated", {
+        clientId: effectiveClientId,
+        brandId: effectiveBrandId,
+        cacheKey,
+        hasExecutiveSummary: !!overview.executive_summary,
+      });
     } catch (err) {
       debugError("Error generating overview:", err);
       // Don't set error here - just log it, user can retry by clicking button
       setOverviewData(null);
       setOverviewCacheKey(null);
+      setExecutiveSummary(null);
+      setExecutiveSummaryCacheKey(null);
     } finally {
       setLoadingOverview(false);
     }
@@ -1149,9 +1304,17 @@ function ReportingDashboard({
     }-${startDate}-${endDate}`;
 
     // First, check if executive summary exists in the currently editing dashboard link (admin view)
-    if (!isPublic && editingLink && editingLink.executive_summary) {
+    // IMPORTANT: Only load if the link belongs to the current client
+    if (
+      !isPublic &&
+      editingLink &&
+      editingLink.executive_summary &&
+      editingLink.client_id === selectedClientId
+    ) {
       debugLog("Loading executive summary from editing dashboard link", {
         linkId: editingLink.id,
+        linkClientId: editingLink.client_id,
+        currentClientId: selectedClientId,
       });
       setExecutiveSummary(editingLink.executive_summary);
       setExecutiveSummaryCacheKey(`link-${editingLink.id}`);
@@ -1179,13 +1342,14 @@ function ReportingDashboard({
       return;
     }
 
-    // Check if there's a dashboard link with matching date range that has executive summary (admin view)
+    // Check if there's a dashboard link with matching date range and client that has executive summary (admin view)
     if (
       !isPublic &&
       dashboardLinks &&
       dashboardLinks.length > 0 &&
       startDate &&
-      endDate
+      endDate &&
+      selectedClientId
     ) {
       const matchingLink = dashboardLinks.find((link) => {
         const linkStart = link.start_date
@@ -1195,6 +1359,7 @@ function ReportingDashboard({
           ? new Date(link.end_date).toISOString().split("T")[0]
           : null;
         return (
+          link.client_id === selectedClientId &&
           linkStart === startDate &&
           linkEnd === endDate &&
           link.executive_summary
@@ -1202,54 +1367,84 @@ function ReportingDashboard({
       });
 
       if (matchingLink && matchingLink.executive_summary) {
-        debugLog(
-          "Loading executive summary from matching dashboard link by date range",
-          {
-            linkId: matchingLink.id,
-            startDate: startDate,
-            endDate: endDate,
-          }
-        );
-        setExecutiveSummary(matchingLink.executive_summary);
-        setExecutiveSummaryCacheKey(`link-${matchingLink.id}`);
-        // Also set overviewData for backward compatibility with dialog
-        setOverviewData({
-          executive_summary: matchingLink.executive_summary,
-          date_range: { start_date: startDate, end_date: endDate },
-          total_metrics_analyzed: dashboardData.kpis
-            ? Object.keys(dashboardData.kpis).length
-            : 0,
-          metrics_by_source: {
-            GA4: Object.values(dashboardData.kpis || {}).filter(
-              (k) => k.source === "GA4"
-            ).length,
-            AgencyAnalytics: Object.values(dashboardData.kpis || {}).filter(
-              (k) => k.source === "AgencyAnalytics"
-            ).length,
-            Scrunch: Object.values(dashboardData.kpis || {}).filter(
-              (k) => k.source === "Scrunch"
-            ).length,
-          },
-        });
-        setOverviewCacheKey(cacheKey);
-        setShowOverviewDialog(true);
-        return;
+        // Double-check that the link belongs to the current client
+        // This prevents loading executive summary from a different client
+        if (matchingLink.client_id !== selectedClientId) {
+          debugLog(
+            "Skipping dashboard link - client ID mismatch",
+            {
+              linkId: matchingLink.id,
+              linkClientId: matchingLink.client_id,
+              currentClientId: selectedClientId,
+            }
+          );
+        } else {
+          debugLog(
+            "Loading executive summary from matching dashboard link by date range",
+            {
+              linkId: matchingLink.id,
+              linkClientId: matchingLink.client_id,
+              currentClientId: selectedClientId,
+              startDate: startDate,
+              endDate: endDate,
+            }
+          );
+          setExecutiveSummary(matchingLink.executive_summary);
+          setExecutiveSummaryCacheKey(`link-${matchingLink.id}`);
+          // Also set overviewData for backward compatibility with dialog
+          setOverviewData({
+            executive_summary: matchingLink.executive_summary,
+            date_range: { start_date: startDate, end_date: endDate },
+            total_metrics_analyzed: dashboardData.kpis
+              ? Object.keys(dashboardData.kpis).length
+              : 0,
+            metrics_by_source: {
+              GA4: Object.values(dashboardData.kpis || {}).filter(
+                (k) => k.source === "GA4"
+              ).length,
+              AgencyAnalytics: Object.values(dashboardData.kpis || {}).filter(
+                (k) => k.source === "AgencyAnalytics"
+              ).length,
+              Scrunch: Object.values(dashboardData.kpis || {}).filter(
+                (k) => k.source === "Scrunch"
+              ).length,
+            },
+          });
+          setOverviewCacheKey(cacheKey);
+          setShowOverviewDialog(true);
+          return;
+        }
       }
     }
 
     // Check if we already have executive summary in state that matches cache key
+    // IMPORTANT: Only use cached data if the cache key matches (which includes client ID)
     if (executiveSummary && executiveSummaryCacheKey === cacheKey) {
-      debugLog("Using cached executive summary from state");
+      debugLog("Using cached executive summary from state", {
+        cacheKey,
+        currentClientId: selectedClientId,
+      });
       setShowOverviewDialog(true);
       return;
     }
 
     // If overview data exists and matches current cache key, just show dialog
+    // IMPORTANT: Only use if cache key matches (which includes client ID)
     if (overviewData && overviewCacheKey === cacheKey) {
       // Ensure executiveSummary state is set if overviewData has it
-      if (overviewData.executive_summary && !executiveSummary) {
-        setExecutiveSummary(overviewData.executive_summary);
-        setExecutiveSummaryCacheKey(cacheKey);
+      // But only if it matches the current client
+      if (overviewData.executive_summary) {
+        // Only set if we don't have one, or if the cache key matches (same client)
+        if (!executiveSummary || executiveSummaryCacheKey === cacheKey) {
+          setExecutiveSummary(overviewData.executive_summary);
+          setExecutiveSummaryCacheKey(cacheKey);
+        } else {
+          debugLog("Skipping stale executive summary - cache key mismatch", {
+            currentCacheKey: cacheKey,
+            existingCacheKey: executiveSummaryCacheKey,
+            currentClientId: selectedClientId,
+          });
+        }
       }
       setShowOverviewDialog(true);
       return;
@@ -1347,9 +1542,13 @@ function ReportingDashboard({
         // Auto-generate overview when KPIs are available (only in admin view)
         // In public view, we check dashboard link first and only call API if summary doesn't exist
         if (data.kpis && Object.keys(data.kpis).length > 0 && !isPublic) {
+          // Capture the client/brand IDs that were used to load this data
+          // This ensures we use the correct IDs even if state changes before setTimeout executes
+          const dataClientId = selectedClientId;
+          const dataBrandId = selectedBrandId;
           // Call with a slight delay to ensure state is updated
           setTimeout(() => {
-            generateOverviewAutomatically(data);
+            generateOverviewAutomatically(data, dataClientId, dataBrandId);
           }, 100);
         }
       } else {
@@ -2096,18 +2295,32 @@ function ReportingDashboard({
     setEditingLink(link);
 
     // Load executive summary from the link if it exists
-    if (link.executive_summary) {
+    // IMPORTANT: Only load if the link belongs to the current client
+    if (link.executive_summary && link.client_id === selectedClientId) {
       debugLog("Loading executive summary from dashboard link for editing", {
         linkId: link.id,
+        linkClientId: link.client_id,
+        currentClientId: selectedClientId,
       });
       setExecutiveSummary(link.executive_summary);
       setExecutiveSummaryCacheKey(`link-${link.id}`);
     } else {
-      // Clear executive summary if link doesn't have one
-      debugLog(
-        "No executive summary in dashboard link, will generate on demand",
-        { linkId: link.id }
-      );
+      // Clear executive summary if link doesn't have one or belongs to different client
+      if (link.client_id !== selectedClientId) {
+        debugLog(
+          "Skipping executive summary - link belongs to different client",
+          {
+            linkId: link.id,
+            linkClientId: link.client_id,
+            currentClientId: selectedClientId,
+          }
+        );
+      } else {
+        debugLog(
+          "No executive summary in dashboard link, will generate on demand",
+          { linkId: link.id }
+        );
+      }
       setExecutiveSummary(null);
       setExecutiveSummaryCacheKey(null);
     }
@@ -2769,7 +2982,7 @@ function ReportingDashboard({
               variant="outlined"
               size="small"
               startIcon={<RefreshIcon sx={{ fontSize: 16 }} />}
-              onClick={loadAllData}
+              onClick={handleRefresh}
               sx={{
                 borderRadius: 2,
                 px: 2,
@@ -8137,7 +8350,7 @@ function ReportingDashboard({
                   {overviewData.date_range?.start_date || "N/A"} to{" "}
                   {overviewData.date_range?.end_date || "N/A"}
                 </Typography>
-                <Typography variant="body2" color="text.secondary">
+                {/* <Typography variant="body2" color="text.secondary">
                   <strong>Metrics Analyzed:</strong>{" "}
                   {overviewData.total_metrics_analyzed} total
                   {overviewData.metrics_by_source && (
@@ -8149,7 +8362,7 @@ function ReportingDashboard({
                       Mentions)
                     </>
                   )}
-                </Typography>
+                </Typography> */}
               </Box>
 
               {/* AI Generated Overview - Show Executive Summary if available, otherwise show old format */}

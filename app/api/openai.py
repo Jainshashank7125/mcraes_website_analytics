@@ -338,9 +338,14 @@ async def generate_overall_overview(
             )
         
         # Import the dashboard function to fetch KPIs
-        from app.api.data import get_reporting_dashboard, get_reporting_dashboard_by_client
+        from app.api.data import (
+            get_reporting_dashboard, 
+            get_reporting_dashboard_by_client,
+            get_scrunch_dashboard_data
+        )
         
-        # Fetch dashboard data to get all KPIs
+        # Fetch dashboard data to get all KPIs (GA4 and Agency Analytics)
+        # NOTE: Main dashboard endpoint skips Scrunch data for performance, so we fetch it separately
         logger.info(f"[Executive Summary] Fetching dashboard data for {'client' if client_id else 'brand'} {client_id or brand_id}")
         if client_id:
             # Use client-based endpoint
@@ -368,41 +373,166 @@ async def generate_overall_overview(
                 detail=f"No data found for {'client' if client_id else 'brand'} {client_id or brand_id}"
             )
         
-        if not dashboard_data.get("kpis"):
+        # Fetch Scrunch data separately (main endpoint skips it for performance)
+        scrunch_data = None
+        try:
+            logger.info(f"[Executive Summary] Fetching Scrunch data separately for {'client' if client_id else 'brand'} {client_id or brand_id}")
+            if client_id:
+                # Get client to find scrunch_brand_id
+                from app.services.supabase_service import SupabaseService
+                supabase = SupabaseService(db=db)
+                client = supabase.get_client_by_id(client_id)
+                if client and client.get("scrunch_brand_id"):
+                    scrunch_brand_id = client.get("scrunch_brand_id")
+                    scrunch_data = await get_scrunch_dashboard_data(
+                        scrunch_brand_id,
+                        request.start_date,
+                        request.end_date,
+                        client_id=client_id,
+                        db=db
+                    )
+                    logger.info(f"[Executive Summary] Scrunch data fetched - {len(scrunch_data.get('kpis', {}))} KPIs found")
+                else:
+                    logger.warning(f"[Executive Summary] Client {client_id} has no scrunch_brand_id - skipping Scrunch data")
+            else:
+                # Use brand_id directly
+                scrunch_data = await get_scrunch_dashboard_data(
+                    brand_id,
+                    request.start_date,
+                    request.end_date,
+                    client_id=None,
+                    db=db
+                )
+                logger.info(f"[Executive Summary] Scrunch data fetched - {len(scrunch_data.get('kpis', {}))} KPIs found")
+        except Exception as e:
+            logger.warning(f"[Executive Summary] Error fetching Scrunch data (non-fatal): {str(e)}")
+            # Don't fail if Scrunch data can't be fetched - continue with other data sources
+            scrunch_data = None
+        
+        # Merge Scrunch KPIs with main dashboard KPIs
+        all_kpis = dashboard_data.get("kpis", {}).copy()  # Start with main dashboard KPIs
+        if scrunch_data and scrunch_data.get("kpis"):
+            # Merge Scrunch KPIs into all_kpis
+            scrunch_kpis = scrunch_data.get("kpis", {})
+            all_kpis.update(scrunch_kpis)
+            logger.info(f"[Executive Summary] Merged Scrunch KPIs - Added {len(scrunch_kpis)} Scrunch KPIs to dashboard data")
+        
+        if not all_kpis:
             logger.warning(f"[Executive Summary] No KPIs found in dashboard data for {'client' if client_id else 'brand'} {client_id or brand_id}")
             raise HTTPException(
                 status_code=404,
                 detail=f"No KPIs found for {'client' if client_id else 'brand'} {client_id or brand_id}"
             )
         
-        logger.info(f"[Executive Summary] Dashboard data fetched successfully - {len(dashboard_data.get('kpis', {}))} KPIs found")
+        logger.info(f"[Executive Summary] Dashboard data fetched successfully - Total KPIs: {len(all_kpis)} (Main: {len(dashboard_data.get('kpis', {}))}, Scrunch: {len(scrunch_data.get('kpis', {})) if scrunch_data else 0})")
         
-        # Get all KPIs grouped by source
-        all_kpis = dashboard_data.get("kpis", {})
-        kpis_by_source = {
-            "GA4": [],
-            "AgencyAnalytics": [],
-            "Scrunch": []
+        # ========== STRUCTURE DATA BY SECTIONS WITH KPIs AND CHARTS ==========
+        # Organize data in a structured format with sections, KPIs, and chart data
+        structured_data = {
+            "GA4": {
+                "section_name": "Google Analytics 4 (Web Analytics)",
+                "kpis": [],
+                "charts": {}
+            },
+            "AgencyAnalytics": {
+                "section_name": "Agency Analytics (SEO Rankings)",
+                "kpis": [],
+                "charts": {}
+            },
+            "Scrunch": {
+                "section_name": "Scrunch AI (Brand Mentions & Sentiment)",
+                "kpis": [],
+                "charts": {}
+            }
         }
         
+        # Group KPIs by source
         for kpi_key, kpi_data in all_kpis.items():
             source = kpi_data.get("source", "Unknown")
-            if source in kpis_by_source:
+            if source in structured_data:
                 metric_info = {
-                    "metric": kpi_data.get("label", kpi_key),
+                    "key": kpi_key,
+                    "label": kpi_data.get("label", kpi_key),
                     "value": kpi_data.get("value"),
                     "change": kpi_data.get("change"),
                     "format": kpi_data.get("format", "number"),
-                    "source": source
+                    "icon": kpi_data.get("icon"),
+                    "display": kpi_data.get("display")
                 }
-                kpis_by_source[source].append(metric_info)
+                structured_data[source]["kpis"].append(metric_info)
         
-        # Prepare overall metrics summary
+        # Add chart data from main dashboard
+        main_chart_data = dashboard_data.get("chart_data", {})
+        if main_chart_data:
+            # GA4 Charts
+            if main_chart_data.get("users_over_time"):
+                structured_data["GA4"]["charts"]["users_over_time"] = {
+                    "type": "line",
+                    "description": "Daily users over the reporting period",
+                    "data_points": len(main_chart_data["users_over_time"]),
+                    "sample": main_chart_data["users_over_time"][:5] if isinstance(main_chart_data["users_over_time"], list) else None
+                }
+            if main_chart_data.get("traffic_sources"):
+                structured_data["GA4"]["charts"]["traffic_sources"] = {
+                    "type": "bar",
+                    "description": "Traffic sources breakdown",
+                    "data_points": len(main_chart_data["traffic_sources"]),
+                    "top_sources": main_chart_data["traffic_sources"][:5] if isinstance(main_chart_data["traffic_sources"], list) else None
+                }
+            if main_chart_data.get("top_pages"):
+                structured_data["GA4"]["charts"]["top_pages"] = {
+                    "type": "table",
+                    "description": "Top performing pages",
+                    "data_points": len(main_chart_data["top_pages"]),
+                    "top_pages": main_chart_data["top_pages"][:5] if isinstance(main_chart_data["top_pages"], list) else None
+                }
+            if main_chart_data.get("geographic_breakdown"):
+                structured_data["GA4"]["charts"]["geographic_breakdown"] = {
+                    "type": "map",
+                    "description": "Geographic distribution of users",
+                    "data_points": len(main_chart_data["geographic_breakdown"]),
+                    "top_countries": main_chart_data["geographic_breakdown"][:5] if isinstance(main_chart_data["geographic_breakdown"], list) else None
+                }
+            
+            # Agency Analytics Charts
+            if main_chart_data.get("top_campaigns"):
+                structured_data["AgencyAnalytics"]["charts"]["top_campaigns"] = {
+                    "type": "bar",
+                    "description": "Top performing SEO campaigns",
+                    "data_points": len(main_chart_data["top_campaigns"]),
+                    "top_campaigns": main_chart_data["top_campaigns"][:5] if isinstance(main_chart_data["top_campaigns"], list) else None
+                }
+        
+        # Add Scrunch chart data
+        if scrunch_data and scrunch_data.get("chart_data"):
+            scrunch_chart_data = scrunch_data.get("chart_data", {})
+            if scrunch_chart_data.get("top_performing_prompts"):
+                structured_data["Scrunch"]["charts"]["top_performing_prompts"] = {
+                    "type": "table",
+                    "description": "Top performing AI prompts/mentions",
+                    "data_points": len(scrunch_chart_data["top_performing_prompts"]),
+                    "top_prompts": scrunch_chart_data["top_performing_prompts"][:5] if isinstance(scrunch_chart_data["top_performing_prompts"], list) else None
+                }
+            if scrunch_chart_data.get("scrunch_ai_insights"):
+                structured_data["Scrunch"]["charts"]["scrunch_ai_insights"] = {
+                    "type": "insights",
+                    "description": "AI-generated insights from brand mentions",
+                    "data_points": len(scrunch_chart_data["scrunch_ai_insights"]),
+                    "sample_insights": scrunch_chart_data["scrunch_ai_insights"][:3] if isinstance(scrunch_chart_data["scrunch_ai_insights"], list) else None
+                }
+        
+        # Prepare overall metrics summary (for backward compatibility)
+        kpis_by_source = {
+            "GA4": structured_data["GA4"]["kpis"],
+            "AgencyAnalytics": structured_data["AgencyAnalytics"]["kpis"],
+            "Scrunch": structured_data["Scrunch"]["kpis"]
+        }
+        
         all_metrics = []
         for source, metrics in kpis_by_source.items():
             all_metrics.extend(metrics)
         
-        logger.info(f"[Executive Summary] Metrics grouped by source - GA4: {len(kpis_by_source['GA4'])}, AgencyAnalytics: {len(kpis_by_source['AgencyAnalytics'])}, Scrunch: {len(kpis_by_source['Scrunch'])}, Total: {len(all_metrics)}")
+        logger.info(f"[Executive Summary] Structured data - GA4: {len(structured_data['GA4']['kpis'])} KPIs, {len(structured_data['GA4']['charts'])} charts | AgencyAnalytics: {len(structured_data['AgencyAnalytics']['kpis'])} KPIs, {len(structured_data['AgencyAnalytics']['charts'])} charts | Scrunch: {len(structured_data['Scrunch']['kpis'])} KPIs, {len(structured_data['Scrunch']['charts'])} charts")
         
         if not all_metrics:
             logger.error("[Executive Summary] No metrics found to analyze after grouping")
@@ -439,7 +569,44 @@ async def generate_overall_overview(
         reporting_period = f"{start_date_str} to {end_date_str}"
         logger.info(f"[Executive Summary] Reporting period: {reporting_period}")
         
-        # Format metrics by source for better context
+        # Format structured data with sections, KPIs, and charts
+        structured_data_text = ""
+        for section_key, section_data in structured_data.items():
+            if section_data["kpis"] or section_data["charts"]:
+                structured_data_text += f"\n\n{'='*60}\n"
+                structured_data_text += f"{section_data['section_name']}\n"
+                structured_data_text += f"{'='*60}\n"
+                
+                # Add KPIs
+                if section_data["kpis"]:
+                    structured_data_text += f"\n📊 Key Performance Indicators ({len(section_data['kpis'])} metrics):\n"
+                    for kpi in section_data["kpis"]:
+                        value_str = f"{kpi['value']}"
+                        if kpi.get("change") is not None:
+                            change_str = f"{kpi['change']:+.1f}%" if isinstance(kpi['change'], (int, float)) else str(kpi['change'])
+                            value_str += f" ({change_str})"
+                        if kpi.get("display"):
+                            structured_data_text += f"  • {kpi['label']}: {kpi['display']}\n"
+                        else:
+                            structured_data_text += f"  • {kpi['label']}: {value_str}\n"
+                
+                # Add Charts
+                if section_data["charts"]:
+                    structured_data_text += f"\n📈 Charts & Visualizations ({len(section_data['charts'])} charts):\n"
+                    for chart_key, chart_info in section_data["charts"].items():
+                        structured_data_text += f"  • {chart_info['description']} ({chart_info['type']} chart, {chart_info['data_points']} data points)\n"
+                        # Add sample data if available
+                        if chart_info.get("sample") or chart_info.get("top_sources") or chart_info.get("top_pages") or chart_info.get("top_countries") or chart_info.get("top_campaigns") or chart_info.get("top_prompts") or chart_info.get("sample_insights"):
+                            sample_data = (chart_info.get("sample") or chart_info.get("top_sources") or 
+                                         chart_info.get("top_pages") or chart_info.get("top_countries") or 
+                                         chart_info.get("top_campaigns") or chart_info.get("top_prompts") or 
+                                         chart_info.get("sample_insights"))
+                            if sample_data and len(sample_data) > 0:
+                                structured_data_text += f"    Sample data: {json.dumps(sample_data[:3], indent=6, default=str)}\n"
+        
+        logger.debug(f"[Executive Summary] Structured data text length: {len(structured_data_text)} characters")
+        
+        # Also keep backward-compatible format for metrics
         metrics_by_source_text = ""
         for source, metrics in kpis_by_source.items():
             if metrics:
@@ -450,8 +617,6 @@ async def generate_overall_overview(
                 }.get(source, source)
                 metrics_by_source_text += f"\n\n{source_name} Metrics:\n"
                 metrics_by_source_text += format_metrics_for_prompt(metrics)
-        
-        logger.debug(f"[Executive Summary] Metrics text length: {len(metrics_by_source_text)} characters")
         
         # New system prompt for Executive Brief
         system_prompt = """You are an AI reporting assistant for a B2B digital marketing agency.
@@ -479,7 +644,10 @@ Client Name: {client_name}
 Program Name: {program_name}
 Reporting Period: {reporting_period}
 
-{metrics_by_source_text}
+{structured_data_text}
+
+NOTE: The data above is organized by sections (GA4, Agency Analytics, Scrunch) with both KPIs and chart visualizations. 
+Use the chart data to provide context about trends, patterns, and visual insights that complement the KPI metrics.
 
 You MUST return a valid JSON object with the following exact structure:
 {{
@@ -694,7 +862,9 @@ def format_metrics_for_prompt(metrics: List[Dict]) -> str:
                 change_direction = "↑" if change_value > 0 else "↓" if change_value < 0 else "→"
                 change_str = f" ({change_direction} {abs(change_value):.1f}% vs previous period)"
         
-        formatted.append(f"- {metric['metric']}: {value_str}{change_str}")
+        # Support both old format ('metric' key) and new format ('label' key)
+        metric_name = metric.get("metric") or metric.get("label", "Unknown Metric")
+        formatted.append(f"- {metric_name}: {value_str}{change_str}")
     
     return "\n".join(formatted)
 
