@@ -62,8 +62,6 @@ function DashboardLinksManagement() {
   const [expirationDateFrom, setExpirationDateFrom] = useState('');
   const [expirationDateTo, setExpirationDateTo] = useState('');
   const [activeStatus, setActiveStatus] = useState('all'); // 'all', 'active', 'inactive'
-  const [dateRangeFrom, setDateRangeFrom] = useState('');
-  const [dateRangeTo, setDateRangeTo] = useState('');
   
   const [copiedLinkId, setCopiedLinkId] = useState(null);
   const [filtersExpanded, setFiltersExpanded] = useState(true);
@@ -98,8 +96,6 @@ function DashboardLinksManagement() {
     expirationDateFrom,
     expirationDateTo,
     activeStatus,
-    dateRangeFrom,
-    dateRangeTo,
   ]);
 
   const loadAllLinks = async () => {
@@ -111,14 +107,25 @@ function DashboardLinksManagement() {
       const clientsList = clientsResponse.items || [];
       setClients(clientsList);
 
-      // Then, load dashboard links for each client
+      // Then, load dashboard links for each client with their KPI selections
       const linksPromises = clientsList.map(async (client) => {
         try {
           const linksResponse = await clientAPI.listDashboardLinks(client.id);
-          const links = (linksResponse.items || []).map(link => ({
-            ...link,
-            client_id: client.id,
-            client_name: client.company_name,
+          const links = await Promise.all((linksResponse.items || []).map(async (link) => {
+            // Fetch KPI selections for this link
+            let kpiSelections = null;
+            try {
+              kpiSelections = await clientAPI.getDashboardLinkKPISelections(client.id, link.id);
+            } catch (err) {
+              debugError(`Error loading KPI selections for link ${link.id}:`, err);
+              // Continue without KPI selections if fetch fails
+            }
+            return {
+              ...link,
+              client_id: client.id,
+              client_name: client.company_name,
+              kpi_selections: kpiSelections,
+            };
           }));
           return links;
         } catch (err) {
@@ -186,30 +193,6 @@ function DashboardLinksManagement() {
       filtered = filtered.filter(link => link.enabled === false);
     }
 
-    // Filter by date range (checks if link's date range overlaps with filter range)
-    if (dateRangeFrom || dateRangeTo) {
-      filtered = filtered.filter(link => {
-        if (!link.start_date || !link.end_date) return false;
-        const linkStartDate = link.start_date.split('T')[0];
-        const linkEndDate = link.end_date.split('T')[0];
-        
-        // If both from and to are set, check if link's range overlaps with filter range
-        if (dateRangeFrom && dateRangeTo) {
-          // Link overlaps if: link starts before filter ends AND link ends after filter starts
-          return linkStartDate <= dateRangeTo && linkEndDate >= dateRangeFrom;
-        }
-        // If only "from" is set, check if link ends after the filter start
-        if (dateRangeFrom) {
-          return linkEndDate >= dateRangeFrom;
-        }
-        // If only "to" is set, check if link starts before the filter end
-        if (dateRangeTo) {
-          return linkStartDate <= dateRangeTo;
-        }
-        return true;
-      });
-    }
-
     setFilteredLinks(filtered);
   };
 
@@ -231,8 +214,6 @@ function DashboardLinksManagement() {
     setExpirationDateFrom('');
     setExpirationDateTo('');
     setActiveStatus('all');
-    setDateRangeFrom('');
-    setDateRangeTo('');
   };
 
   const formatDate = (dateString) => {
@@ -491,36 +472,6 @@ function DashboardLinksManagement() {
             </Box>
           </Box>
 
-          <Box>
-            <Typography variant="subtitle2" fontWeight={600} mb={1}>
-              Date Range
-            </Typography>
-            <Typography variant="caption" color="text.secondary" mb={1} display="block">
-              Filter links by their date range (start date to end date)
-            </Typography>
-            <Box display="flex" gap={2}>
-              <TextField
-                label="From"
-                type="date"
-                size="small"
-                value={dateRangeFrom}
-                onChange={(e) => setDateRangeFrom(e.target.value)}
-                InputLabelProps={{ shrink: true }}
-                sx={{ minWidth: 150 }}
-                helperText="Link end date must be on or after this date"
-              />
-              <TextField
-                label="To"
-                type="date"
-                size="small"
-                value={dateRangeTo}
-                onChange={(e) => setDateRangeTo(e.target.value)}
-                InputLabelProps={{ shrink: true }}
-                sx={{ minWidth: 150 }}
-                helperText="Link start date must be on or before this date"
-              />
-            </Box>
-          </Box>
           </Box>
         </Collapse>
       </Paper>
@@ -550,7 +501,7 @@ function DashboardLinksManagement() {
                 <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>Date Created</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>Expiration Date</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Date Range</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>KPI Selections</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>Actions</TableCell>
               </TableRow>
             </TableHead>
@@ -625,9 +576,34 @@ function DashboardLinksManagement() {
                     </Typography>
                   </TableCell>
                   <TableCell>
-                    <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
-                      {formatDate(link.start_date)} - {formatDate(link.end_date)}
-                    </Typography>
+                    {link.kpi_selections ? (
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                          <strong>Sections:</strong> {link.kpi_selections.visible_sections?.length > 0 
+                            ? link.kpi_selections.visible_sections.join(', ') 
+                            : 'All'}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                          <strong>Section KPIs:</strong> {link.kpi_selections.selected_kpis?.length > 0 
+                            ? `${link.kpi_selections.selected_kpis.length} selected` 
+                            : 'All'}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                          <strong>Performance Metrics:</strong> {link.kpi_selections.selected_performance_metrics_kpis?.length > 0 
+                            ? `${link.kpi_selections.selected_performance_metrics_kpis.length} selected` 
+                            : 'All'}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          <strong>Charts:</strong> {link.kpi_selections.selected_charts?.length > 0 
+                            ? `${link.kpi_selections.selected_charts.length} selected` 
+                            : 'All'}
+                        </Typography>
+                      </Box>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem', fontStyle: 'italic' }}>
+                        No selections saved
+                      </Typography>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Box display="flex" gap={0.5}>

@@ -330,6 +330,9 @@ function ReportingDashboard({
   const [loadingCaption, setLoadingCaption] = useState("");
   const [selectedKPIs, setSelectedKPIs] = useState(new Set(KPI_ORDER));
   const [tempSelectedKPIs, setTempSelectedKPIs] = useState(new Set(KPI_ORDER)); // For dialog
+  // All Performance Metrics section KPI selections (independent from section-specific KPIs)
+  const [selectedPerformanceMetricsKPIs, setSelectedPerformanceMetricsKPIs] = useState(new Set(KPI_ORDER));
+  const [tempSelectedPerformanceMetricsKPIs, setTempSelectedPerformanceMetricsKPIs] = useState(new Set(KPI_ORDER)); // For dialog
   const [showKPISelector, setShowKPISelector] = useState(false);
   const [expandedSections, setExpandedSections] = useState(
     new Set([
@@ -409,6 +412,8 @@ function ReportingDashboard({
   const [insightsRowsPerPage, setInsightsRowsPerPage] = useState(10);
   // Public KPI selections (loaded from database for public view)
   const [publicKPISelections, setPublicKPISelections] = useState(null);
+  // Public performance metrics KPIs (loaded from database for public view)
+  const [publicPerformanceMetricsKPIs, setPublicPerformanceMetricsKPIs] = useState(null);
   // Section visibility state (for authenticated users to configure)
   const [visibleSections, setVisibleSections] = useState(
     new Set([
@@ -601,6 +606,16 @@ function ReportingDashboard({
           setTempVisibleSections(defaultSections);
         }
 
+        // Load performance metrics KPIs
+        if (data.selected_performance_metrics_kpis && data.selected_performance_metrics_kpis.length > 0) {
+          setSelectedPerformanceMetricsKPIs(new Set(data.selected_performance_metrics_kpis));
+          setTempSelectedPerformanceMetricsKPIs(new Set(data.selected_performance_metrics_kpis));
+        } else {
+          // If no selections saved, default to all available KPIs
+          setSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
+          setTempSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
+        }
+
         // Load chart selections
         if (data.selected_charts && data.selected_charts.length > 0) {
           setSelectedCharts(new Set(data.selected_charts));
@@ -715,6 +730,20 @@ function ReportingDashboard({
             "No visible_sections saved (updated_at is null), setting to null (show all)"
           );
           setPublicVisibleSections(null);
+        }
+
+        // Load public performance metrics KPIs
+        if (hasExplicitSelection) {
+          // Selection was explicitly saved - use it (even if empty array means "show no KPIs")
+          if (data.selected_performance_metrics_kpis && data.selected_performance_metrics_kpis.length > 0) {
+            setPublicPerformanceMetricsKPIs(new Set(data.selected_performance_metrics_kpis));
+          } else {
+            // Empty array with updated_at means admin explicitly deselected all KPIs
+            setPublicPerformanceMetricsKPIs(new Set([]));
+          }
+        } else {
+          // No selection saved yet - show all available KPIs (default behavior)
+          setPublicPerformanceMetricsKPIs(null);
         }
 
         // Load public chart selections
@@ -1737,12 +1766,14 @@ function ReportingDashboard({
     // Only update state - don't save to database
     // KPI selections will be saved when creating/updating a dashboard link
     setSelectedKPIs(new Set(tempSelectedKPIs));
+    setSelectedPerformanceMetricsKPIs(new Set(tempSelectedPerformanceMetricsKPIs));
     setVisibleSections(new Set(tempVisibleSections));
     setSelectedCharts(new Set(tempSelectedCharts));
     setShowKPISelector(false);
     setError(null); // Clear any previous errors
     debugLog("KPI, section, and chart selections updated in state", {
       kpiCount: tempSelectedKPIs.size,
+      performanceMetricsKPICount: tempSelectedPerformanceMetricsKPIs.size,
       sectionCount: tempVisibleSections.size,
       chartCount: tempSelectedCharts.size,
     });
@@ -1751,6 +1782,7 @@ function ReportingDashboard({
   const handleOpenKPISelector = () => {
     // Initialize temp selection with current selection
     setTempSelectedKPIs(new Set(selectedKPIs));
+    setTempSelectedPerformanceMetricsKPIs(new Set(selectedPerformanceMetricsKPIs));
     setTempVisibleSections(new Set(visibleSections));
     setTempSelectedCharts(new Set(selectedCharts));
     // Expand all sections by default
@@ -1809,11 +1841,24 @@ function ReportingDashboard({
       const minutes = String(expiresDate.getMinutes()).padStart(2, '0');
       expiresAtFormatted = `${year}-${month}-${day}T${hours}:${minutes}`;
     }
+    // Format start_date and end_date for date input (YYYY-MM-DD)
+    const formatDateForInput = (dateString) => {
+      if (!dateString) return '';
+      try {
+        const date = new Date(dateString);
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      } catch {
+        return dateString.split('T')[0] || '';
+      }
+    };
     setLinkFormData({
       name: link.name || '',
       description: link.description || '',
-      start_date: link.start_date || '',
-      end_date: link.end_date || '',
+      start_date: formatDateForInput(link.start_date),
+      end_date: formatDateForInput(link.end_date),
       enabled: link.enabled !== undefined ? link.enabled : true,
       expires_at: expiresAtFormatted,
       slug: link.slug || ''
@@ -1845,6 +1890,7 @@ function ReportingDashboard({
       
       // Include current KPI selections from state
       payload.selected_kpis = Array.from(selectedKPIs);
+      payload.selected_performance_metrics_kpis = Array.from(selectedPerformanceMetricsKPIs);
       payload.visible_sections = Array.from(visibleSections);
       payload.selected_charts = Array.from(selectedCharts);
       
@@ -1860,7 +1906,12 @@ function ReportingDashboard({
         debugLog("Dashboard link created successfully");
       }
       setLinkDialogOpen(false);
+      // Reload links to get updated data (including KPI selections)
       await loadDashboardLinks();
+      // If we just created a new link, clear editingLink so dropdown resets
+      if (!editingLink) {
+        setEditingLink(null);
+      }
     } catch (err) {
       debugError("Error saving dashboard link:", err);
       setError(err.response?.data?.detail || err.message || "Failed to save dashboard link");
@@ -2098,28 +2149,29 @@ function ReportingDashboard({
     ...(scrunchData?.kpis || {}), // scrunchData KPIs take precedence
   };
 
-  const displayedKPIs =
+  // All Performance Metrics KPIs (independent selection from sections)
+  const performanceMetricsKPIs =
     Object.keys(allKPIs).length > 0
       ? isPublic
-        ? // In public mode, use saved selections from database
-          publicKPISelections === null
-          ? // null means no selection saved yet - show all available KPIs (default)
-            KPI_ORDER.filter((key) => allKPIs[key]).map((key) => [
-              key,
-              allKPIs[key],
-            ])
-          : publicKPISelections.size === 0
-          ? // Empty Set means admin explicitly deselected all KPIs - show none
-            []
-          : // Set with items means admin selected specific KPIs - show only selected
-            KPI_ORDER.filter(
-              (key) => allKPIs[key] && publicKPISelections.has(key)
-            ).map((key) => [key, allKPIs[key]])
-        : // In authenticated mode, show ALL available KPIs (no filtering by selections)
+        ? // Public mode: Read from dashboard link
+          (publicPerformanceMetricsKPIs === null
+            ? // No selection saved - show all available KPIs (default)
+              KPI_ORDER.filter((key) => allKPIs[key]).map((key) => [key, allKPIs[key]])
+            : publicPerformanceMetricsKPIs.size === 0
+            ? // Empty selection - admin explicitly deselected all
+              []
+            : // Show only selected KPIs from link
+              KPI_ORDER.filter((key) => allKPIs[key] && publicPerformanceMetricsKPIs.has(key))
+                .map((key) => [key, allKPIs[key]])
+          )
+        : // Admin mode: Use state (defaults to all KPIs)
           KPI_ORDER.filter(
-            (key) => allKPIs[key] && key !== "competitive_benchmarking"
+            (key) => allKPIs[key] && selectedPerformanceMetricsKPIs.has(key) && key !== "competitive_benchmarking"
           ).map((key) => [key, allKPIs[key]])
       : [];
+
+  // Legacy displayedKPIs - kept for backward compatibility but now uses performanceMetricsKPIs
+  const displayedKPIs = performanceMetricsKPIs;
 
   return (
     <Box sx={{ p: 3 }}>
@@ -2402,17 +2454,84 @@ function ReportingDashboard({
                   />
                 </Box>
                 
-                {/* Create Link Button */}
+                {/* Dashboard Links Section */}
                 {selectedClientId && (
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    onClick={handleCreateLink}
-                    startIcon={<LinkIcon />}
-                    sx={{ textTransform: "none" }}
-                  >
-                    Create Link
-                  </Button>
+                  <Box display="flex" alignItems="center" gap={2}>
+                    <FormControl size="small" sx={{ minWidth: 280 }}>
+                      <InputLabel>Select or Create Link</InputLabel>
+                      <Select
+                        value={editingLink?.id || ''}
+                        label="Select or Create Link"
+                        onChange={(e) => {
+                          const linkId = e.target.value;
+                          if (linkId === 'new') {
+                            // Create new link
+                            handleCreateLink();
+                          } else if (linkId) {
+                            // Edit existing link
+                            const selectedLink = dashboardLinks.find(link => link.id === linkId);
+                            if (selectedLink) {
+                              handleEditLink(selectedLink);
+                            }
+                          } else {
+                            // Clear selection
+                            setEditingLink(null);
+                            setLinkFormData({
+                              name: '',
+                              description: '',
+                              start_date: startDate || '',
+                              end_date: endDate || '',
+                              enabled: true,
+                              expires_at: '',
+                              slug: ''
+                            });
+                          }
+                        }}
+                        sx={{ textTransform: 'none' }}
+                        disabled={loadingLinks}
+                      >
+                        <MenuItem value="new">
+                          <Box display="flex" alignItems="center" gap={1}>
+                            <LinkIcon fontSize="small" />
+                            <Typography>Create New Link</Typography>
+                          </Box>
+                        </MenuItem>
+                        {dashboardLinks.length > 0 && (
+                          <MenuItem value="" disabled>
+                            <Typography variant="caption" color="text.secondary">
+                              ─── Existing Links ───
+                            </Typography>
+                          </MenuItem>
+                        )}
+                        {dashboardLinks.map((link) => (
+                          <MenuItem key={link.id} value={link.id}>
+                            <Box display="flex" flexDirection="column" alignItems="flex-start">
+                              <Typography variant="body2" fontWeight={500}>
+                                {link.name || link.slug || `Link ${link.id}`}
+                              </Typography>
+                              {link.description && (
+                                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                                  {link.description.substring(0, 50)}
+                                  {link.description.length > 50 ? '...' : ''}
+                                </Typography>
+                              )}
+                            </Box>
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    {editingLink && (
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        onClick={handleCreateLink}
+                        startIcon={<LinkIcon />}
+                        sx={{ textTransform: "none" }}
+                      >
+                        Create New
+                      </Button>
+                    )}
+                  </Box>
                 )}
               </Box>
             )}
@@ -6023,24 +6142,43 @@ function ReportingDashboard({
                   icon: SearchIcon,
                   color: getSourceColor("AgencyAnalytics"),
                 },
+                {
+                  key: "all_performance_metrics",
+                  label: "All Performance Metrics",
+                  description:
+                    "KPIs shown in the summary section (independent from source sections)",
+                  icon: AnalyticsIcon,
+                  color: theme.palette.primary.main,
+                },
               ].map((section) => {
-                const sectionKPIs = getDashboardSectionKPIs(section.key);
+                // For "All Performance Metrics", use all KPIs from KPI_ORDER
+                const sectionKPIs = section.key === "all_performance_metrics" 
+                  ? KPI_ORDER.filter((key) => {
+                      const allKPIs = {
+                        ...(dashboardData?.kpis || {}),
+                        ...(scrunchData?.kpis || {}),
+                      };
+                      return allKPIs[key] && key !== "competitive_benchmarking";
+                    })
+                  : getDashboardSectionKPIs(section.key);
                 const sectionCharts = getDashboardSectionCharts(section.key);
-                const selectedKPICount = sectionKPIs.filter((k) =>
-                  tempSelectedKPIs.has(k)
-                ).length;
+                // For "All Performance Metrics", use tempSelectedPerformanceMetricsKPIs
+                const selectedKPICount = section.key === "all_performance_metrics"
+                  ? sectionKPIs.filter((k) => tempSelectedPerformanceMetricsKPIs.has(k)).length
+                  : sectionKPIs.filter((k) => tempSelectedKPIs.has(k)).length;
                 const totalKPICount = sectionKPIs.length;
                 const selectedChartCount = sectionCharts.filter((c) =>
                   tempSelectedCharts.has(c.key)
                 ).length;
                 const totalChartCount = sectionCharts.length;
                 const isExpanded = expandedSections.has(section.key);
-                const allKPIsSelected = areAllDashboardSectionKPIsSelected(
-                  section.key
-                );
-                const someKPIsSelected = areSomeDashboardSectionKPIsSelected(
-                  section.key
-                );
+                // For "All Performance Metrics", check tempSelectedPerformanceMetricsKPIs
+                const allKPIsSelected = section.key === "all_performance_metrics"
+                  ? sectionKPIs.every((k) => tempSelectedPerformanceMetricsKPIs.has(k))
+                  : areAllDashboardSectionKPIsSelected(section.key);
+                const someKPIsSelected = section.key === "all_performance_metrics"
+                  ? sectionKPIs.some((k) => tempSelectedPerformanceMetricsKPIs.has(k)) && !allKPIsSelected
+                  : areSomeDashboardSectionKPIsSelected(section.key);
                 const allChartsSelected =
                   sectionCharts.length > 0 &&
                   sectionCharts.every((c) => tempSelectedCharts.has(c.key));
@@ -6099,19 +6237,25 @@ function ReportingDashboard({
                           gap={1.5}
                           flex={1}
                         >
-                          <Checkbox
-                            checked={tempVisibleSections.has(section.key)}
-                            onChange={(e) =>
-                              handleSectionChange(section.key, e.target.checked)
-                            }
-                            onClick={(e) => e.stopPropagation()}
-                            sx={{
-                              color: section.color,
-                              "&.Mui-checked": {
+                          {/* Only show section visibility checkbox for non-performance-metrics sections */}
+                          {section.key !== "all_performance_metrics" && (
+                            <Checkbox
+                              checked={tempVisibleSections.has(section.key)}
+                              onChange={(e) =>
+                                handleSectionChange(section.key, e.target.checked)
+                              }
+                              onClick={(e) => e.stopPropagation()}
+                              sx={{
                                 color: section.color,
-                              },
-                            }}
-                          />
+                                "&.Mui-checked": {
+                                  color: section.color,
+                                },
+                              }}
+                            />
+                          )}
+                          {section.key === "all_performance_metrics" && (
+                            <Box sx={{ width: 40 }} /> // Spacer for alignment
+                          )}
                           <SectionIcon
                             sx={{
                               fontSize: 20,
@@ -6168,12 +6312,22 @@ function ReportingDashboard({
                                 <Checkbox
                                   checked={allKPIsSelected}
                                   indeterminate={someKPIsSelected}
-                                  onChange={(e) =>
-                                    handleDashboardSectionKPIsChange(
-                                      section.key,
-                                      e.target.checked
-                                    )
-                                  }
+                                  onChange={(e) => {
+                                    if (section.key === "all_performance_metrics") {
+                                      const newSelected = new Set(tempSelectedPerformanceMetricsKPIs);
+                                      if (e.target.checked) {
+                                        sectionKPIs.forEach((k) => newSelected.add(k));
+                                      } else {
+                                        sectionKPIs.forEach((k) => newSelected.delete(k));
+                                      }
+                                      setTempSelectedPerformanceMetricsKPIs(newSelected);
+                                    } else {
+                                      handleDashboardSectionKPIsChange(
+                                        section.key,
+                                        e.target.checked
+                                      );
+                                    }
+                                  }}
                                   size="small"
                                   sx={{
                                     color: section.color,
@@ -6223,10 +6377,22 @@ function ReportingDashboard({
                                     key={key}
                                     control={
                                       <Checkbox
-                                        checked={tempSelectedKPIs.has(key)}
-                                        onChange={(e) =>
-                                          handleKPIChange(key, e.target.checked)
-                                        }
+                                        checked={section.key === "all_performance_metrics"
+                                          ? tempSelectedPerformanceMetricsKPIs.has(key)
+                                          : tempSelectedKPIs.has(key)}
+                                        onChange={(e) => {
+                                          if (section.key === "all_performance_metrics") {
+                                            const newSelected = new Set(tempSelectedPerformanceMetricsKPIs);
+                                            if (e.target.checked) {
+                                              newSelected.add(key);
+                                            } else {
+                                              newSelected.delete(key);
+                                            }
+                                            setTempSelectedPerformanceMetricsKPIs(newSelected);
+                                          } else {
+                                            handleKPIChange(key, e.target.checked);
+                                          }
+                                        }}
                                         disabled={!isAvailable}
                                         size="small"
                                         sx={{
@@ -6434,6 +6600,7 @@ function ReportingDashboard({
           <Button
             onClick={() => {
               setTempSelectedKPIs(new Set(selectedKPIs));
+              setTempSelectedPerformanceMetricsKPIs(new Set(selectedPerformanceMetricsKPIs));
               setTempVisibleSections(new Set(visibleSections));
               setTempSelectedCharts(new Set(selectedCharts));
               setShowKPISelector(false);
@@ -6461,7 +6628,10 @@ function ReportingDashboard({
       {/* Link Create/Edit Dialog */}
       <Dialog
         open={linkDialogOpen}
-        onClose={() => setLinkDialogOpen(false)}
+        onClose={() => {
+          setLinkDialogOpen(false);
+          // Don't clear editingLink here - keep it selected in dropdown
+        }}
         maxWidth="sm"
         fullWidth
         PaperProps={{
@@ -6548,7 +6718,10 @@ function ReportingDashboard({
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button
-            onClick={() => setLinkDialogOpen(false)}
+            onClick={() => {
+              setLinkDialogOpen(false);
+              // Don't clear editingLink - keep it selected in dropdown
+            }}
             sx={{ textTransform: 'none' }}
           >
             Cancel

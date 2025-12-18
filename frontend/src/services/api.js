@@ -10,10 +10,65 @@ const api = axios.create({
   },
 })
 
+// Helper function to get token from appropriate storage
+const getTokenFromStorage = () => {
+  // Check remember_me preference
+  const rememberMe = localStorage.getItem('remember_me') === 'true'
+  const storage = rememberMe ? localStorage : sessionStorage
+  
+  // Try preferred storage first
+  let token = storage.getItem('access_token')
+  if (token) return token
+  
+  // Fallback to other storage
+  const otherStorage = rememberMe ? sessionStorage : localStorage
+  token = otherStorage.getItem('access_token')
+  return token
+}
+
+// Helper function to get refresh token from appropriate storage
+const getRefreshTokenFromStorage = () => {
+  // Check remember_me preference
+  const rememberMe = localStorage.getItem('remember_me') === 'true'
+  const storage = rememberMe ? localStorage : sessionStorage
+  
+  // Try preferred storage first
+  let refreshToken = storage.getItem('refresh_token')
+  if (refreshToken) return refreshToken
+  
+  // Fallback to other storage
+  const otherStorage = rememberMe ? sessionStorage : localStorage
+  refreshToken = otherStorage.getItem('refresh_token')
+  return refreshToken
+}
+
+// Helper function to clear tokens from both storages
+const clearAllTokens = () => {
+  localStorage.removeItem('access_token')
+  localStorage.removeItem('refresh_token')
+  localStorage.removeItem('user')
+  localStorage.removeItem('token_expires_at')
+  sessionStorage.removeItem('access_token')
+  sessionStorage.removeItem('refresh_token')
+  sessionStorage.removeItem('user')
+  sessionStorage.removeItem('token_expires_at')
+}
+
+// Helper function to save token to appropriate storage
+const saveTokenToStorage = (accessToken, refreshToken) => {
+  const rememberMe = localStorage.getItem('remember_me') === 'true'
+  const storage = rememberMe ? localStorage : sessionStorage
+  
+  storage.setItem('access_token', accessToken)
+  if (refreshToken) {
+    storage.setItem('refresh_token', refreshToken)
+  }
+}
+
 // Add request interceptor to include auth token
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('access_token')
+    const token = getTokenFromStorage()
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
@@ -44,9 +99,15 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config
+    const currentPath = window.location.pathname
+    const isPublicRoute = 
+      currentPath === '/login' || 
+      currentPath === '/signup' || 
+      currentPath.startsWith('/reporting/')
 
     // If error is 401 and we haven't tried to refresh yet
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    // Skip refresh attempt if already on login page or if this is the refresh endpoint itself
+    if (error.response?.status === 401 && !originalRequest._retry && !isPublicRoute && !originalRequest.url?.includes('/auth/v2/refresh')) {
       if (isRefreshing) {
         // If already refreshing, queue this request
         return new Promise((resolve, reject) => {
@@ -64,7 +125,7 @@ api.interceptors.response.use(
       originalRequest._retry = true
       isRefreshing = true
 
-      const refreshToken = localStorage.getItem('refresh_token')
+      const refreshToken = getRefreshTokenFromStorage()
       
       if (!refreshToken) {
         // No refresh token, clear everything and redirect
@@ -74,9 +135,7 @@ api.interceptors.response.use(
           currentPath === '/signup' || 
           currentPath.startsWith('/reporting/')
         
-        localStorage.removeItem('access_token')
-        localStorage.removeItem('refresh_token')
-        localStorage.removeItem('user')
+        clearAllTokens()
         
         isRefreshing = false
         processQueue(new Error('No refresh token'), null)
@@ -101,11 +160,8 @@ api.interceptors.response.use(
 
         const { access_token, refresh_token: newRefreshToken } = response.data
 
-        // Update tokens in localStorage
-        localStorage.setItem('access_token', access_token)
-        if (newRefreshToken) {
-          localStorage.setItem('refresh_token', newRefreshToken)
-        }
+        // Update tokens in appropriate storage
+        saveTokenToStorage(access_token, newRefreshToken)
 
         // Update the original request with new token
         originalRequest.headers.Authorization = `Bearer ${access_token}`
@@ -123,23 +179,33 @@ api.interceptors.response.use(
           currentPath === '/signup' || 
           currentPath.startsWith('/reporting/')
         
-        localStorage.removeItem('access_token')
-        localStorage.removeItem('refresh_token')
-        localStorage.removeItem('user')
-        localStorage.removeItem('token_expires_at')
+        clearAllTokens()
         
         isRefreshing = false
         processQueue(refreshError, null)
         
         // Check if refresh token expired (401 or specific error message)
+        // Handle both error structures: { error: { message } } and { detail: "..." }
+        const errorMessage = 
+          refreshError.response?.data?.error?.message ||
+          refreshError.response?.data?.detail ||
+          refreshError.response?.data?.message ||
+          ''
+        
         const isRefreshTokenExpired = 
           refreshError.response?.status === 401 ||
-          refreshError.response?.data?.detail?.includes('expired') ||
-          refreshError.response?.data?.detail?.includes('Refresh token')
+          errorMessage.toLowerCase().includes('expired') ||
+          errorMessage.toLowerCase().includes('refresh token') ||
+          errorMessage.toLowerCase().includes('session has expired') ||
+          errorMessage.toLowerCase().includes('invalid refresh token')
         
-        if (isRefreshTokenExpired && !isPublicRoute) {
-          // Immediately redirect to login when refresh token expires
-          window.location.href = '/login'
+        // Always redirect to login on refresh failure (unless already on public route)
+        // This prevents infinite loader loops
+        if (!isPublicRoute) {
+          // Use setTimeout to ensure state updates complete before redirect
+          setTimeout(() => {
+            window.location.href = '/login'
+          }, 100)
         }
         
         return Promise.reject(refreshError)
@@ -902,7 +968,7 @@ export const reportingAPI = {
     return response.data
   },
   // Save KPI selections for a client (client-centric)
-  saveKPISelectionsByClient: async (clientId, selectedKPIs, visibleSections = null, selectedCharts = null) => {
+  saveKPISelectionsByClient: async (clientId, selectedKPIs, visibleSections = null, selectedCharts = null, selectedPerformanceMetricsKPIs = null) => {
     const payload = {
       selected_kpis: Array.isArray(selectedKPIs) ? selectedKPIs : Array.from(selectedKPIs)
     }
@@ -910,6 +976,11 @@ export const reportingAPI = {
     // Empty array means "show no sections" in public view
     if (visibleSections !== null && visibleSections !== undefined) {
       payload.visible_sections = Array.isArray(visibleSections) ? visibleSections : Array.from(visibleSections)
+    }
+    // Always include selected_performance_metrics_kpis if provided (even if empty array)
+    // Empty array means "show no KPIs" in All Performance Metrics section
+    if (selectedPerformanceMetricsKPIs !== null && selectedPerformanceMetricsKPIs !== undefined) {
+      payload.selected_performance_metrics_kpis = Array.isArray(selectedPerformanceMetricsKPIs) ? selectedPerformanceMetricsKPIs : Array.from(selectedPerformanceMetricsKPIs)
     }
     // Always include selected_charts if provided (even if empty array)
     // Empty array means "show no charts" in public view

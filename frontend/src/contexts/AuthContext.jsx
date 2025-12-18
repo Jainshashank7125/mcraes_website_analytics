@@ -35,14 +35,52 @@ export const AuthProvider = ({ children }) => {
     }
   }
 
+  // Helper function to clear all auth data from both storages
+  const clearAllAuthData = () => {
+    const clearStorage = (storage) => {
+      storage.removeItem('access_token')
+      storage.removeItem('refresh_token')
+      storage.removeItem('user')
+      storage.removeItem('token_expires_at')
+    }
+    clearStorage(localStorage)
+    clearStorage(sessionStorage)
+    setUser(null)
+    setIsAuthenticated(false)
+    stopTokenRefresh()
+  }
+
   // Check if user is logged in on mount
   useEffect(() => {
     const initAuth = async () => {
-      // Check both localStorage and sessionStorage for tokens
-      // Priority: check the storage based on remember_me preference first
-      const storage = getStorage()
-      let storedToken = storage.getItem('access_token')
-      let storedUser = storage.getItem('user')
+      try {
+        // First, clean up any obviously invalid tokens
+        // Check if token_expires_at exists and is in the past
+        const checkAndCleanExpiredTokens = () => {
+          const storages = [localStorage, sessionStorage]
+          storages.forEach(storage => {
+            const expiresAt = storage.getItem('token_expires_at')
+            if (expiresAt) {
+              const expiresTime = parseInt(expiresAt, 10)
+              // If expired more than 1 hour ago, clear it (might be stale)
+              if (expiresTime && Date.now() > expiresTime + (60 * 60 * 1000)) {
+                const token = storage.getItem('access_token')
+                if (token) {
+                  // Token is definitely expired, clear it
+                  storage.removeItem('access_token')
+                  storage.removeItem('token_expires_at')
+                }
+              }
+            }
+          })
+        }
+        checkAndCleanExpiredTokens()
+
+        // Check both localStorage and sessionStorage for tokens
+        // Priority: check the storage based on remember_me preference first
+        const storage = getStorage()
+        let storedToken = storage.getItem('access_token')
+        let storedUser = storage.getItem('user')
       
       // If not found in preferred storage, check the other one
       if (!storedToken) {
@@ -65,6 +103,7 @@ export const AuthProvider = ({ children }) => {
         }
       }
 
+      // If we have tokens, validate them before proceeding
       if (storedToken && storedUser) {
         try {
           // Check if token is expired
@@ -99,32 +138,16 @@ export const AuthProvider = ({ children }) => {
                 setIsAuthenticated(true)
                 startTokenRefresh()
               } catch (refreshError) {
-                // Refresh failed, clear storage
-                const clearStorage = (storage) => {
-                  storage.removeItem('access_token')
-                  storage.removeItem('refresh_token')
-                  storage.removeItem('user')
-                  storage.removeItem('token_expires_at')
-                }
-                clearStorage(localStorage)
-                clearStorage(sessionStorage)
-                setUser(null)
-                setIsAuthenticated(false)
-                stopTokenRefresh()
+                // Refresh failed - clear all auth data
+                clearAllAuthData()
+                // Set loading to false so ProtectedRoute can redirect
+                setLoading(false)
                 // Let ProtectedRoute handle redirect
               }
             } else {
-              // No refresh token, clear storage
-              const clearStorage = (storage) => {
-                storage.removeItem('access_token')
-                storage.removeItem('refresh_token')
-                storage.removeItem('user')
-                storage.removeItem('token_expires_at')
-              }
-              clearStorage(localStorage)
-              clearStorage(sessionStorage)
-              setUser(null)
-              setIsAuthenticated(false)
+              // No refresh token, clear all auth data
+              clearAllAuthData()
+              setLoading(false)
               // Let ProtectedRoute handle redirect
             }
           } else {
@@ -134,45 +157,32 @@ export const AuthProvider = ({ children }) => {
               setUser(userData)
               setIsAuthenticated(true)
               startTokenRefresh()
+              setLoading(false)
             } catch (error) {
-              // Token verification failed, clear storage
-              const clearStorage = (storage) => {
-                storage.removeItem('access_token')
-                storage.removeItem('refresh_token')
-                storage.removeItem('user')
-                storage.removeItem('token_expires_at')
-              }
-              clearStorage(localStorage)
-              clearStorage(sessionStorage)
-              setUser(null)
-              setIsAuthenticated(false)
-              stopTokenRefresh()
+              // Token verification failed, clear all auth data
+              clearAllAuthData()
+              setLoading(false)
               // Let ProtectedRoute handle redirect
             }
           }
         } catch (error) {
-          // Error during initialization, clear storage
-          const clearStorage = (storage) => {
-            storage.removeItem('access_token')
-            storage.removeItem('refresh_token')
-            storage.removeItem('user')
-            storage.removeItem('token_expires_at')
-          }
-          clearStorage(localStorage)
-          clearStorage(sessionStorage)
-          setUser(null)
-          setIsAuthenticated(false)
-          stopTokenRefresh()
+          // Error during initialization, clear all auth data
+          clearAllAuthData()
+          setLoading(false)
           // Let ProtectedRoute handle redirect
         }
       } else {
         // No tokens at all - user is not logged in
-        setUser(null)
-        setIsAuthenticated(false)
-        stopTokenRefresh()
+        // Still clear any stale data
+        clearAllAuthData()
+        setLoading(false)
       }
-      // Always set loading to false at the end
-      setLoading(false)
+      } catch (initError) {
+        // If initialization fails for any reason, ensure loading is cleared
+        debugError('Error during auth initialization:', initError)
+        clearAllAuthData()
+        setLoading(false)
+      }
     }
 
     initAuth()
@@ -269,20 +279,9 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       debugError('Signout error:', error)
     } finally {
-      // Clear both localStorage and sessionStorage
-      const clearStorage = (storage) => {
-        storage.removeItem('access_token')
-        storage.removeItem('refresh_token')
-        storage.removeItem('user')
-        storage.removeItem('token_expires_at')
-      }
-      clearStorage(localStorage)
-      clearStorage(sessionStorage)
+      // Clear all auth data
+      clearAllAuthData()
       localStorage.removeItem('remember_me')
-      
-      setUser(null)
-      setIsAuthenticated(false)
-      stopTokenRefresh()
     }
   }
 

@@ -40,15 +40,22 @@ function Login() {
     e.preventDefault()
     setLoading(true)
 
-    const result = await signin(email, password, rememberMe)
+    try {
+      const result = await signin(email, password, rememberMe)
 
-    if (result.success) {
-      navigate('/')
-    } else {
-      showError(result.error || 'Sign in failed')
+      if (result.success) {
+        // Small delay to ensure state is updated before navigation
+        // This prevents race condition with ProtectedRoute
+        await new Promise(resolve => setTimeout(resolve, 50))
+        navigate('/')
+      } else {
+        showError(result.error || 'Sign in failed')
+        setLoading(false)
+      }
+    } catch (error) {
+      showError('Sign in failed. Please try again.')
+      setLoading(false)
     }
-
-    setLoading(false)
   }
 
   return (
