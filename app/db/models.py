@@ -224,6 +224,7 @@ class DashboardLink(Base):
     expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
     name = Column(String, nullable=True)
     description = Column(Text, nullable=True)
+    executive_summary = Column(JSON, nullable=True)  # JSONB in DB - Structured Executive Brief data
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

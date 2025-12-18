@@ -2973,7 +2973,7 @@ class SupabaseService:
             return []
 
     def get_dashboard_link_by_slug(self, slug: str) -> Optional[Dict]:
-        """Get a dashboard link by slug, including KPI selections"""
+        """Get a dashboard link by slug, including KPI selections and executive summary"""
         try:
             table = self._get_table("dashboard_links")
             query = select(table).where(table.c.slug == slug).limit(1)
@@ -2982,11 +2982,17 @@ class SupabaseService:
                 link_dict = dict(result._mapping)
                 link_id = link_dict.get("id")
                 
+                # Log executive summary for debugging
+                logger.info(f"Dashboard link {link_id} (slug: {slug}) - executive_summary present: {bool(link_dict.get('executive_summary'))}")
+                if link_dict.get('executive_summary'):
+                    logger.debug(f"Executive summary keys: {list(link_dict.get('executive_summary', {}).keys()) if isinstance(link_dict.get('executive_summary'), dict) else 'not a dict'}")
+                
                 # Fetch KPI selections for this link
                 if link_id:
                     kpi_selection = self.get_dashboard_link_kpi_selection(link_id)
                     if kpi_selection:
                         link_dict["kpi_selection"] = kpi_selection
+                    # Executive summary is already included in link_dict from the query
                 
                 return link_dict
             return None
@@ -3025,7 +3031,8 @@ class SupabaseService:
         selected_kpis: Optional[List[str]] = None,
         visible_sections: Optional[List[str]] = None,
         selected_charts: Optional[List[str]] = None,
-        selected_performance_metrics_kpis: Optional[List[str]] = None
+        selected_performance_metrics_kpis: Optional[List[str]] = None,
+        executive_summary: Optional[Dict] = None
     ) -> Optional[Dict]:
         """Create or update a dashboard link for a client based on date range"""
         try:
@@ -3033,10 +3040,11 @@ class SupabaseService:
             link_slug = slug or self.generate_client_slug()
             now = datetime.now()
 
-            # Check if name and description columns exist
+            # Check if name, description, and executive_summary columns exist
             table_columns = [col.name for col in table.c]
             has_name_column = 'name' in table_columns
             has_description_column = 'description' in table_columns
+            has_executive_summary_column = 'executive_summary' in table_columns
 
             link_data = {
                 "client_id": client_id,
@@ -3048,11 +3056,13 @@ class SupabaseService:
                 "updated_at": now,
             }
 
-            # Only include name/description if columns exist
+            # Only include name/description/executive_summary if columns exist
             if has_name_column and name is not None:
                 link_data["name"] = name
             if has_description_column and description is not None:
                 link_data["description"] = description
+            if has_executive_summary_column and executive_summary is not None:
+                link_data["executive_summary"] = executive_summary
 
             insert_stmt = pg_insert(table).values(
                 **link_data,
@@ -3067,11 +3077,13 @@ class SupabaseService:
                 "updated_at": insert_stmt.excluded.updated_at,
             }
             
-            # Only update name/description if columns exist
+            # Only update name/description/executive_summary if columns exist
             if has_name_column:
                 update_set["name"] = insert_stmt.excluded.name
             if has_description_column:
                 update_set["description"] = insert_stmt.excluded.description
+            if has_executive_summary_column:
+                update_set["executive_summary"] = insert_stmt.excluded.executive_summary
 
             insert_stmt = insert_stmt.on_conflict_do_update(
                 index_elements=['client_id', 'start_date', 'end_date'],
@@ -3097,6 +3109,10 @@ class SupabaseService:
                     )
                     if kpi_selection:
                         link_dict["kpi_selection"] = kpi_selection
+                
+                # Include executive_summary in response if it exists
+                if link_dict.get("executive_summary"):
+                    link_dict["executive_summary"] = link_dict["executive_summary"]
                 
                 return link_dict
             return None
@@ -3286,16 +3302,19 @@ class SupabaseService:
         try:
             table = self._get_table("dashboard_links")
             
-            # Check if name and description columns exist
+            # Check if name, description, and executive_summary columns exist
             table_columns = [col.name for col in table.c]
             has_name_column = 'name' in table_columns
             has_description_column = 'description' in table_columns
+            has_executive_summary_column = 'executive_summary' in table_columns
             
-            # Extract KPI selection fields if present
+            # Extract KPI selection fields if present (these are handled separately)
             selected_kpis = updates.pop("selected_kpis", None)
             visible_sections = updates.pop("visible_sections", None)
             selected_charts = updates.pop("selected_charts", None)
             selected_performance_metrics_kpis = updates.pop("selected_performance_metrics_kpis", None)
+            # Extract executive_summary but we'll add it back to update_data if column exists
+            executive_summary = updates.pop("executive_summary", None)
             
             # Only allow updating specific fields
             allowed_fields = ["start_date", "end_date", "enabled", "expires_at", "slug"]
@@ -3303,8 +3322,15 @@ class SupabaseService:
                 allowed_fields.append("name")
             if has_description_column:
                 allowed_fields.append("description")
+            if has_executive_summary_column:
+                allowed_fields.append("executive_summary")
             
             update_data = {k: v for k, v in updates.items() if k in allowed_fields}
+            
+            # Add executive_summary back to update_data if it was provided and column exists
+            if has_executive_summary_column and executive_summary is not None:
+                update_data["executive_summary"] = executive_summary
+                logger.info(f"Adding executive_summary to update_data for link {link_id}, type: {type(executive_summary)}")
             
             # Update link fields if any
             if update_data:
@@ -3345,6 +3371,7 @@ class SupabaseService:
                 if kpi_selection:
                     link_dict["kpi_selection"] = kpi_selection
             
+            # Executive summary is already included in link_dict from the update query
             return link_dict
         except Exception as e:
             self.db.rollback()
@@ -3454,6 +3481,53 @@ class SupabaseService:
         except Exception as e:
             self.db.rollback()
             logger.error(f"Error upserting KPI selection for dashboard link {link_id}: {str(e)}")
+            return None
+
+    def get_dashboard_link_executive_summary(self, link_id: int) -> Optional[Dict]:
+        """Get executive summary for a dashboard link"""
+        try:
+            table = self._get_table("dashboard_links")
+            query = select(table.c.executive_summary).where(table.c.id == link_id).limit(1)
+            result = self.db.execute(query)
+            row = result.first()
+            
+            if row and row.executive_summary:
+                return row.executive_summary
+            return None
+        except Exception as e:
+            logger.error(f"Error getting executive summary for dashboard link {link_id}: {str(e)}")
+            return None
+
+    def upsert_dashboard_link_executive_summary(
+        self,
+        link_id: int,
+        executive_summary: Dict
+    ) -> Optional[Dict]:
+        """Create or update executive summary for a dashboard link"""
+        try:
+            table = self._get_table("dashboard_links")
+            now = datetime.now()
+            
+            update_stmt = (
+                table.update()
+                .where(table.c.id == link_id)
+                .values(
+                    executive_summary=executive_summary,
+                    updated_at=now
+                )
+                .returning(table.c.executive_summary)
+            )
+            
+            result = self.db.execute(update_stmt)
+            self.db.commit()
+            
+            row = result.first()
+            if row:
+                return row.executive_summary
+            return None
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error upserting executive summary for dashboard link {link_id}: {str(e)}")
             return None
 
     def delete_dashboard_link_kpi_selection(self, link_id: int) -> bool:

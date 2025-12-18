@@ -61,7 +61,7 @@ class OpenAIClient:
             messages: List of message dicts with 'role' and 'content' keys
             model: Model to use (default: gpt-4o-mini)
             temperature: Sampling temperature (0-2, default: 0.7)
-            max_tokens: Maximum tokens to generate
+            max_tokens: Maximum tokens to generate (will be converted to max_completion_tokens for newer models)
             stream: Whether to stream the response
         
         Returns:
@@ -75,8 +75,13 @@ class OpenAIClient:
             # "temperature": temperature
         }
         
+        # Newer models (o1, o3, gpt-5.x) use max_completion_tokens instead of max_tokens
+        # Check if model requires max_completion_tokens
         if max_tokens:
-            data["max_tokens"] = max_tokens
+            if model.startswith("o1") or model.startswith("o3") or model.startswith("gpt-5"):
+                data["max_completion_tokens"] = max_tokens
+            else:
+                data["max_tokens"] = max_tokens
         
         if stream:
             data["stream"] = True

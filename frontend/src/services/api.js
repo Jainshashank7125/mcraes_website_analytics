@@ -656,6 +656,8 @@ export const clientAPI = {
   },
 
   // Create or update a dashboard link (admin)
+  // payload can include: slug, start_date, end_date, enabled, expires_at, name, description,
+  // selected_kpis, visible_sections, selected_charts, selected_performance_metrics_kpis, executive_summary
   upsertDashboardLink: async (clientId, payload) => {
     // Payload can include: name, description, start_date, end_date, enabled, expires_at, slug,
     // selected_kpis, visible_sections, selected_charts
