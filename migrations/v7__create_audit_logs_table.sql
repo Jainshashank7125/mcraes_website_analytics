@@ -1,18 +1,22 @@
 -- Migration: Create audit_logs table for tracking user actions and data syncs
 -- Run this in Supabase SQL Editor or via Alembic
 
--- Create enum type for audit log actions
-CREATE TYPE auditlogaction AS ENUM (
-    'login',
-    'logout',
-    'user_created',
-    'sync_brands',
-    'sync_prompts',
-    'sync_responses',
-    'sync_ga4',
-    'sync_agency_analytics',
-    'sync_all'
-);
+-- Create enum type for audit log actions (only if it doesn't exist)
+DO $$ BEGIN
+    CREATE TYPE auditlogaction AS ENUM (
+        'login',
+        'logout',
+        'user_created',
+        'sync_brands',
+        'sync_prompts',
+        'sync_responses',
+        'sync_ga4',
+        'sync_agency_analytics',
+        'sync_all'
+    );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- Create audit_logs table
 CREATE TABLE IF NOT EXISTS audit_logs (

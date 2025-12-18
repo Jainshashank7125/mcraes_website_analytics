@@ -124,6 +124,15 @@ function PublicReportingDashboard() {
         }
 
         if (dashboardLink) {
+          // Track link open (fire and forget - don't block page load)
+          clientAPI.trackDashboardLinkOpen(slug, {
+            user_agent: navigator.userAgent,
+            referer: document.referrer
+          }).catch(err => {
+            // Silently fail - don't block page load
+            debugError('Failed to track link open:', err)
+          })
+          
           try {
             const brand = await reportingAPI.getBrandBySlug(slug)
             if (brand && brand.no_data) {

@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Query, HTTPException, Depends, UploadFile, File, Form
+from fastapi import APIRouter, Query, HTTPException, Depends, UploadFile, File, Form, Request
 from typing import Optional, List, Dict
 import logging
 import time
-from datetime import datetime, timedelta, date as date_type
+from datetime import datetime, timedelta, date as date_type, timezone
 import base64
 import uuid
 from app.services.supabase_service import SupabaseService
@@ -30,6 +30,23 @@ class DashboardLinkRequest(BaseModel):
     end_date: date_type
     enabled: bool = True
     expires_at: Optional[datetime] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    selected_kpis: Optional[List[str]] = None
+    visible_sections: Optional[List[str]] = None
+    selected_charts: Optional[List[str]] = None
+
+class DashboardLinkUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    start_date: Optional[date_type] = None
+    end_date: Optional[date_type] = None
+    enabled: Optional[bool] = None
+    expires_at: Optional[datetime] = None
+    slug: Optional[str] = None
+    selected_kpis: Optional[List[str]] = None
+    visible_sections: Optional[List[str]] = None
+    selected_charts: Optional[List[str]] = None
 
 @router.get("/data/brands")
 @handle_api_errors(context="fetching brands")
@@ -3771,9 +3788,19 @@ async def get_brand_by_slug(slug: str, db: Session = Depends(get_db)):
             if not dashboard_link.get("enabled", False):
                 raise HTTPException(status_code=403, detail="Dashboard link is disabled")
             expires_at = dashboard_link.get("expires_at")
-            if expires_at and datetime.utcnow() > expires_at:
-                supabase.disable_dashboard_link(dashboard_link["id"])
-                raise HTTPException(status_code=410, detail="Dashboard link has expired")
+            if expires_at:
+                # Handle timezone-aware comparison
+                now = datetime.now(timezone.utc)
+                # If expires_at is a string, parse it; if it's datetime, ensure it's timezone-aware
+                if isinstance(expires_at, str):
+                    expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                elif isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                    # If naive, assume UTC
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                # Now both are timezone-aware, compare
+                if now > expires_at:
+                    supabase.disable_dashboard_link(dashboard_link["id"])
+                    raise HTTPException(status_code=410, detail="Dashboard link has expired")
             client = supabase.get_client_by_id(dashboard_link["client_id"])
             if client:
                 client["dashboard_link"] = dashboard_link
@@ -3926,9 +3953,19 @@ async def get_reporting_dashboard_by_slug(
             if not dashboard_link.get("enabled", False):
                 raise HTTPException(status_code=403, detail="Dashboard link is disabled")
             expires_at = dashboard_link.get("expires_at")
-            if expires_at and datetime.utcnow() > expires_at:
-                supabase.disable_dashboard_link(dashboard_link["id"])
-                raise HTTPException(status_code=410, detail="Dashboard link has expired")
+            if expires_at:
+                # Handle timezone-aware comparison
+                now = datetime.now(timezone.utc)
+                # If expires_at is a string, parse it; if it's datetime, ensure it's timezone-aware
+                if isinstance(expires_at, str):
+                    expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                elif isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                    # If naive, assume UTC
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                # Now both are timezone-aware, compare
+                if now > expires_at:
+                    supabase.disable_dashboard_link(dashboard_link["id"])
+                    raise HTTPException(status_code=410, detail="Dashboard link has expired")
 
             client = supabase.get_client_by_id(dashboard_link["client_id"])
             if not client:
@@ -4121,9 +4158,19 @@ async def get_scrunch_dashboard_data_by_slug(
             if not dashboard_link.get("enabled", False):
                 raise HTTPException(status_code=403, detail="Dashboard link is disabled")
             expires_at = dashboard_link.get("expires_at")
-            if expires_at and datetime.utcnow() > expires_at:
-                supabase.disable_dashboard_link(dashboard_link["id"])
-                raise HTTPException(status_code=410, detail="Dashboard link has expired")
+            if expires_at:
+                # Handle timezone-aware comparison
+                now = datetime.now(timezone.utc)
+                # If expires_at is a string, parse it; if it's datetime, ensure it's timezone-aware
+                if isinstance(expires_at, str):
+                    expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                elif isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                    # If naive, assume UTC
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                # Now both are timezone-aware, compare
+                if now > expires_at:
+                    supabase.disable_dashboard_link(dashboard_link["id"])
+                    raise HTTPException(status_code=410, detail="Dashboard link has expired")
 
             client = supabase.get_client_by_id(dashboard_link["client_id"])
             if not client:
@@ -5897,9 +5944,19 @@ async def get_client_by_slug(
             if not link.get("enabled", False):
                 raise HTTPException(status_code=403, detail="Dashboard link is disabled")
             expires_at = link.get("expires_at")
-            if expires_at and datetime.utcnow() > expires_at:
-                supabase.disable_dashboard_link(link["id"])
-                raise HTTPException(status_code=410, detail="Dashboard link has expired")
+            if expires_at:
+                # Handle timezone-aware comparison
+                now = datetime.now(timezone.utc)
+                # If expires_at is a string, parse it; if it's datetime, ensure it's timezone-aware
+                if isinstance(expires_at, str):
+                    expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                elif isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                    # If naive, assume UTC
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                # Now both are timezone-aware, compare
+                if now > expires_at:
+                    supabase.disable_dashboard_link(link["id"])
+                    raise HTTPException(status_code=410, detail="Dashboard link has expired")
             client = supabase.get_client_by_id(link["client_id"])
             if not client:
                 raise HTTPException(status_code=404, detail="Client not found for dashboard link")
@@ -5932,11 +5989,86 @@ async def get_dashboard_link_by_slug(
         raise HTTPException(status_code=403, detail="Dashboard link is disabled")
 
     expires_at = link.get("expires_at")
-    if expires_at and datetime.utcnow() > expires_at:
-        supabase.disable_dashboard_link(link["id"])
-        raise HTTPException(status_code=410, detail="Dashboard link has expired")
+    if expires_at:
+        # Handle timezone-aware comparison
+        now = datetime.now(timezone.utc)
+        # If expires_at is a string, parse it; if it's datetime, ensure it's timezone-aware
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+        elif isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+            # If naive, assume UTC
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        # Now both are timezone-aware, compare
+        if now > expires_at:
+            supabase.disable_dashboard_link(link["id"])
+            raise HTTPException(status_code=410, detail="Dashboard link has expired")
 
     return link
+
+@router.post("/data/dashboard-links/{slug}/track")
+@handle_api_errors(context="tracking dashboard link open")
+async def track_dashboard_link_open(
+    slug: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """Track when a dashboard link is opened (public access)"""
+    
+    supabase = SupabaseService(db=db)
+    
+    # Get the link first to verify it exists and is enabled
+    link = supabase.get_dashboard_link_by_slug(slug)
+    if not link:
+        raise HTTPException(status_code=404, detail="Dashboard link not found")
+    
+    if not link.get("enabled", False):
+        raise HTTPException(status_code=403, detail="Dashboard link is disabled")
+    
+    expires_at = link.get("expires_at")
+    if expires_at:
+        # Handle timezone-aware comparison
+        now = datetime.now(timezone.utc)
+        # If expires_at is a string, parse it; if it's datetime, ensure it's timezone-aware
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+        elif isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+            # If naive, assume UTC
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        # Now both are timezone-aware, compare
+        if now > expires_at:
+            supabase.disable_dashboard_link(link["id"])
+            raise HTTPException(status_code=410, detail="Dashboard link has expired")
+    
+    # Get client IP address
+    client_host = request.client.host if request.client else None
+    # Try to get real IP from headers (for proxies)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        ip_address = forwarded_for.split(",")[0].strip()
+    else:
+        ip_address = client_host
+    
+    # Get user agent and referer from request body or headers
+    try:
+        body = await request.json()
+        user_agent = body.get("user_agent") or request.headers.get("User-Agent")
+        referer = body.get("referer") or request.headers.get("Referer")
+    except:
+        user_agent = request.headers.get("User-Agent")
+        referer = request.headers.get("Referer")
+    
+    # Track the link open
+    success = supabase.track_dashboard_link_open(
+        link_id=link["id"],
+        ip_address=ip_address,
+        user_agent=user_agent,
+        referer=referer
+    )
+    
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to track link open")
+    
+    return {"status": "success", "message": "Link open tracked"}
 
 
 
@@ -5976,7 +6108,12 @@ async def upsert_dashboard_link_for_client(
         end_date=request.end_date,
         enabled=request.enabled,
         expires_at=request.expires_at,
-        user_email=current_user.get("email")
+        name=request.name,
+        description=request.description,
+        user_email=current_user.get("email"),
+        selected_kpis=request.selected_kpis,
+        visible_sections=request.visible_sections,
+        selected_charts=request.selected_charts
     )
 
     if not link:
@@ -5986,6 +6123,98 @@ async def upsert_dashboard_link_for_client(
         "status": "success",
         "link": link,
         "shareable_url": f"/reporting/client/{link['slug']}"
+    }
+
+@router.put("/data/clients/{client_id}/dashboard-links/{link_id}")
+@handle_api_errors(context="updating dashboard link")
+async def update_dashboard_link(
+    client_id: int,
+    link_id: int,
+    request: DashboardLinkUpdateRequest,
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """Update a dashboard link"""
+    supabase = SupabaseService(db=db)
+    client = supabase.get_client_by_id(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Verify the link belongs to this client
+    links = supabase.list_dashboard_links_for_client(client_id)
+    link = next((l for l in links if l.get("id") == link_id), None)
+    if not link:
+        raise HTTPException(status_code=404, detail="Dashboard link not found")
+    
+    # Prepare update data
+    update_data = {}
+    if request.name is not None:
+        update_data["name"] = request.name
+    if request.description is not None:
+        update_data["description"] = request.description
+    if request.start_date is not None:
+        update_data["start_date"] = request.start_date
+    if request.end_date is not None:
+        update_data["end_date"] = request.end_date
+    if request.enabled is not None:
+        update_data["enabled"] = request.enabled
+    if request.expires_at is not None:
+        update_data["expires_at"] = request.expires_at
+    if request.slug is not None:
+        update_data["slug"] = request.slug
+    # Include KPI selections if provided
+    if request.selected_kpis is not None:
+        update_data["selected_kpis"] = request.selected_kpis
+    if request.visible_sections is not None:
+        update_data["visible_sections"] = request.visible_sections
+    if request.selected_charts is not None:
+        update_data["selected_charts"] = request.selected_charts
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    
+    updated_link = supabase.update_dashboard_link(
+        link_id=link_id,
+        updates=update_data,
+        user_email=current_user.get("email")
+    )
+    
+    if not updated_link:
+        raise HTTPException(status_code=500, detail="Failed to update dashboard link")
+    
+    return {
+        "status": "success",
+        "link": updated_link
+    }
+
+@router.delete("/data/clients/{client_id}/dashboard-links/{link_id}")
+@handle_api_errors(context="deleting dashboard link")
+async def delete_dashboard_link(
+    client_id: int,
+    link_id: int,
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """Delete a dashboard link"""
+    supabase = SupabaseService(db=db)
+    client = supabase.get_client_by_id(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Verify the link belongs to this client
+    links = supabase.list_dashboard_links_for_client(client_id)
+    link = next((l for l in links if l.get("id") == link_id), None)
+    if not link:
+        raise HTTPException(status_code=404, detail="Dashboard link not found")
+    
+    success = supabase.delete_dashboard_link(link_id)
+    
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to delete dashboard link")
+    
+    return {
+        "status": "success",
+        "message": "Dashboard link deleted successfully"
     }
 
 @router.post("/data/clients/{client_id}/regenerate-shareable-link")
@@ -6059,6 +6288,122 @@ async def regenerate_shareable_link(
     except Exception as e:
         logger.error(f"Error regenerating shareable link: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/data/clients/{client_id}/dashboard-links/{link_id}/kpi-selections")
+@handle_api_errors(context="getting dashboard link KPI selections")
+async def get_dashboard_link_kpi_selections(
+    client_id: int,
+    link_id: int,
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """Get KPI selections for a specific dashboard link"""
+    supabase = SupabaseService(db=db)
+    client = supabase.get_client_by_id(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Verify the link belongs to this client
+    links = supabase.list_dashboard_links_for_client(client_id)
+    link = next((l for l in links if l.get("id") == link_id), None)
+    if not link:
+        raise HTTPException(status_code=404, detail="Dashboard link not found")
+    
+    kpi_selection = supabase.get_dashboard_link_kpi_selection(link_id)
+    
+    if not kpi_selection:
+        # Return default selections if none exist
+        return {
+            "dashboard_link_id": link_id,
+            "selected_kpis": [],
+            "visible_sections": ['ga4', 'scrunch_ai', 'brand_analytics', 'advanced_analytics', 'keywords'],
+            "selected_charts": [],
+            "created_at": None,
+            "updated_at": None
+        }
+    
+    return kpi_selection
+
+@router.get("/data/clients/{client_id}/dashboard-links/{link_id}/metrics")
+@handle_api_errors(context="getting dashboard link metrics")
+async def get_dashboard_link_metrics(
+    client_id: int,
+    link_id: int,
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """Get metrics for a specific dashboard link"""
+    supabase = SupabaseService(db=db)
+    client = supabase.get_client_by_id(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Verify the link belongs to this client
+    links = supabase.list_dashboard_links_for_client(client_id)
+    link = next((l for l in links if l.get("id") == link_id), None)
+    if not link:
+        raise HTTPException(status_code=404, detail="Dashboard link not found")
+    
+    # Parse dates if provided
+    start_dt = None
+    end_dt = None
+    if start_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD")
+    if end_date:
+        try:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid end_date format. Use YYYY-MM-DD")
+    
+    metrics = supabase.get_dashboard_link_metrics(
+        link_id=link_id,
+        start_date=start_dt,
+        end_date=end_dt
+    )
+    
+    return metrics
+
+@router.get("/data/clients/{client_id}/dashboard-links/metrics")
+@handle_api_errors(context="getting dashboard links metrics")
+async def get_dashboard_links_metrics(
+    client_id: int,
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """Get aggregated metrics for all dashboard links of a client"""
+    supabase = SupabaseService(db=db)
+    client = supabase.get_client_by_id(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Parse dates if provided
+    start_dt = None
+    end_dt = None
+    if start_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD")
+    if end_date:
+        try:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid end_date format. Use YYYY-MM-DD")
+    
+    metrics = supabase.get_client_dashboard_links_metrics(
+        client_id=client_id,
+        start_date=start_dt,
+        end_date=end_dt
+    )
+    
+    return metrics
 
 class ClientMappingUpdateRequest(BaseModel):
     ga4_property_id: Optional[str] = None

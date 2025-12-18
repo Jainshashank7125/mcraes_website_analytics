@@ -32,6 +32,7 @@ import {
   AccountCircle as AccountCircleIcon,
   PersonAdd as PersonAddIcon,
   History as HistoryIcon,
+  Link as LinkIcon,
 } from '@mui/icons-material'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
@@ -48,6 +49,7 @@ const menuItems = [
   // { text: 'Analytics', icon: AnalyticsIcon, path: '/analytics' },
   { text: 'Agency Analytics', icon: AnalyticsIcon, path: '/agency-analytics', adminOnly: false },
   { text: 'Reporting Dashboard', icon: AssessmentIcon, path: '/reporting', adminOnly: false },
+  { text: 'Dashboard Links', icon: LinkIcon, path: '/dashboard-links', adminOnly: false },
   { text: 'Sync Data', icon: SyncIcon, path: '/sync', adminOnly: false },
   { text: 'Scrunch Data', icon: StorageIcon, path: '/data', adminOnly: false },
   { text: 'Audit Logs', icon: HistoryIcon, path: '/audit-logs', adminOnly: true },
@@ -143,6 +145,7 @@ function Layout({ children }) {
                             (item.path === '/clients' && location.pathname.startsWith('/clients')) ||
                             // (item.path === '/agency-analytics' && location.pathname === '/agency-analytics') ||
                             (item.path === '/reporting' && location.pathname === '/reporting') ||
+                            (item.path === '/dashboard-links' && location.pathname === '/dashboard-links') ||
                             (item.path === '/audit-logs' && location.pathname === '/audit-logs')
             const IconComponent = item.icon
             
