@@ -3047,7 +3047,7 @@ class SupabaseService:
                     link_id = kpi_dict.get("dashboard_link_id")
                     if link_id:
                         # Format KPI selection to match get_dashboard_link_kpi_selection structure
-                        kpi_selections_map[link_id] = {
+                        kpi_selection_data = {
                             "dashboard_link_id": link_id,
                             "selected_kpis": kpi_dict.get("selected_kpis") or [],
                             "visible_sections": kpi_dict.get("visible_sections") or [],
@@ -3056,6 +3056,10 @@ class SupabaseService:
                             "created_at": kpi_dict.get("created_at").isoformat() if kpi_dict.get("created_at") else None,
                             "updated_at": kpi_dict.get("updated_at").isoformat() if kpi_dict.get("updated_at") else None
                         }
+                        # Include show_change_period if it exists
+                        if kpi_dict.get("show_change_period"):
+                            kpi_selection_data["show_change_period"] = kpi_dict.get("show_change_period")
+                        kpi_selections_map[link_id] = kpi_selection_data
             
             # Process links and attach related data
             for link_id, client_id, link_dict in link_rows:
@@ -3108,6 +3112,7 @@ class SupabaseService:
         visible_sections: Optional[List[str]] = None,
         selected_charts: Optional[List[str]] = None,
         selected_performance_metrics_kpis: Optional[List[str]] = None,
+        show_change_period: Optional[Dict[str, bool]] = None,
         executive_summary: Optional[Dict] = None
     ) -> Optional[Dict]:
         """Create or update a dashboard link for a client based on date range"""
@@ -3175,13 +3180,14 @@ class SupabaseService:
                 link_id = link_dict.get("id")
                 
                 # Save KPI selections if provided
-                if link_id and (selected_kpis is not None or visible_sections is not None or selected_charts is not None or selected_performance_metrics_kpis is not None):
+                if link_id and (selected_kpis is not None or visible_sections is not None or selected_charts is not None or selected_performance_metrics_kpis is not None or show_change_period is not None):
                     kpi_selection = self.upsert_dashboard_link_kpi_selection(
                         link_id=link_id,
                         selected_kpis=selected_kpis or [],
                         visible_sections=visible_sections,
                         selected_charts=selected_charts or [],
-                        selected_performance_metrics_kpis=selected_performance_metrics_kpis or []
+                        selected_performance_metrics_kpis=selected_performance_metrics_kpis or [],
+                        show_change_period=show_change_period
                     )
                     if kpi_selection:
                         link_dict["kpi_selection"] = kpi_selection
@@ -3389,6 +3395,7 @@ class SupabaseService:
             visible_sections = updates.pop("visible_sections", None)
             selected_charts = updates.pop("selected_charts", None)
             selected_performance_metrics_kpis = updates.pop("selected_performance_metrics_kpis", None)
+            show_change_period = updates.pop("show_change_period", None)
             # Extract executive_summary but we'll add it back to update_data if column exists
             executive_summary = updates.pop("executive_summary", None)
             
@@ -3436,13 +3443,14 @@ class SupabaseService:
             link_dict = dict(row._mapping)
             
             # Update KPI selections if provided
-            if selected_kpis is not None or visible_sections is not None or selected_charts is not None or selected_performance_metrics_kpis is not None:
+            if selected_kpis is not None or visible_sections is not None or selected_charts is not None or selected_performance_metrics_kpis is not None or show_change_period is not None:
                 kpi_selection = self.upsert_dashboard_link_kpi_selection(
                     link_id=link_id,
                     selected_kpis=selected_kpis if selected_kpis is not None else [],
                     visible_sections=visible_sections,
                     selected_charts=selected_charts if selected_charts is not None else [],
-                    selected_performance_metrics_kpis=selected_performance_metrics_kpis if selected_performance_metrics_kpis is not None else []
+                    selected_performance_metrics_kpis=selected_performance_metrics_kpis if selected_performance_metrics_kpis is not None else [],
+                    show_change_period=show_change_period
                 )
                 if kpi_selection:
                     link_dict["kpi_selection"] = kpi_selection
@@ -3487,6 +3495,9 @@ class SupabaseService:
                 # Include selected_performance_metrics_kpis if the column exists
                 if hasattr(row, 'selected_performance_metrics_kpis'):
                     result_dict["selected_performance_metrics_kpis"] = row.selected_performance_metrics_kpis or []
+                # Include show_change_period if the column exists
+                if hasattr(row, 'show_change_period') and row.show_change_period:
+                    result_dict["show_change_period"] = row.show_change_period
                 return result_dict
             return None
         except Exception as e:
@@ -3499,7 +3510,8 @@ class SupabaseService:
         selected_kpis: List[str],
         visible_sections: Optional[List[str]] = None,
         selected_charts: Optional[List[str]] = None,
-        selected_performance_metrics_kpis: Optional[List[str]] = None
+        selected_performance_metrics_kpis: Optional[List[str]] = None,
+        show_change_period: Optional[Dict[str, bool]] = None
     ) -> Optional[Dict]:
         """Create or update KPI selections for a dashboard link"""
         try:
@@ -3518,6 +3530,15 @@ class SupabaseService:
             if selected_performance_metrics_kpis is None:
                 selected_performance_metrics_kpis = []
             
+            # Default show_change_period if not provided
+            if show_change_period is None:
+                show_change_period = {
+                    "ga4": True,
+                    "agency_analytics": True,
+                    "scrunch_ai": True,
+                    "all_performance_metrics": True
+                }
+            
             kpi_data = {
                 "dashboard_link_id": link_id,
                 "selected_kpis": selected_kpis,
@@ -3527,20 +3548,31 @@ class SupabaseService:
                 "updated_at": now,
             }
             
+            # Only add show_change_period if column exists
+            table_columns = [col.name for col in table.c]
+            if 'show_change_period' in table_columns:
+                kpi_data["show_change_period"] = show_change_period
+            
             insert_stmt = pg_insert(table).values(
                 **kpi_data,
                 created_at=now
             ).returning(table)
             
+            update_set = {
+                "selected_kpis": insert_stmt.excluded.selected_kpis,
+                "visible_sections": insert_stmt.excluded.visible_sections,
+                "selected_charts": insert_stmt.excluded.selected_charts,
+                "selected_performance_metrics_kpis": insert_stmt.excluded.selected_performance_metrics_kpis,
+                "updated_at": insert_stmt.excluded.updated_at,
+            }
+            
+            # Only update show_change_period if column exists
+            if 'show_change_period' in table_columns:
+                update_set["show_change_period"] = insert_stmt.excluded.show_change_period
+            
             insert_stmt = insert_stmt.on_conflict_do_update(
                 index_elements=['dashboard_link_id'],
-                set_={
-                    "selected_kpis": insert_stmt.excluded.selected_kpis,
-                    "visible_sections": insert_stmt.excluded.visible_sections,
-                    "selected_charts": insert_stmt.excluded.selected_charts,
-                    "selected_performance_metrics_kpis": insert_stmt.excluded.selected_performance_metrics_kpis,
-                    "updated_at": insert_stmt.excluded.updated_at,
-                }
+                set_=update_set
             )
             
             result = self.db.execute(insert_stmt)
@@ -3548,7 +3580,7 @@ class SupabaseService:
             
             row = result.fetchone()
             if row:
-                return {
+                result_dict = {
                     "dashboard_link_id": link_id,
                     "selected_kpis": row.selected_kpis or [],
                     "visible_sections": row.visible_sections or [],
@@ -3557,6 +3589,10 @@ class SupabaseService:
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                     "updated_at": row.updated_at.isoformat() if row.updated_at else None
                 }
+                # Include show_change_period if the column exists
+                if hasattr(row, 'show_change_period') and row.show_change_period:
+                    result_dict["show_change_period"] = row.show_change_period
+                return result_dict
             return None
         except Exception as e:
             self.db.rollback()
