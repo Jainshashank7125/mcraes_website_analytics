@@ -53,6 +53,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Trigger to auto-update updated_at
+DROP TRIGGER IF EXISTS sync_jobs_updated_at ON sync_jobs;
 CREATE TRIGGER sync_jobs_updated_at
     BEFORE UPDATE ON sync_jobs
     FOR EACH ROW
