@@ -25,6 +25,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Create trigger to automatically update updated_at
+DROP TRIGGER IF EXISTS trigger_update_brand_kpi_selections_updated_at ON brand_kpi_selections;
 CREATE TRIGGER trigger_update_brand_kpi_selections_updated_at
     BEFORE UPDATE ON brand_kpi_selections
     FOR EACH ROW

@@ -133,6 +133,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_auto_generate_client_slug ON clients;
 CREATE TRIGGER trigger_auto_generate_client_slug
     BEFORE INSERT OR UPDATE ON clients
     FOR EACH ROW

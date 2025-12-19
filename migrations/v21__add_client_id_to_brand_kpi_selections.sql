@@ -18,6 +18,8 @@ DROP CONSTRAINT IF EXISTS brand_kpi_selections_brand_id_key;
 
 -- Add unique constraint on client_id (one selection per client)
 ALTER TABLE brand_kpi_selections 
+DROP CONSTRAINT IF EXISTS brand_kpi_selections_client_id_key;
+ALTER TABLE brand_kpi_selections 
 ADD CONSTRAINT brand_kpi_selections_client_id_key UNIQUE (client_id);
 
 -- Update existing records: set client_id based on brand_id
