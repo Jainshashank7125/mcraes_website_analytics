@@ -85,6 +85,7 @@ import {
 } from "recharts";
 import { reportingAPI, syncAPI, clientAPI, openaiAPI } from "../services/api";
 import { debugLog, debugWarn, debugError } from "../utils/debug";
+import { useAuth } from "../contexts/AuthContext";
 import ScrunchVisualizations from "./reporting/charts/ScrunchVisualizations";
 // Import reusable components and utilities
 import ChartCard from "./reporting/ChartCard";
@@ -314,6 +315,7 @@ function ReportingDashboard({
   publicStartDate,
   publicEndDate,
 }) {
+  const { user } = useAuth();
   const isPublic = !!publicSlug;
   const location = useLocation();
   const hasHandledNavigationClientId = useRef(false); // Track if we've handled clientId from navigation state
@@ -383,6 +385,7 @@ function ReportingDashboard({
   const [loadingLinks, setLoadingLinks] = useState(false);
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const [editingLink, setEditingLink] = useState(null);
+  const [linkDialogTab, setLinkDialogTab] = useState(0); // 0 = Basic, 1 = Advanced
   const [linkFormData, setLinkFormData] = useState({
     name: "",
     description: "",
@@ -2211,17 +2214,52 @@ function ReportingDashboard({
     }
   };
 
+  // Generate auto name and description based on date range and creator
+  const generateAutoLinkName = (startDate, endDate) => {
+    if (!startDate || !endDate) return "";
+    try {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const startStr = start.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      const endStr = end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      return `Report: ${startStr} - ${endStr}`;
+    } catch {
+      return `Report: ${startDate} - ${endDate}`;
+    }
+  };
+
+  const generateAutoLinkDescription = (startDate, endDate) => {
+    if (!startDate || !endDate) return "";
+    const creatorName = user?.email?.split("@")[0] || user?.full_name || "User";
+    const creatorDisplay = creatorName.charAt(0).toUpperCase() + creatorName.slice(1);
+    try {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const startStr = start.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+      const endStr = end.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+      return `Created by ${creatorDisplay} | Period: ${startStr} to ${endStr}`;
+    } catch {
+      return `Created by ${creatorDisplay} | Period: ${startDate} to ${endDate}`;
+    }
+  };
+
   const handleCreateLink = () => {
     setEditingLink(null);
+    setLinkDialogTab(0); // Reset to Basic tab
     // Clear executive summary when creating a new link (will be generated/saved when link is created)
     setExecutiveSummary(null);
     setExecutiveSummaryCacheKey(null);
     // Use current date range from dashboard (startDate and endDate are already strings)
+    const currentStartDate = startDate || "";
+    const currentEndDate = endDate || "";
+    // Auto-generate name and description
+    const autoName = generateAutoLinkName(currentStartDate, currentEndDate);
+    const autoDescription = generateAutoLinkDescription(currentStartDate, currentEndDate);
     setLinkFormData({
-      name: "",
-      description: "",
-      start_date: startDate || "",
-      end_date: endDate || "",
+      name: autoName,
+      description: autoDescription,
+      start_date: currentStartDate,
+      end_date: currentEndDate,
       enabled: true,
       expires_at: "",
       slug: "",
@@ -2293,6 +2331,7 @@ function ReportingDashboard({
 
   const handleEditLink = (link) => {
     setEditingLink(link);
+    setLinkDialogTab(0); // Reset to Basic tab when editing
 
     // Load executive summary from the link if it exists
     // IMPORTANT: Only load if the link belongs to the current client
@@ -2416,6 +2455,22 @@ function ReportingDashboard({
       expires_at: expiresAtFormatted,
       slug: link.slug || "",
     });
+    
+    // Update the date range to match the link's date range
+    if (link.start_date && link.end_date) {
+      const formattedStartDate = formatDateForInput(link.start_date);
+      const formattedEndDate = formatDateForInput(link.end_date);
+      if (formattedStartDate && formattedEndDate) {
+        setStartDate(formattedStartDate);
+        setEndDate(formattedEndDate);
+        debugLog("Updated date range from selected link", {
+          linkId: link.id,
+          startDate: formattedStartDate,
+          endDate: formattedEndDate,
+        });
+      }
+    }
+    
     // Don't open dialog automatically - user will click "Edit Link" button to open it
   };
 
@@ -3197,6 +3252,18 @@ function ReportingDashboard({
                       >
                       {editingLink ? "Edit Link" : "Create Link"}
                       </Button>
+                    {editingLink && (
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        onClick={() => handleCopyLinkUrl(editingLink)}
+                        startIcon={<ContentCopyIcon />}
+                        sx={{ textTransform: "none" }}
+                        title="Copy link URL to clipboard"
+                      >
+                        Copy Link
+                      </Button>
+                    )}
                     <Button
                       variant="outlined"
                       size="small"
@@ -7237,7 +7304,7 @@ function ReportingDashboard({
             {/* General KPI Grid - All Other KPIs */}
             {/* "All Performance Metrics" section should always show if there are KPIs to display */}
             {/* It's a summary section, not a data source section, so it doesn't need to be in visible_sections */}
-            {displayedKPIs.length > 0 && (
+            {/* {displayedKPIs.length > 0 && (
               <SectionContainer title="All Performance Metrics">
                 <Grid container spacing={2} sx={{ mb: 4 }}>
                   {displayedKPIs.map(([key, kpi], index) => (
@@ -7252,7 +7319,7 @@ function ReportingDashboard({
                   ))}
                 </Grid>
               </SectionContainer>
-            )}
+            )} */}
           </Box>
             </>
           )}
@@ -7312,7 +7379,7 @@ function ReportingDashboard({
             alignItems="center"
           >
             <Typography variant="h6" fontWeight={600}>
-              Select KPIs for Public View
+              Select KPIs 
             </Typography>
           </Box>
         </DialogTitle>
@@ -7393,14 +7460,14 @@ function ReportingDashboard({
                   icon: AnalyticsIcon,
                   color: getSourceColor("Scrunch"),
                 },
-                {
-                  key: "all_performance_metrics",
-                  label: "All Performance Metrics",
-                  description:
-                    "Summary section - KPIs shown in the summary section (independent from source sections)",
-                  icon: AnalyticsIcon,
-                  color: theme.palette.primary.main,
-                },
+                // {
+                //   key: "all_performance_metrics",
+                //   label: "All Performance Metrics",
+                //   description:
+                //     "Summary section - KPIs shown in the summary section (independent from source sections)",
+                //   icon: AnalyticsIcon,
+                //   color: theme.palette.primary.main,
+                // },
               ].map((section) => {
                 // For "All Performance Metrics", use all KPIs from KPI_ORDER
                 const sectionKPIs =
@@ -8041,100 +8108,177 @@ function ReportingDashboard({
             {editingLink ? "Edit Dashboard Link" : "Create Dashboard Link"}
           </Typography>
         </DialogTitle>
-        <DialogContent>
-          <Box display="flex" flexDirection="column" gap={2} mt={1}>
-            <TextField
-              label="Name (optional)"
-              value={linkFormData.name}
-              onChange={(e) =>
-                setLinkFormData({ ...linkFormData, name: e.target.value })
-              }
-              fullWidth
-              helperText="Friendly name for this link"
-            />
-            <TextField
-              label="Description (optional)"
-              value={linkFormData.description}
-              onChange={(e) =>
-                setLinkFormData({
-                  ...linkFormData,
-                  description: e.target.value,
-                })
-              }
-              fullWidth
-              multiline
-              rows={2}
-              helperText="Optional description for this link"
-            />
-            <Box display="flex" gap={2}>
+        <DialogContent sx={{ position: "relative" }}>
+          {loading && (
+            <Box
+              sx={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                bgcolor: "rgba(255, 255, 255, 0.95)",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1000,
+                borderRadius: 2,
+              }}
+            >
+              <CircularProgress size={40} sx={{ mb: 2 }} />
+              <Typography variant="body1" color="text.secondary" fontWeight={500}>
+                Generating AI overview...
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
+                This may take a few moments
+              </Typography>
+            </Box>
+          )}
+          <Box sx={{ borderBottom: 1, borderColor: "divider", mb: 2 }}>
+            <Tabs
+              value={linkDialogTab}
+              onChange={(e, newValue) => setLinkDialogTab(newValue)}
+              sx={{ minHeight: 48 }}
+              disabled={loading}
+            >
+              <Tab label="Basic" sx={{ textTransform: "none" }} />
+              <Tab label="Advanced" sx={{ textTransform: "none" }} />
+            </Tabs>
+          </Box>
+          {linkDialogTab === 0 && (
+            <Box display="flex" flexDirection="column" gap={2} sx={{ opacity: loading ? 0.5 : 1 }}>
+              <Box display="flex" gap={2}>
+                <TextField
+                  label="Start Date"
+                  type="date"
+                  value={linkFormData.start_date}
+                  onChange={(e) => {
+                    const newStartDate = e.target.value;
+                    const newFormData = {
+                      ...linkFormData,
+                      start_date: newStartDate,
+                    };
+                    // Auto-update name and description when dates change (only for new links)
+                    if (!editingLink) {
+                      newFormData.name = generateAutoLinkName(newStartDate, linkFormData.end_date);
+                      newFormData.description = generateAutoLinkDescription(newStartDate, linkFormData.end_date);
+                    }
+                    setLinkFormData(newFormData);
+                  }}
+                  fullWidth
+                  required
+                  InputLabelProps={{ shrink: true }}
+                  disabled={loading}
+                />
+                <TextField
+                  label="End Date"
+                  type="date"
+                  value={linkFormData.end_date}
+                  onChange={(e) => {
+                    const newEndDate = e.target.value;
+                    const newFormData = {
+                      ...linkFormData,
+                      end_date: newEndDate,
+                    };
+                    // Auto-update name and description when dates change (only for new links)
+                    if (!editingLink) {
+                      newFormData.name = generateAutoLinkName(linkFormData.start_date, newEndDate);
+                      newFormData.description = generateAutoLinkDescription(linkFormData.start_date, newEndDate);
+                    }
+                    setLinkFormData(newFormData);
+                  }}
+                  fullWidth
+                  required
+                  InputLabelProps={{ shrink: true }}
+                  disabled={loading}
+                />
+              </Box>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={linkFormData.enabled}
+                    onChange={(e) =>
+                      setLinkFormData({
+                        ...linkFormData,
+                        enabled: e.target.checked,
+                      })
+                    }
+                    disabled={loading}
+                  />
+                }
+                label="Enabled"
+              />
+              {!editingLink && (
+                <Alert severity="info">
+                  <Typography variant="body2">
+                    Link will be automatically named based on the date range and creator.
+                    Current KPI selections will be saved with this link.
+                  </Typography>
+                </Alert>
+              )}
+              {editingLink && (
+                <Alert severity="info">
+                  <Typography variant="body2">
+                    Current KPI selections will be saved with this link. You can
+                    modify KPIs in the selector and update this link to save
+                    changes.
+                  </Typography>
+                </Alert>
+              )}
+            </Box>
+          )}
+          {linkDialogTab === 1 && (
+            <Box display="flex" flexDirection="column" gap={2} sx={{ opacity: loading ? 0.5 : 1 }}>
               <TextField
-                label="Start Date"
-                type="date"
-                value={linkFormData.start_date}
+                label="Name"
+                value={linkFormData.name}
+                onChange={(e) =>
+                  setLinkFormData({ ...linkFormData, name: e.target.value })
+                }
+                fullWidth
+                helperText={editingLink ? "Friendly name for this link" : "Auto-generated based on date range. You can customize it here."}
+                disabled={loading}
+              />
+              <TextField
+                label="Description"
+                value={linkFormData.description}
                 onChange={(e) =>
                   setLinkFormData({
                     ...linkFormData,
-                    start_date: e.target.value,
+                    description: e.target.value,
                   })
                 }
                 fullWidth
-                required
-                InputLabelProps={{ shrink: true }}
+                multiline
+                rows={2}
+                helperText={editingLink ? "Optional description for this link" : "Auto-generated based on date range and creator. You can customize it here."}
+                disabled={loading}
               />
               <TextField
-                label="End Date"
-                type="date"
-                value={linkFormData.end_date}
+                label="Slug (optional)"
+                value={linkFormData.slug}
                 onChange={(e) =>
-                  setLinkFormData({ ...linkFormData, end_date: e.target.value })
+                  setLinkFormData({ ...linkFormData, slug: e.target.value })
                 }
                 fullWidth
-                required
+                helperText="Leave empty to auto-generate. Must be unique."
+                disabled={loading}
+              />
+              <TextField
+                label="Expires At (optional)"
+                type="datetime-local"
+                value={linkFormData.expires_at}
+                onChange={(e) =>
+                  setLinkFormData({ ...linkFormData, expires_at: e.target.value })
+                }
+                fullWidth
                 InputLabelProps={{ shrink: true }}
+                helperText="Optional expiration date and time"
+                disabled={loading}
               />
             </Box>
-            <TextField
-              label="Slug (optional)"
-              value={linkFormData.slug}
-              onChange={(e) =>
-                setLinkFormData({ ...linkFormData, slug: e.target.value })
-              }
-              fullWidth
-              helperText="Leave empty to auto-generate. Must be unique."
-            />
-            <TextField
-              label="Expires At (optional)"
-              type="datetime-local"
-              value={linkFormData.expires_at}
-              onChange={(e) =>
-                setLinkFormData({ ...linkFormData, expires_at: e.target.value })
-              }
-              fullWidth
-              InputLabelProps={{ shrink: true }}
-              helperText="Optional expiration date and time"
-            />
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={linkFormData.enabled}
-                  onChange={(e) =>
-                    setLinkFormData({
-                      ...linkFormData,
-                      enabled: e.target.checked,
-                    })
-                  }
-                />
-              }
-              label="Enabled"
-            />
-            <Alert severity="info">
-              <Typography variant="body2">
-                Current KPI selections will be saved with this link. You can
-                modify KPIs in the selector and update this link to save
-                changes.
-              </Typography>
-            </Alert>
-          </Box>
+          )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button
@@ -8143,6 +8287,7 @@ function ReportingDashboard({
               // Don't clear editingLink - keep it selected in dropdown
             }}
             sx={{ textTransform: "none" }}
+            disabled={loading}
           >
             Cancel
           </Button>
@@ -8153,8 +8298,9 @@ function ReportingDashboard({
               loading || !linkFormData.start_date || !linkFormData.end_date
             }
             sx={{ textTransform: "none" }}
+            startIcon={loading ? <CircularProgress size={16} color="inherit" /> : null}
           >
-            {loading ? "Saving..." : editingLink ? "Update" : "Create"}
+            {loading ? "Generating AI overview..." : editingLink ? "Update" : "Create"}
           </Button>
         </DialogActions>
       </Dialog>
