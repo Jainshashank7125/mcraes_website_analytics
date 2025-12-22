@@ -6153,6 +6153,50 @@ async def upsert_dashboard_link_for_client(
     if not link:
         raise HTTPException(status_code=500, detail="Unable to save dashboard link")
 
+    # Generate AI Overview and update executive summary
+    # This ensures we always have the latest summary based on current metrics
+    try:
+        from app.api.openai import generate_overall_overview, OverallOverviewRequest
+        
+        # Get the final date range from the saved link
+        final_start_date = link.get("start_date")
+        final_end_date = link.get("end_date")
+        
+        if final_start_date and final_end_date:
+            # Convert date objects to strings if needed
+            start_date_str = final_start_date.isoformat() if hasattr(final_start_date, 'isoformat') else str(final_start_date)
+            end_date_str = final_end_date.isoformat() if hasattr(final_end_date, 'isoformat') else str(final_end_date)
+            
+            logger.info(f"Generating AI Overview for dashboard link {link.get('id')} - client_id={client_id}, dates={start_date_str} to {end_date_str}")
+            
+            overview_request = OverallOverviewRequest(
+                client_id=client_id,
+                brand_id=None,
+                start_date=start_date_str,
+                end_date=end_date_str
+            )
+            
+            overview_response = await generate_overall_overview(overview_request, db=db)
+            
+            if overview_response and overview_response.get("executive_summary"):
+                # Update the link with the new executive summary
+                logger.info(f"Updating dashboard link {link.get('id')} with new executive summary")
+                updated_link = supabase.update_dashboard_link(
+                    link_id=link.get("id"),
+                    updates={"executive_summary": overview_response["executive_summary"]},
+                    user_email=current_user.get("email")
+                )
+                if updated_link:
+                    link = updated_link
+                    logger.info(f"Successfully updated dashboard link {link.get('id')} with new executive summary")
+                else:
+                    logger.warning(f"Failed to update executive summary for dashboard link {link.get('id')}")
+            else:
+                logger.warning(f"No executive summary in AI Overview response for dashboard link {link.get('id')}")
+    except Exception as e:
+        # Log error but don't fail the request - the link was already saved
+        logger.error(f"Error generating AI Overview for dashboard link {link.get('id')}: {str(e)}", exc_info=True)
+
     return {
         "status": "success",
         "link": link,
@@ -6221,6 +6265,52 @@ async def update_dashboard_link(
     
     if not updated_link:
         raise HTTPException(status_code=500, detail="Failed to update dashboard link")
+    
+    # Generate AI Overview and update executive summary
+    # This ensures we always have the latest summary based on current metrics
+    # Always regenerate on any write operation to prevent race conditions where
+    # updated metrics might not be reflected in the saved summary
+    try:
+        from app.api.openai import generate_overall_overview, OverallOverviewRequest
+        
+        # Get the final date range from the updated link
+        final_start_date = updated_link.get("start_date") or link.get("start_date")
+        final_end_date = updated_link.get("end_date") or link.get("end_date")
+        
+        if final_start_date and final_end_date:
+            # Convert date objects to strings if needed
+            start_date_str = final_start_date.isoformat() if hasattr(final_start_date, 'isoformat') else str(final_start_date)
+            end_date_str = final_end_date.isoformat() if hasattr(final_end_date, 'isoformat') else str(final_end_date)
+            
+            logger.info(f"Generating AI Overview for dashboard link {link_id} - client_id={client_id}, dates={start_date_str} to {end_date_str}")
+            
+            overview_request = OverallOverviewRequest(
+                client_id=client_id,
+                brand_id=None,
+                start_date=start_date_str,
+                end_date=end_date_str
+            )
+            
+            overview_response = await generate_overall_overview(overview_request, db=db)
+            
+            if overview_response and overview_response.get("executive_summary"):
+                # Update the link with the new executive summary
+                logger.info(f"Updating dashboard link {link_id} with new executive summary")
+                final_updated_link = supabase.update_dashboard_link(
+                    link_id=link_id,
+                    updates={"executive_summary": overview_response["executive_summary"]},
+                    user_email=current_user.get("email")
+                )
+                if final_updated_link:
+                    updated_link = final_updated_link
+                    logger.info(f"Successfully updated dashboard link {link_id} with new executive summary")
+                else:
+                    logger.warning(f"Failed to update executive summary for dashboard link {link_id}")
+            else:
+                logger.warning(f"No executive summary in AI Overview response for dashboard link {link_id}")
+    except Exception as e:
+        # Log error but don't fail the request - the link was already updated
+        logger.error(f"Error generating AI Overview for dashboard link {link_id}: {str(e)}", exc_info=True)
     
     return {
         "status": "success",
