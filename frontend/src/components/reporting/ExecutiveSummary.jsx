@@ -61,7 +61,6 @@ export default function ExecutiveSummary({ summary, theme }) {
 
   const header = summary.header || {}
   const overallStatus = header.overall_status || ''
-  console.log(overallStatus)
   
   // Determine status color and icon
   let statusColor = 'default'
