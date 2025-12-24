@@ -2941,7 +2941,12 @@ function ReportingDashboard({
               letterSpacing: "-0.02em",
               color: "text.primary",
               position: "absolute",
-              left: "50%",
+              left: {
+                xs: "80%",
+                sm: "80%",
+                md: "50%",
+                lg: "50%",
+              },
               transform: "translateX(-50%)",
               textAlign: "center",
             }}
@@ -3397,7 +3402,7 @@ function ReportingDashboard({
           {isPublic && activeTab === 0 && (
             <Box sx={{ px: 3 }}>
               {executiveSummary ? (
-                <ExecutiveSummary summary={executiveSummary} theme={theme} dashboardData={dashboardData} />
+                <ExecutiveSummary summary={executiveSummary} theme={theme} />
               ) : (
                 <Alert severity="info" sx={{ borderRadius: 2 }}>
                   <Typography variant="h6" gutterBottom>
@@ -4740,19 +4745,6 @@ function ReportingDashboard({
                                     }}
                                   >
                                     {(() => {
-                                      const duration =
-                                        dashboardData.chart_data
-                                          .ga4_traffic_overview
-                                          .averageSessionDuration || 0;
-                                          const minutes = Math.floor(
-                                            duration / 60
-                                          );
-                                          const seconds = Math.floor(
-                                            duration % 60
-                                          );
-                                      return `${minutes}:${seconds
-                                        .toString()
-                                        .padStart(2, "0")}`;
                                     })()}
                                   </Typography>
                                   <Box
@@ -8516,7 +8508,6 @@ function ReportingDashboard({
                 <ExecutiveSummary
                   summary={overviewData.executive_summary}
                   theme={theme}
-                  dashboardData={dashboardData}
                 />
               ) : overviewData.overview ? (
               <Paper
