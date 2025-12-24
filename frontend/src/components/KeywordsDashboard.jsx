@@ -386,15 +386,27 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
       </Box> */}
       
       {/* KPI Summary Cards */}
-      <Grid container spacing={2} mb={3}>
+      <Grid 
+        container 
+        spacing={{ xs: 2, sm: 2.5, md: 2 }} 
+        sx={{ mb: { xs: 2, sm: 3 } }}
+      >
         {showKPI("average_google_ranking") && (
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid item xs={6} sm={6} md={3}>
             <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
-              <CardContent>
-                <Typography variant="caption" color="text.secondary">
+              <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
+                <Typography 
+                  variant="caption" 
+                  color="text.secondary"
+                  sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
+                >
                   Avg Google Ranking
                 </Typography>
-                <Typography variant="h4" fontWeight={700}>
+                <Typography 
+                  variant="h4" 
+                  fontWeight={700}
+                  sx={{ fontSize: { xs: "1.5rem", sm: "2rem" } }}
+                >
                   {fmt(summary.average_google_ranking ?? summary.avg_google_ranking, 1)}
                 </Typography>
               </CardContent>
@@ -402,13 +414,21 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
           </Grid>
         )}
         {showKPI("average_bing_ranking") && (
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid item xs={6} sm={6} md={3}>
             <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
-              <CardContent>
-                <Typography variant="caption" color="text.secondary">
+              <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
+                <Typography 
+                  variant="caption" 
+                  color="text.secondary"
+                  sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
+                >
                   Avg Bing Ranking
                 </Typography>
-                <Typography variant="h4" fontWeight={700}>
+                <Typography 
+                  variant="h4" 
+                  fontWeight={700}
+                  sx={{ fontSize: { xs: "1.5rem", sm: "2rem" } }}
+                >
                   {fmt(summary.average_bing_ranking ?? summary.avg_bing_ranking, 1)}
                 </Typography>
               </CardContent>
@@ -416,13 +436,21 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
           </Grid>
         )}
         {showKPI("average_search_volume") && (
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid item xs={6} sm={6} md={3}>
             <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
-              <CardContent>
-                <Typography variant="caption" color="text.secondary">
+              <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
+                <Typography 
+                  variant="caption" 
+                  color="text.secondary"
+                  sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
+                >
                   Avg Search Volume
                 </Typography>
-                <Typography variant="h4" fontWeight={700}>
+                <Typography 
+                  variant="h4" 
+                  fontWeight={700}
+                  sx={{ fontSize: { xs: "1.5rem", sm: "2rem" } }}
+                >
                   {fmt(summary.average_search_volume ?? summary.avg_search_volume, 0)}
                 </Typography>
               </CardContent>
@@ -430,13 +458,21 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
           </Grid>
         )}
         {showKPI("top_10_visibility_percentage") && (
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid item xs={6} sm={6} md={3}>
             <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
-              <CardContent>
-                <Typography variant="caption" color="text.secondary">
+              <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
+                <Typography 
+                  variant="caption" 
+                  color="text.secondary"
+                  sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
+                >
                   Top 10 Visibility %
                 </Typography>
-                <Typography variant="h4" fontWeight={700}>
+                <Typography 
+                  variant="h4" 
+                  fontWeight={700}
+                  sx={{ fontSize: { xs: "1.5rem", sm: "2rem" } }}
+                >
                   {fmt(summary.top_10_visibility_percentage ?? summary.top10_visibility_percentage, 1)}%
                 </Typography>
               </CardContent>
@@ -444,13 +480,21 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
           </Grid>
         )}
         {showKPI("improving_keywords_count") && (
-          <Grid item xs={12} sm={6} md={4}>
+          <Grid item xs={6} sm={6} md={4}>
             <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
-              <CardContent>
-                <Typography variant="caption" color="text.secondary">
+              <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
+                <Typography 
+                  variant="caption" 
+                  color="text.secondary"
+                  sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
+                >
                   Improving Keywords
                 </Typography>
-                <Typography variant="h4" fontWeight={700}>
+                <Typography 
+                  variant="h4" 
+                  fontWeight={700}
+                  sx={{ fontSize: { xs: "1.5rem", sm: "2rem" } }}
+                >
                   {fmt(summary.improving_keywords_count ?? summary.improving_keywords, 0)}
                 </Typography>
               </CardContent>
@@ -458,13 +502,21 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
           </Grid>
         )}
         {showKPI("declining_keywords_count") && (
-          <Grid item xs={12} sm={6} md={4}>
+          <Grid item xs={6} sm={6} md={4}>
             <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
-              <CardContent>
-                <Typography variant="caption" color="text.secondary">
+              <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
+                <Typography 
+                  variant="caption" 
+                  color="text.secondary"
+                  sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
+                >
                   Declining Keywords
                 </Typography>
-                <Typography variant="h4" fontWeight={700}>
+                <Typography 
+                  variant="h4" 
+                  fontWeight={700}
+                  sx={{ fontSize: { xs: "1.5rem", sm: "2rem" } }}
+                >
                   {fmt(summary.declining_keywords_count ?? summary.declining_keywords, 0)}
                 </Typography>
               </CardContent>
@@ -472,13 +524,21 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
           </Grid>
         )}
         {showKPI("stable_keywords_count") && (
-          <Grid item xs={12} sm={6} md={4}>
+          <Grid item xs={6} sm={6} md={4}>
             <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
-              <CardContent>
-                <Typography variant="caption" color="text.secondary">
+              <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
+                <Typography 
+                  variant="caption" 
+                  color="text.secondary"
+                  sx={{ fontSize: { xs: "0.75rem", sm: "0.875rem" } }}
+                >
                   Stable Keywords
                 </Typography>
-                <Typography variant="h4" fontWeight={700}>
+                <Typography 
+                  variant="h4" 
+                  fontWeight={700}
+                  sx={{ fontSize: { xs: "1.5rem", sm: "2rem" } }}
+                >
                   {fmt(summary.stable_keywords_count ?? summary.stable_keywords, 0)}
                 </Typography>
               </CardContent>

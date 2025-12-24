@@ -2941,7 +2941,12 @@ function ReportingDashboard({
               letterSpacing: "-0.02em",
               color: "text.primary",
               position: "absolute",
-              left: "50%",
+              left: {
+                xs: "80%",
+                sm: "80%",
+                md: "50%",
+                lg: "50%",
+              },
               transform: "translateX(-50%)",
               textAlign: "center",
             }}
@@ -3454,11 +3459,15 @@ function ReportingDashboard({
                       >
                         Performance Metrics
                       </Typography> */}
-                      <Grid container spacing={3} sx={{ mb: 4 }}>
+                      <Grid 
+                        container 
+                        spacing={{ xs: 2, sm: 2.5, md: 3 }} 
+                        sx={{ mb: { xs: 3, sm: 4 } }}
+                      >
                         {/* Users KPI */}
                         {dashboardData?.kpis?.users &&
                           shouldShowKPI("users") && (
-                            <Grid item xs={12} sm={6} md={3}>
+                            <Grid item xs={6} sm={6} md={3}>
                               <motion.div
                                 initial={{ opacity: 0, y: 20 }}
                                 animate={{ opacity: 1, y: 0 }}
@@ -3477,18 +3486,18 @@ function ReportingDashboard({
                                     },
                                   }}
                                 >
-                                  <CardContent sx={{ p: 2.5 }}>
+                                  <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
                                     <Box
                                       display="flex"
                                       alignItems="center"
                                       justifyContent="space-between"
-                                      mb={1.5}
+                                      mb={{ xs: 1, sm: 1.5 }}
                                     >
                                       <Typography
                                         variant="body2"
                                         color="text.secondary"
                                         sx={{
-                                          fontSize: "0.875rem",
+                                          fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                           fontWeight: 500,
                                         }}
                                       >
@@ -3510,9 +3519,9 @@ function ReportingDashboard({
                                       variant="h4"
                                       fontWeight={700}
                                       sx={{
-                                        fontSize: "1.75rem",
+                                        fontSize: { xs: "1.5rem", sm: "1.75rem" },
                                         letterSpacing: "-0.02em",
-                                        mb: 1,
+                                        mb: { xs: 0.5, sm: 1 },
                                         color: "text.primary",
                                       }}
                                     >
@@ -3530,7 +3539,7 @@ function ReportingDashboard({
                                     </Typography>
                                     <Box
                                       sx={{
-                                        minHeight: "24px",
+                                        minHeight: { xs: "20px", sm: "24px" },
                                         display: "flex",
                                         alignItems: "center",
                                       }}
@@ -3549,14 +3558,14 @@ function ReportingDashboard({
                                           >
                                             <TrendingUpIcon
                                               sx={{
-                                                fontSize: 14,
+                                                fontSize: { xs: 12, sm: 14 },
                                                 color: "#34A853",
                                               }}
                                             />
                                             <Typography
                                               variant="body2"
                                               sx={{
-                                                fontSize: "0.875rem",
+                                                fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                                 fontWeight: 600,
                                                 color: "#34A853",
                                               }}
@@ -3565,7 +3574,7 @@ function ReportingDashboard({
                                                     dashboardData.kpis.users
                                                       .change
                                               ).toFixed(1)}
-                                              %
+                                              % vs prev.
                                             </Typography>
                                           </Box>
                                         )}
@@ -3579,7 +3588,7 @@ function ReportingDashboard({
                         {/* Sessions */}
                         {dashboardData?.kpis?.sessions &&
                           shouldShowKPI("sessions") && (
-                            <Grid item xs={12} sm={6} md={3}>
+                            <Grid item xs={6} sm={6} md={3}>
                               <motion.div
                                 initial={{ opacity: 0, y: 20 }}
                                 animate={{ opacity: 1, y: 0 }}
@@ -3598,18 +3607,18 @@ function ReportingDashboard({
                                     },
                                   }}
                                 >
-                                  <CardContent sx={{ p: 2.5 }}>
+                                  <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
                                     <Box
                                       display="flex"
                                       alignItems="center"
                                       justifyContent="space-between"
-                                      mb={1.5}
+                                      mb={{ xs: 1, sm: 1.5 }}
                                     >
                                       <Typography
                                         variant="body2"
                                         color="text.secondary"
                                         sx={{
-                                          fontSize: "0.875rem",
+                                          fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                           fontWeight: 500,
                                         }}
                                       >
@@ -3631,9 +3640,9 @@ function ReportingDashboard({
                                       variant="h4"
                                       fontWeight={700}
                                       sx={{
-                                        fontSize: "1.75rem",
+                                        fontSize: { xs: "1.5rem", sm: "1.75rem" },
                                         letterSpacing: "-0.02em",
-                                        mb: 1,
+                                        mb: { xs: 0.5, sm: 1 },
                                         color: "text.primary",
                                       }}
                                     >
@@ -3651,7 +3660,7 @@ function ReportingDashboard({
                                     </Typography>
                                     <Box
                                       sx={{
-                                        minHeight: "24px",
+                                        minHeight: { xs: "20px", sm: "24px" },
                                         display: "flex",
                                         alignItems: "center",
                                       }}
@@ -3670,14 +3679,14 @@ function ReportingDashboard({
                                           >
                                             <TrendingUpIcon
                                               sx={{
-                                                fontSize: 14,
+                                                fontSize: { xs: 12, sm: 14 },
                                                 color: "#34A853",
                                               }}
                                             />
                                             <Typography
                                               variant="body2"
                                               sx={{
-                                                fontSize: "0.875rem",
+                                                fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                                 fontWeight: 600,
                                                 color: "#34A853",
                                               }}
@@ -3686,7 +3695,7 @@ function ReportingDashboard({
                                                 dashboardData.kpis.sessions
                                                   .change
                                               ).toFixed(1)}
-                                              %
+                                              % vs prev.
                                             </Typography>
                                           </Box>
                                         )}
@@ -3700,7 +3709,7 @@ function ReportingDashboard({
                         {/* New Users */}
                         {dashboardData?.kpis?.new_users &&
                           shouldShowKPI("new_users") && (
-                            <Grid item xs={12} sm={6} md={3}>
+                            <Grid item xs={6} sm={6} md={3}>
                               <motion.div
                                 initial={{ opacity: 0, y: 20 }}
                                 animate={{ opacity: 1, y: 0 }}
@@ -3719,18 +3728,18 @@ function ReportingDashboard({
                                     },
                                   }}
                                 >
-                                  <CardContent sx={{ p: 2.5 }}>
+                                  <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
                                     <Box
                                       display="flex"
                                       alignItems="center"
                                       justifyContent="space-between"
-                                      mb={1.5}
+                                      mb={{ xs: 1, sm: 1.5 }}
                                     >
                                       <Typography
                                         variant="body2"
                                         color="text.secondary"
                                         sx={{
-                                          fontSize: "0.875rem",
+                                          fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                           fontWeight: 500,
                                         }}
                                       >
@@ -3752,9 +3761,9 @@ function ReportingDashboard({
                                       variant="h4"
                                       fontWeight={700}
                                       sx={{
-                                        fontSize: "1.75rem",
+                                        fontSize: { xs: "1.5rem", sm: "1.75rem" },
                                         letterSpacing: "-0.02em",
-                                        mb: 1,
+                                        mb: { xs: 0.5, sm: 1 },
                                         color: "text.primary",
                                       }}
                                     >
@@ -3772,7 +3781,7 @@ function ReportingDashboard({
                                     </Typography>
                                     <Box
                                       sx={{
-                                        minHeight: "24px",
+                                        minHeight: { xs: "20px", sm: "24px" },
                                         display: "flex",
                                         alignItems: "center",
                                       }}
@@ -3791,14 +3800,14 @@ function ReportingDashboard({
                                               >
                                                 <TrendingUpIcon
                                                   sx={{
-                                                    fontSize: 14,
+                                                    fontSize: { xs: 12, sm: 14 },
                                                     color: "#34A853",
                                                   }}
                                                 />
                                                 <Typography
                                                   variant="body2"
                                                   sx={{
-                                                    fontSize: "0.875rem",
+                                                    fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                                     fontWeight: 600,
                                                     color: "#34A853",
                                                   }}
@@ -3807,7 +3816,7 @@ function ReportingDashboard({
                                                     dashboardData.kpis.new_users
                                                       .change
                                                   ).toFixed(1)}
-                                                  %
+                                                  % vs prev.
                                                 </Typography>
                                               </Box>
                                             )}
@@ -3821,7 +3830,7 @@ function ReportingDashboard({
                             {/* Engaged Sessions */}
                             {dashboardData?.kpis?.engaged_sessions &&
                               shouldShowKPI("engaged_sessions") && (
-                                <Grid item xs={12} sm={6} md={3}>
+                                <Grid item xs={6} sm={6} md={3}>
                                   <motion.div
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
@@ -3840,18 +3849,18 @@ function ReportingDashboard({
                                         },
                                       }}
                                     >
-                                      <CardContent sx={{ p: 2.5 }}>
+                                      <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
                                         <Box
                                           display="flex"
                                           alignItems="center"
                                           justifyContent="space-between"
-                                          mb={1.5}
+                                          mb={{ xs: 1, sm: 1.5 }}
                                         >
                                           <Typography
                                             variant="body2"
                                             color="text.secondary"
                                             sx={{
-                                              fontSize: "0.875rem",
+                                              fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                               fontWeight: 500,
                                             }}
                                           >
@@ -3873,9 +3882,9 @@ function ReportingDashboard({
                                           variant="h4"
                                           fontWeight={700}
                                           sx={{
-                                            fontSize: "1.75rem",
+                                            fontSize: { xs: "1.5rem", sm: "1.75rem" },
                                             letterSpacing: "-0.02em",
-                                            mb: 1,
+                                            mb: { xs: 0.5, sm: 1 },
                                             color: "text.primary",
                                           }}
                                         >
@@ -3893,7 +3902,7 @@ function ReportingDashboard({
                                         </Typography>
                                         <Box
                                           sx={{
-                                            minHeight: "24px",
+                                            minHeight: { xs: "20px", sm: "24px" },
                                             display: "flex",
                                             alignItems: "center",
                                           }}
@@ -3912,14 +3921,14 @@ function ReportingDashboard({
                                               >
                                                 <TrendingUpIcon
                                                   sx={{
-                                                    fontSize: 14,
+                                                    fontSize: { xs: 12, sm: 14 },
                                                     color: "#34A853",
                                                   }}
                                                 />
                                                 <Typography
                                                   variant="body2"
                                                   sx={{
-                                                    fontSize: "0.875rem",
+                                                    fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                                     fontWeight: 600,
                                                     color: "#34A853",
                                                   }}
@@ -3928,7 +3937,7 @@ function ReportingDashboard({
                                                     dashboardData.kpis
                                                       .engaged_sessions.change
                                                   ).toFixed(1)}
-                                                  %
+                                                  % vs prev.
                                                 </Typography>
                                               </Box>
                                             )}
@@ -3942,7 +3951,7 @@ function ReportingDashboard({
                             {/* Bounce Rate */}
                             {dashboardData?.kpis?.bounce_rate &&
                               shouldShowKPI("bounce_rate") && (
-                                <Grid item xs={12} sm={6} md={3}>
+                                <Grid item xs={6} sm={6} md={3}>
                                   <motion.div
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
@@ -3961,18 +3970,18 @@ function ReportingDashboard({
                                         },
                                       }}
                                     >
-                                      <CardContent sx={{ p: 2.5 }}>
+                                      <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
                                         <Box
                                           display="flex"
                                           alignItems="center"
                                           justifyContent="space-between"
-                                          mb={1.5}
+                                          mb={{ xs: 1, sm: 1.5 }}
                                         >
                                           <Typography
                                             variant="body2"
                                             color="text.secondary"
                                             sx={{
-                                              fontSize: "0.875rem",
+                                              fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                               fontWeight: 500,
                                             }}
                                           >
@@ -3994,9 +4003,9 @@ function ReportingDashboard({
                                           variant="h4"
                                           fontWeight={700}
                                           sx={{
-                                            fontSize: "1.75rem",
+                                            fontSize: { xs: "1.5rem", sm: "1.75rem" },
                                             letterSpacing: "-0.02em",
-                                            mb: 1,
+                                            mb: { xs: 0.5, sm: 1 },
                                             color: "text.primary",
                                           }}
                                         >
@@ -4014,7 +4023,7 @@ function ReportingDashboard({
                                         </Typography>
                                         <Box
                                           sx={{
-                                            minHeight: "24px",
+                                            minHeight: { xs: "20px", sm: "24px" },
                                             display: "flex",
                                             alignItems: "center",
                                           }}
@@ -4033,14 +4042,14 @@ function ReportingDashboard({
                                               >
                                                 <TrendingDownIcon
                                                   sx={{
-                                                    fontSize: 14,
+                                                    fontSize: { xs: 12, sm: 14 },
                                                     color: "#34A853",
                                                   }}
                                                 />
                                                 <Typography
                                                   variant="body2"
                                                   sx={{
-                                                    fontSize: "0.875rem",
+                                                    fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                                     fontWeight: 600,
                                                     color: "#34A853",
                                                   }}
@@ -4049,7 +4058,7 @@ function ReportingDashboard({
                                                     dashboardData.kpis
                                                       .bounce_rate.change
                                                   ).toFixed(1)}
-                                                  %
+                                                  % vs prev.
                                                 </Typography>
                                               </Box>
                                             )}
@@ -4063,7 +4072,7 @@ function ReportingDashboard({
                             {/* Avg Session Duration */}
                             {dashboardData?.kpis?.avg_session_duration &&
                               shouldShowKPI("avg_session_duration") && (
-                                <Grid item xs={12} sm={6} md={3}>
+                                <Grid item xs={6} sm={6} md={3}>
                                   <motion.div
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
@@ -4082,19 +4091,18 @@ function ReportingDashboard({
                                         },
                                       }}
                                     >
-                                      {" "}
-                                      <CardContent sx={{ p: 2.5 }}>
+                                      <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
                                         <Box
                                           display="flex"
                                           alignItems="center"
                                           justifyContent="space-between"
-                                          mb={1.5}
+                                          mb={{ xs: 1, sm: 1.5 }}
                                         >
                                           <Typography
                                             variant="body2"
                                             color="text.secondary"
                                             sx={{
-                                              fontSize: "0.875rem",
+                                              fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                               fontWeight: 500,
                                             }}
                                           >
@@ -4116,9 +4124,9 @@ function ReportingDashboard({
                                           variant="h4"
                                           fontWeight={700}
                                           sx={{
-                                            fontSize: "1.75rem",
+                                            fontSize: { xs: "1.5rem", sm: "1.75rem" },
                                             letterSpacing: "-0.02em",
-                                            mb: 1,
+                                            mb: { xs: 0.5, sm: 1 },
                                             color: "text.primary",
                                           }}
                                         >
@@ -4151,7 +4159,7 @@ function ReportingDashboard({
                                         </Typography>
                                         <Box
                                           sx={{
-                                            minHeight: "24px",
+                                            minHeight: { xs: "20px", sm: "24px" },
                                             display: "flex",
                                             alignItems: "center",
                                           }}
@@ -4173,14 +4181,14 @@ function ReportingDashboard({
                                           >
                                             <TrendingUpIcon
                                               sx={{
-                                                fontSize: 14,
+                                                fontSize: { xs: 12, sm: 14 },
                                                 color: "#34A853",
                                               }}
                                             />
                                             <Typography
                                               variant="body2"
                                               sx={{
-                                                fontSize: "0.875rem",
+                                                fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                                 fontWeight: 600,
                                                 color: "#34A853",
                                               }}
@@ -4190,7 +4198,7 @@ function ReportingDashboard({
                                                         .avg_session_duration
                                                   .change
                                               ).toFixed(1)}
-                                              %
+                                              % vs prev.
                                             </Typography>
                                           </Box>
                                         )}
@@ -4204,7 +4212,7 @@ function ReportingDashboard({
                             {/* Engagement Rate */}
                             {dashboardData?.kpis?.ga4_engagement_rate &&
                               shouldShowKPI("ga4_engagement_rate") && (
-                                <Grid item xs={12} sm={6} md={3}>
+                                <Grid item xs={6} sm={6} md={3}>
                                   <motion.div
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
@@ -4223,18 +4231,18 @@ function ReportingDashboard({
                                         },
                                       }}
                                     >
-                                      <CardContent sx={{ p: 2.5 }}>
+                                      <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
                                         <Box
                                           display="flex"
                                           alignItems="center"
                                           justifyContent="space-between"
-                                          mb={1.5}
+                                          mb={{ xs: 1, sm: 1.5 }}
                                         >
                                           <Typography
                                             variant="body2"
                                             color="text.secondary"
                                             sx={{
-                                              fontSize: "0.875rem",
+                                              fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                               fontWeight: 500,
                                             }}
                                           >
@@ -4256,9 +4264,9 @@ function ReportingDashboard({
                                           variant="h4"
                                           fontWeight={700}
                                           sx={{
-                                            fontSize: "1.75rem",
+                                            fontSize: { xs: "1.5rem", sm: "1.75rem" },
                                             letterSpacing: "-0.02em",
-                                            mb: 1,
+                                            mb: { xs: 0.5, sm: 1 },
                                             color: "text.primary",
                                           }}
                                         >
@@ -4279,7 +4287,7 @@ function ReportingDashboard({
                                         </Typography>
                                         <Box
                                           sx={{
-                                            minHeight: "24px",
+                                            minHeight: { xs: "20px", sm: "24px" },
                                             display: "flex",
                                             alignItems: "center",
                                           }}
@@ -4301,14 +4309,14 @@ function ReportingDashboard({
                                                 >
                                                   <TrendingUpIcon
                                                     sx={{
-                                                      fontSize: 14,
+                                                      fontSize: { xs: 12, sm: 14 },
                                                       color: "#34A853",
                                                     }}
                                                   />
                                                   <Typography
                                                     variant="body2"
                                                     sx={{
-                                                      fontSize: "0.875rem",
+                                                      fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                                       fontWeight: 600,
                                                       color: "#34A853",
                                                     }}
@@ -4318,7 +4326,7 @@ function ReportingDashboard({
                                                         .ga4_engagement_rate
                                                   .change
                                               ).toFixed(1)}
-                                              %
+                                              % vs prev.
                                             </Typography>
                                           </Box>
                                         )}
@@ -4332,7 +4340,7 @@ function ReportingDashboard({
                         {/* Conversions */}
                         {dashboardData?.kpis?.conversions &&
                           shouldShowKPI("conversions") && (
-                          <Grid item xs={12} sm={6} md={3}>
+                          <Grid item xs={6} sm={6} md={3}>
                             <motion.div
                               initial={{ opacity: 0, y: 20 }}
                               animate={{ opacity: 1, y: 0 }}
@@ -4351,18 +4359,18 @@ function ReportingDashboard({
                                   },
                                 }}
                               >
-                                <CardContent sx={{ p: 2.5 }}>
+                                <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
                                   <Box
                                     display="flex"
                                     alignItems="center"
                                     justifyContent="space-between"
-                                    mb={1.5}
+                                    mb={{ xs: 1, sm: 1.5 }}
                                   >
                                     <Typography
                                       variant="body2"
                                       color="text.secondary"
                                       sx={{
-                                        fontSize: "0.875rem",
+                                        fontSize: { xs: "0.75rem", sm: "0.875rem" },
                                         fontWeight: 500,
                                       }}
                                     >
@@ -4384,9 +4392,9 @@ function ReportingDashboard({
                                     variant="h4"
                                     fontWeight={700}
                                     sx={{
-                                      fontSize: "1.75rem",
+                                      fontSize: { xs: "1.5rem", sm: "1.75rem" },
                                       letterSpacing: "-0.02em",
-                                      mb: 1,
+                                      mb: { xs: 0.5, sm: 1 },
                                       color: "text.primary",
                                     }}
                                   >
@@ -4740,19 +4748,6 @@ function ReportingDashboard({
                                     }}
                                   >
                                     {(() => {
-                                      const duration =
-                                        dashboardData.chart_data
-                                          .ga4_traffic_overview
-                                          .averageSessionDuration || 0;
-                                          const minutes = Math.floor(
-                                            duration / 60
-                                          );
-                                          const seconds = Math.floor(
-                                            duration % 60
-                                          );
-                                      return `${minutes}:${seconds
-                                        .toString()
-                                        .padStart(2, "0")}`;
                                     })()}
                                   </Typography>
                                   <Box
@@ -4929,7 +4924,7 @@ function ReportingDashboard({
                       {dashboardData.chart_data?.ga4_daily_comparison?.length >
                         0 &&
                     isChartVisible("ga4_daily_comparison") && (
-                      <Box sx={{ mt: 4 }}>
+                      <Box sx={{ mt: 4, mb: 4 }}>
                         <Grid container spacing={3}>
                           {/* Active Users Chart - Full Width (Primary Chart) */}
                           <Grid item xs={12}>
@@ -5156,13 +5151,14 @@ function ReportingDashboard({
                   {dashboardData.chart_data?.top_pages &&
                     dashboardData.chart_data.top_pages.length > 0 &&
                     isChartVisible("ga4_top_pages") && (
-                      <ChartCard
-                        title="Top Performing Pages"
-                        badge="Analytics"
-                        badgeColor={CHART_COLORS.ga4.primary}
-                        height={500}
-                        animationDelay={0.9}
-                      >
+                      <Box sx={{ mb: 4 }}>
+                        <ChartCard
+                          title="Top Performing Pages"
+                          badge="Analytics"
+                          badgeColor={CHART_COLORS.ga4.primary}
+                          height={500}
+                          animationDelay={0.9}
+                        >
                         <BarChartEnhanced
                               data={dashboardData.chart_data.top_pages.slice(
                                 0,
@@ -5190,13 +5186,14 @@ function ReportingDashboard({
                           height={400}
                         />
                       </ChartCard>
+                      </Box>
                     )}
 
                   {/* Sessions by Channel - Donut Chart & Bar Chart */}
                   {dashboardData.chart_data?.traffic_sources &&
                     dashboardData.chart_data.traffic_sources.length > 0 &&
                     isChartVisible("ga4_traffic_sources") && (
-                      <Grid container spacing={3} sx={{ mb: 3 }}>
+                      <Grid container spacing={3} sx={{ mb: 4 }}>
                         {/* Donut Chart */}
                         <Grid item xs={12} md={6}>
                           <motion.div
@@ -7224,10 +7221,10 @@ function ReportingDashboard({
                         isPublic ? "Organic Visibility" : "Agency Analytics"
                   }
                   description="Keyword Ranking Trends, Growth & Position Insights"
+                  descriptionSx={{ mb: { xs: 3, sm: 4 } }}
                 >
                   <Box
                     sx={{
-                      mt: -3,
                       display: "flex",
                       flexDirection: "column",
                       gap: 3,
