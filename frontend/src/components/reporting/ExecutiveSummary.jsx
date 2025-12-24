@@ -1,21 +1,30 @@
-import React from 'react'
+import React, { useState } from 'react'
 import {
   Box,
   Typography,
   Paper,
-  Divider,
-  List,
-  ListItem,
-  ListItemText,
   Chip,
   useTheme,
-  alpha
+  alpha,
+  IconButton,
+  Grid,
+  Card,
+  CardContent,
+  useMediaQuery
 } from '@mui/material'
 import {
   CheckCircle as CheckCircleIcon,
   Warning as WarningIcon,
-  Error as ErrorIcon
+  Error as ErrorIcon,
+  ChevronLeft as ChevronLeftIcon,
+  ChevronRight as ChevronRightIcon,
+  CalendarToday as CalendarTodayIcon,
+  AccessTime as AccessTimeIcon,
+  TrendingUp as TrendingUpIcon,
+  People as PeopleIcon,
+  Analytics as AnalyticsIcon
 } from '@mui/icons-material'
+import { motion, AnimatePresence } from 'framer-motion'
 
 const DisclaimerSection = ({ theme }) => {
   return (
@@ -48,11 +57,15 @@ const DisclaimerSection = ({ theme }) => {
   );
 };
 
-export default function ExecutiveSummary({ summary, theme }) {
+export default function ExecutiveSummary({ summary, theme, dashboardData }) {
+  const [highlightIndex, setHighlightIndex] = useState(0)
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
+  const isTablet = useMediaQuery(theme.breakpoints.down('md'))
+
   if (!summary) {
     return (
       <Box sx={{ p: 3, textAlign: 'center' }}>
-        <Typography variant="body1" color="text.secondary">
+        <Typography variant="body1" color="text.secondary"> 
           No executive summary available.
         </Typography>
       </Box>
@@ -76,30 +89,178 @@ export default function ExecutiveSummary({ summary, theme }) {
     StatusIcon = ErrorIcon
   }
 
+  // Build highlights carousel items
+  const highlights = []
+  
+  if (summary.executive_summary) {
+    highlights.push({
+      type: 'executive_summary',
+      title: 'Executive Summary',
+      content: summary.executive_summary,
+      tag: 'analytics',
+      tagColor: '#ff6b6b',
+      requiresAttention: summary.executive_summary.toLowerCase().includes('drop') || 
+                        summary.executive_summary.toLowerCase().includes('decline') ||
+                        summary.executive_summary.toLowerCase().includes('decrease')
+    })
+  }
+
+  if (summary.what_worked && summary.what_worked.length > 0) {
+    highlights.push({
+      type: 'what_worked',
+      title: 'What Worked',
+      content: summary.what_worked,
+      tag: 'success',
+      tagColor: '#10b981'
+    })
+  }
+
+  if (summary.what_to_watch && summary.what_to_watch.length > 0) {
+    highlights.push({
+      type: 'what_to_watch',
+      title: 'What to Watch',
+      content: summary.what_to_watch,
+      tag: 'warning',
+      tagColor: '#f59e0b'
+    })
+  }
+
+  if (summary.focus_next_30_days && summary.focus_next_30_days.length > 0) {
+    highlights.push({
+      type: 'focus',
+      title: 'Focus for Next 30 Days',
+      content: summary.focus_next_30_days,
+      tag: 'focus',
+      tagColor: '#3b82f6'
+    })
+  }
+
+  const handleNextHighlight = () => {
+    setHighlightIndex((prev) => (prev + 1) % highlights.length)
+  }
+
+  const handlePrevHighlight = () => {
+    setHighlightIndex((prev) => (prev - 1 + highlights.length) % highlights.length)
+  }
+
+  const currentHighlight = highlights[highlightIndex]
+
+  // Extract key metrics for "At a Glance" section
+  const getKeyMetrics = () => {
+    const metrics = []
+    
+    // Try to extract metrics from dashboardData if available
+    if (dashboardData?.kpis) {
+      if (dashboardData.kpis.avg_session_duration) {
+        const duration = dashboardData.kpis.avg_session_duration.value
+        const minutes = Math.floor(duration / 60)
+        const seconds = Math.floor(duration % 60)
+        metrics.push({
+          label: 'Session Duration',
+          value: `${minutes}m ${seconds}s`,
+          icon: AccessTimeIcon
+        })
+      }
+      
+      if (dashboardData.kpis.sessions || dashboardData.kpis.users) {
+        const value = dashboardData.kpis.sessions?.value || dashboardData.kpis.users?.value || 0
+        const formatted = value >= 1000 ? `${(value / 1000).toFixed(1)}k` : value.toString()
+        metrics.push({
+          label: 'Traffic',
+          value: formatted,
+          icon: TrendingUpIcon
+        })
+      }
+      
+      if (dashboardData.kpis.bounce_rate) {
+        metrics.push({
+          label: 'Bounce Rate',
+          value: `${dashboardData.kpis.bounce_rate.value?.toFixed(1) || 0}%`,
+          icon: AnalyticsIcon
+        })
+      }
+      
+      if (dashboardData.kpis.conversions) {
+        metrics.push({
+          label: 'Conversions',
+          value: dashboardData.kpis.conversions.value?.toLocaleString() || '0',
+          icon: CheckCircleIcon
+        })
+      }
+    }
+    
+    // Fallback to default metrics if no data available
+    if (metrics.length === 0) {
+      metrics.push(
+        { label: 'Session Duration', value: '2m', icon: AccessTimeIcon },
+        { label: 'Traffic', value: '1.2k', icon: TrendingUpIcon },
+        { label: 'Users', value: '850', icon: PeopleIcon },
+        { label: 'Engagement', value: '68%', icon: AnalyticsIcon }
+      )
+    }
+    
+    return metrics.slice(0, 4) // Limit to 4 metrics
+  }
+
+  const keyMetrics = getKeyMetrics()
+
   return (
-    <Box sx={{ maxWidth: '900px', mx: 'auto', p: 3 }}>
-      {/* Header Section */}
+    <Box sx={{ 
+      width: '100%',
+      maxWidth: '1200px',
+      mx: 'auto',
+      px: { xs: 2, sm: 3, md: 4 },
+      py: { xs: 2, sm: 3 }
+    }}>
+      {/* Program Details Section - Light Blue Card */}
       <Paper
         elevation={0}
         sx={{
-          p: 3,
-          mb: 3,
-          bgcolor: alpha(theme.palette.primary.main, 0.05),
-          border: `1px solid ${theme.palette.divider}`,
-          borderRadius: 2
+          p: { xs: 2, sm: 3 },
+          mb: { xs: 3, sm: 4 },
+          bgcolor: alpha(theme.palette.primary.main, 0.08),
+          border: 'none',
+          borderRadius: 3,
+          background: `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.1)} 0%, ${alpha(theme.palette.primary.main, 0.05)} 100%)`
         }}
       >
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-          <Box>
-            <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2 }}>
+          <Box sx={{ flex: 1 }}>
+            <Typography 
+              variant="h4" 
+              component="h1" 
+              sx={{ 
+                fontWeight: 700,
+                fontSize: { xs: '1.75rem', sm: '2rem', md: '2.25rem' },
+                mb: 0.5,
+                color: 'text.primary'
+              }}
+            >
               {header.client_name || 'Client'}
             </Typography>
-            <Typography variant="h6" color="text.secondary" gutterBottom>
+            <Typography 
+              variant="h6" 
+              sx={{ 
+                color: theme.palette.primary.main,
+                fontWeight: 500,
+                fontSize: { xs: '0.875rem', sm: '1rem' },
+                mb: 1
+              }}
+            >
               {header.program_name || 'Digital Marketing Program'}
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              Reporting Period: {header.reporting_period || 'N/A'}
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <CalendarTodayIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+              <Typography 
+                variant="body2" 
+                sx={{ 
+                  color: 'text.secondary',
+                  fontSize: { xs: '0.75rem', sm: '0.875rem' }
+                }}
+              >
+                Reporting Period: {header.reporting_period || 'N/A'}
+              </Typography>
+            </Box>
           </Box>
           {overallStatus && statusColor !== 'warning' && statusColor !== 'error' && (
             <Chip
@@ -112,198 +273,310 @@ export default function ExecutiveSummary({ summary, theme }) {
         </Box>
       </Paper>
 
-      {/* Executive Summary */}
-      {summary.executive_summary && (
-        <Paper
-          elevation={0}
-          sx={{
-            p: 3,
-            mb: 3,
-            bgcolor: 'background.paper',
-            border: `1px solid ${theme.palette.divider}`,
-            borderRadius: 2
-          }}
-        >
-          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
-            Executive Summary
-          </Typography>
-          <Typography variant="body1" sx={{ lineHeight: 1.8, whiteSpace: 'pre-line' }}>
-            {summary.executive_summary}
-          </Typography>
-        </Paper>
-      )}
+      {/* Highlights Section with Carousel */}
+      {highlights.length > 0 && (
+        <Box sx={{ mb: { xs: 4, sm: 5 } }}>
+          <Box sx={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'space-between',
+            mb: 2
+          }}>
+            <Typography 
+              variant="h5" 
+              sx={{ 
+                fontWeight: 700,
+                fontSize: { xs: '1.25rem', sm: '1.5rem' },
+                color: 'text.primary'
+              }}
+            >
+              Highlights
+            </Typography>
+            {highlights.length > 1 && (
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                <IconButton
+                  onClick={handlePrevHighlight}
+                  disabled={highlights.length <= 1}
+                  sx={{
+                    color: 'text.secondary',
+                    '&:hover': { color: 'primary.main', bgcolor: alpha(theme.palette.primary.main, 0.08) },
+                    '&.Mui-disabled': { opacity: 0.3 }
+                  }}
+                  size="small"
+                >
+                  <ChevronLeftIcon />
+                </IconButton>
+                <IconButton
+                  onClick={handleNextHighlight}
+                  disabled={highlights.length <= 1}
+                  sx={{
+                    color: 'text.secondary',
+                    '&:hover': { color: 'primary.main', bgcolor: alpha(theme.palette.primary.main, 0.08) },
+                    '&.Mui-disabled': { opacity: 0.3 }
+                  }}
+                  size="small"
+                >
+                  <ChevronRightIcon />
+                </IconButton>
+              </Box>
+            )}
+          </Box>
 
-      {/* What Worked */}
-      {summary.what_worked && summary.what_worked.length > 0 && (
-        <Paper
-          elevation={0}
-          sx={{
-            p: 3,
-            mb: 3,
-            bgcolor: 'background.paper',
-            border: `1px solid ${theme.palette.divider}`,
-            borderRadius: 2
-          }}
-        >
-          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
-            What Worked This Month
-          </Typography>
-          <List dense>
-            {summary.what_worked.map((item, index) => (
-              <ListItem key={index} sx={{ pl: 0, py: 0.5 }}>
-                <ListItemText
-                  primary={
-                    <Typography variant="body1" sx={{ lineHeight: 1.7 }}>
-                      {item}
-                    </Typography>
-                  }
+          <Box sx={{ position: 'relative', overflow: 'hidden' }}>
+            <AnimatePresence mode="wait">
+              {currentHighlight && (
+                <motion.div
+                  key={highlightIndex}
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <Paper
+                    elevation={0}
+                    sx={{
+                      p: { xs: 2.5, sm: 3, md: 4 },
+                      bgcolor: 'background.paper',
+                      border: `1px solid ${theme.palette.divider}`,
+                      borderRadius: 3,
+                      minHeight: { xs: '200px', sm: '250px' }
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2, flexWrap: 'wrap' }}>
+                      <Chip
+                        label={currentHighlight.tag}
+                        size="small"
+                        sx={{
+                          bgcolor: alpha(currentHighlight.tagColor, 0.1),
+                          color: currentHighlight.tagColor,
+                          fontWeight: 600,
+                          fontSize: '0.75rem',
+                          height: 24
+                        }}
+                      />
+                      <Typography 
+                        variant="h6" 
+                        sx={{ 
+                          fontWeight: 700,
+                          fontSize: { xs: '1rem', sm: '1.125rem' },
+                          color: 'text.primary'
+                        }}
+                      >
+                        {currentHighlight.title}
+                      </Typography>
+                    </Box>
+                    
+                    {Array.isArray(currentHighlight.content) ? (
+                      <Box component="ul" sx={{ m: 0, pl: 2.5, listStyle: 'none' }}>
+                        {currentHighlight.content.map((item, idx) => (
+                          <Box
+                            key={idx}
+                            component="li"
+                            sx={{
+                              position: 'relative',
+                              pl: 2,
+                              mb: 1.5,
+                              '&:before': {
+                                content: '"•"',
+                                position: 'absolute',
+                                left: 0,
+                                color: theme.palette.primary.main,
+                                fontWeight: 'bold'
+                              }
+                            }}
+                          >
+                            <Typography 
+                              variant="body1" 
+                              sx={{ 
+                                lineHeight: 1.7,
+                                fontSize: { xs: '0.875rem', sm: '1rem' },
+                                color: 'text.primary'
+                              }}
+                            >
+                              {item}
+                            </Typography>
+                          </Box>
+                        ))}
+                      </Box>
+                    ) : (
+                      <Typography 
+                        variant="body1" 
+                        sx={{ 
+                          lineHeight: 1.8,
+                          fontSize: { xs: '0.875rem', sm: '1rem' },
+                          color: 'text.primary',
+                          whiteSpace: 'pre-line'
+                        }}
+                      >
+                        {currentHighlight.content}
+                      </Typography>
+                    )}
+
+                    {currentHighlight.requiresAttention && (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2, pt: 2, borderTop: `1px solid ${theme.palette.divider}` }}>
+                        <Box
+                          sx={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: '50%',
+                            bgcolor: theme.palette.warning.main
+                          }}
+                        />
+                        <Typography 
+                          variant="body2" 
+                          sx={{ 
+                            color: theme.palette.warning.main,
+                            fontWeight: 600,
+                            fontSize: '0.875rem'
+                          }}
+                        >
+                          Requires Attention
+                        </Typography>
+                      </Box>
+                    )}
+                  </Paper>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </Box>
+
+          {/* Carousel Indicators */}
+          {highlights.length > 1 && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1, mt: 2 }}>
+              {highlights.map((_, index) => (
+                <Box
+                  key={index}
+                  onClick={() => setHighlightIndex(index)}
+                  sx={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    bgcolor: index === highlightIndex 
+                      ? theme.palette.primary.main 
+                      : alpha(theme.palette.primary.main, 0.3),
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                    '&:hover': {
+                      bgcolor: index === highlightIndex 
+                        ? theme.palette.primary.dark 
+                        : alpha(theme.palette.primary.main, 0.5)
+                    }
+                  }}
                 />
-              </ListItem>
-            ))}
-          </List>
-        </Paper>
+              ))}
+            </Box>
+          )}
+        </Box>
       )}
 
-      {/* What to Watch */}
-      {summary.what_to_watch && summary.what_to_watch.length > 0 && (
-        <Paper
-          elevation={0}
-          sx={{
-            p: 3,
+      {/* At a Glance Section */}
+      {/* <Box sx={{ mb: { xs: 4, sm: 5 } }}>
+        <Typography 
+          variant="h5" 
+          sx={{ 
+            fontWeight: 700,
+            fontSize: { xs: '1.25rem', sm: '1.5rem' },
             mb: 3,
-            bgcolor: alpha(theme.palette.warning.main, 0.05),
-            border: `1px solid ${theme.palette.divider}`,
-            borderRadius: 2
+            color: 'text.primary'
           }}
         >
-          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
-            What to Watch
-          </Typography>
-          <List dense>
-            {summary.what_to_watch.map((item, index) => (
-              <ListItem key={index} sx={{ pl: 0, py: 0.5 }}>
-                <ListItemText
-                  primary={
-                    <Typography variant="body1" sx={{ lineHeight: 1.7 }}>
-                      {item}
-                    </Typography>
-                  }
-                />
-              </ListItem>
-            ))}
-          </List>
-        </Paper>
-      )}
+          At a Glance
+        </Typography>
+        
+        <Grid container spacing={2}>
+          {keyMetrics.map((metric, index) => {
+            const IconComponent = metric.icon
+            return (
+              <Grid item xs={6} sm={4} md={3} key={index}>
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, delay: index * 0.1 }}
+                >
+                  <Card
+                    elevation={0}
+                    sx={{
+                      bgcolor: 'background.paper',
+                      border: `1px solid ${theme.palette.divider}`,
+                      borderRadius: 2,
+                      height: '100%',
+                      transition: 'all 0.2s ease',
+                      '&:hover': {
+                        boxShadow: `0 4px 12px ${alpha(theme.palette.primary.main, 0.15)}`,
+                        transform: 'translateY(-2px)'
+                      }
+                    }}
+                  >
+                    <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
+                      <Typography 
+                        variant="body2" 
+                        sx={{ 
+                          color: 'text.secondary',
+                          fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                          mb: 1,
+                          fontWeight: 500
+                        }}
+                      >
+                        {metric.label}
+                      </Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <IconComponent 
+                          sx={{ 
+                            fontSize: { xs: 20, sm: 24 },
+                            color: theme.palette.primary.main,
+                            opacity: 0.7
+                          }} 
+                        />
+                        <Typography 
+                          variant="h4" 
+                          sx={{ 
+                            fontWeight: 700,
+                            fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2rem' },
+                            color: 'text.primary'
+                          }}
+                        >
+                          {metric.value}
+                        </Typography>
+                      </Box>
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              </Grid>
+            )
+          })}
+        </Grid>
+      </Box> */}
 
-      {/* AI Visibility Snapshot */}
-      {summary.ai_visibility_snapshot && summary.ai_visibility_snapshot.length > 0 && (
-        <Paper
-          elevation={0}
-          sx={{
-            p: 3,
-            mb: 3,
-            bgcolor: 'background.paper',
-            border: `1px solid ${theme.palette.divider}`,
-            borderRadius: 2
-          }}
-        >
-          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
-            AI Visibility Snapshot
-          </Typography>
-          <List dense>
-            {summary.ai_visibility_snapshot.map((item, index) => (
-              <ListItem key={index} sx={{ pl: 0, py: 0.5 }}>
-                <ListItemText
-                  primary={
-                    <Typography variant="body1" sx={{ lineHeight: 1.7 }}>
-                      {item}
-                    </Typography>
-                  }
-                />
-              </ListItem>
-            ))}
-          </List>
-        </Paper>
-      )}
-
-      {/* Content & Authority Snapshot */}
-      {summary.content_authority_snapshot && summary.content_authority_snapshot.length > 0 && (
-        <Paper
-          elevation={0}
-          sx={{
-            p: 3,
-            mb: 3,
-            bgcolor: 'background.paper',
-            border: `1px solid ${theme.palette.divider}`,
-            borderRadius: 2
-          }}
-        >
-          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
-            Content & Authority Snapshot
-          </Typography>
-          <List dense>
-            {summary.content_authority_snapshot.map((item, index) => (
-              <ListItem key={index} sx={{ pl: 0, py: 0.5 }}>
-                <ListItemText
-                  primary={
-                    <Typography variant="body1" sx={{ lineHeight: 1.7 }}>
-                      {item}
-                    </Typography>
-                  }
-                />
-              </ListItem>
-            ))}
-          </List>
-        </Paper>
-      )}
-
-      {/* Focus for the Next 30 Days */}
-      {summary.focus_next_30_days && summary.focus_next_30_days.length > 0 && (
-        <Paper
-          elevation={0}
-          sx={{
-            p: 3,
-            mb: 3,
-            bgcolor: alpha(theme.palette.primary.main, 0.05),
-            border: `1px solid ${theme.palette.divider}`,
-            borderRadius: 2
-          }}
-        >
-          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
-            Focus for the Next 30 Days
-          </Typography>
-          <List dense>
-            {summary.focus_next_30_days.map((item, index) => (
-              <ListItem key={index} sx={{ pl: 0, py: 0.5 }}>
-                <ListItemText
-                  primary={
-                    <Typography variant="body1" sx={{ lineHeight: 1.7 }}>
-                      {item}
-                    </Typography>
-                  }
-                />
-              </ListItem>
-            ))}
-          </List>
-        </Paper>
-      )}
-
-      {/* Client Action Needed */}
+      {/* Additional Sections - Collapsible on Mobile */}
       {summary.client_action_needed && (
         <Paper
           elevation={0}
           sx={{
-            p: 3,
+            p: { xs: 2.5, sm: 3 },
             mb: 3,
             bgcolor: alpha(theme.palette.info.main, 0.05),
             border: `1px solid ${theme.palette.divider}`,
-            borderRadius: 2
+            borderRadius: 3
           }}
         >
-          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
+          <Typography 
+            variant="h6" 
+            sx={{ 
+              fontWeight: 700,
+              mb: 2,
+              fontSize: { xs: '1rem', sm: '1.125rem' }
+            }}
+          >
             Client Action Needed
           </Typography>
-          <Typography variant="body1" sx={{ lineHeight: 1.8, whiteSpace: 'pre-line' }}>
+          <Typography 
+            variant="body1" 
+            sx={{ 
+              lineHeight: 1.8,
+              fontSize: { xs: '0.875rem', sm: '1rem' },
+              whiteSpace: 'pre-line'
+            }}
+          >
             {summary.client_action_needed}
           </Typography>
         </Paper>

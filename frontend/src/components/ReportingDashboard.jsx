@@ -3397,7 +3397,7 @@ function ReportingDashboard({
           {isPublic && activeTab === 0 && (
             <Box sx={{ px: 3 }}>
               {executiveSummary ? (
-                <ExecutiveSummary summary={executiveSummary} theme={theme} />
+                <ExecutiveSummary summary={executiveSummary} theme={theme} dashboardData={dashboardData} />
               ) : (
                 <Alert severity="info" sx={{ borderRadius: 2 }}>
                   <Typography variant="h6" gutterBottom>
@@ -8516,6 +8516,7 @@ function ReportingDashboard({
                 <ExecutiveSummary
                   summary={overviewData.executive_summary}
                   theme={theme}
+                  dashboardData={dashboardData}
                 />
               ) : overviewData.overview ? (
               <Paper
