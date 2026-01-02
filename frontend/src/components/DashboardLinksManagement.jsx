@@ -47,6 +47,7 @@ import {
 } from '@mui/icons-material';
 import { clientAPI } from '../services/api';
 import { debugLog, debugError } from '../utils/debug';
+import { getLocationsByIPs } from '../services/geolocation';
 
 function DashboardLinksManagement() {
   const theme = useTheme();
@@ -86,6 +87,8 @@ function DashboardLinksManagement() {
   const [trackingLink, setTrackingLink] = useState(null);
   const [trackingMetrics, setTrackingMetrics] = useState(null);
   const [loadingMetrics, setLoadingMetrics] = useState(false);
+  const [ipLocations, setIpLocations] = useState(new Map()); // Map of IP -> location data
+  const [loadingLocations, setLoadingLocations] = useState(false);
 
   // Load all clients and their dashboard links
   useEffect(() => {
@@ -205,7 +208,6 @@ function DashboardLinksManagement() {
       setError('Failed to copy URL');
     });
   };
-
   const handleClearFilters = () => {
     setSelectedClient(null);
     setDateCreatedFrom('');
@@ -343,11 +345,38 @@ function DashboardLinksManagement() {
     setTrackingDialogOpen(true);
     setLoadingMetrics(true);
     setTrackingMetrics(null);
+    setIpLocations(new Map());
+    setLoadingLocations(false);
     
     try {
       const metrics = await clientAPI.getDashboardLinkMetrics(link.client_id, link.id);
       setTrackingMetrics(metrics);
       debugLog("Tracking metrics loaded:", metrics);
+      
+      // Fetch location data for all unique IPs in recent opens
+      if (metrics.recent_opens && metrics.recent_opens.length > 0) {
+        setLoadingLocations(true);
+        try {
+          // Extract unique IP addresses
+          const uniqueIPs = [...new Set(
+            metrics.recent_opens
+              .map(open => open.ip_address)
+              .filter(ip => ip && ip !== 'N/A')
+          )];
+          
+          if (uniqueIPs.length > 0) {
+            debugLog(`Fetching location data for ${uniqueIPs.length} unique IPs`);
+            const locations = await getLocationsByIPs(uniqueIPs);
+            setIpLocations(locations);
+            debugLog("Location data loaded:", locations);
+          }
+        } catch (err) {
+          debugError("Error loading location data:", err);
+          // Don't show error to user - location is optional
+        } finally {
+          setLoadingLocations(false);
+        }
+      }
     } catch (err) {
       debugError("Error loading tracking metrics:", err);
       setError(err.response?.data?.detail || err.message || "Failed to load tracking metrics");
@@ -884,56 +913,116 @@ function DashboardLinksManagement() {
                       <TableHead>
                         <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.04) }}>
                           <TableCell sx={{ fontWeight: 700 }}>Opened At</TableCell>
-                          <TableCell sx={{ fontWeight: 700 }}>IP Address</TableCell>
+                          {/* <TableCell sx={{ fontWeight: 700 }}>IP Address</TableCell> */}
+                          <TableCell sx={{ fontWeight: 700 }}>Location</TableCell>
                           <TableCell sx={{ fontWeight: 700 }}>User Agent</TableCell>
                           <TableCell sx={{ fontWeight: 700 }}>Referer</TableCell>
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        {trackingMetrics.recent_opens.map((open, index) => (
-                          <TableRow key={index} hover>
-                            <TableCell>
-                              <Typography variant="body2">
-                                {formatDateTime(open.opened_at)}
-                              </Typography>
-                            </TableCell>
-                            <TableCell>
-                              <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                                {open.ip_address || 'N/A'}
-                              </Typography>
-                            </TableCell>
-                            <TableCell>
-                              <Tooltip title={open.user_agent || 'N/A'}>
-                                <Typography
-                                  variant="body2"
-                                  sx={{
-                                    maxWidth: 200,
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                  }}
-                                >
-                                  {open.user_agent || 'N/A'}
+                        {trackingMetrics.recent_opens.map((open, index) => {
+                          const location = open.ip_address ? ipLocations.get(open.ip_address) : null;
+                          const isLoadingLocation = loadingLocations && !location && open.ip_address;
+                          
+                          return (
+                            <TableRow key={index} hover>
+                              <TableCell>
+                                <Typography variant="body2">
+                                  {formatDateTime(open.opened_at)}
                                 </Typography>
-                              </Tooltip>
-                            </TableCell>
-                            <TableCell>
-                              <Tooltip title={open.referer || 'N/A'}>
-                                <Typography
-                                  variant="body2"
-                                  sx={{
-                                    maxWidth: 200,
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                  }}
-                                >
-                                  {open.referer || 'N/A'}
+                              </TableCell>
+                              {/* <TableCell>
+                                <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                                  {open.ip_address || 'N/A'}
                                 </Typography>
-                              </Tooltip>
-                            </TableCell>
-                          </TableRow>
-                        ))}
+                              </TableCell> */}
+                              <TableCell>
+                                {isLoadingLocation ? (
+                                  <CircularProgress size={16} />
+                                ) : location ? (
+                                  <Tooltip
+                                    title={
+                                      <Box>
+                                        <Typography variant="caption" display="block">
+                                          <strong>City:</strong> {location.city}
+                                        </Typography>
+                                        <Typography variant="caption" display="block">
+                                          <strong>Region:</strong> {location.region}
+                                        </Typography>
+                                        <Typography variant="caption" display="block">
+                                          <strong>Country:</strong> {location.country}
+                                        </Typography>
+                                        {location.latitude !== 0 && location.longitude !== 0 && (
+                                          <>
+                                            <Typography variant="caption" display="block">
+                                              <strong>Coordinates:</strong> {location.latitude.toFixed(4)}, {location.longitude.toFixed(4)}
+                                            </Typography>
+                                            <Typography variant="caption" display="block">
+                                              <strong>Timezone:</strong> {location.timezone}
+                                            </Typography>
+                                            <Typography variant="caption" display="block">
+                                              <strong>ISP:</strong> {location.isp}
+                                            </Typography>
+                                          </>
+                                        )}
+                                      </Box>
+                                    }
+                                  >
+                                    <Box>
+                                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                        {location.city !== 'Private Network' ? (
+                                          `${location.city}, ${location.region}`
+                                        ) : (
+                                          location.city
+                                        )}
+                                      </Typography>
+                                      <Typography variant="caption" color="text.secondary">
+                                        {location.country}
+                                        {location.latitude !== 0 && location.longitude !== 0 && (
+                                          ` • ${location.latitude.toFixed(2)}, ${location.longitude.toFixed(2)}`
+                                        )}
+                                      </Typography>
+                                    </Box>
+                                  </Tooltip>
+                                ) : (
+                                  <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                                    {open.ip_address ? 'Location unavailable' : 'N/A'}
+                                  </Typography>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <Tooltip title={open.user_agent || 'N/A'}>
+                                  <Typography
+                                    variant="body2"
+                                    sx={{
+                                      maxWidth: 200,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    {open.user_agent || 'N/A'}
+                                  </Typography>
+                                </Tooltip>
+                              </TableCell>
+                              <TableCell>
+                                <Tooltip title={open.referer || 'N/A'}>
+                                  <Typography
+                                    variant="body2"
+                                    sx={{
+                                      maxWidth: 200,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    {open.referer || 'N/A'}
+                                  </Typography>
+                                </Tooltip>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   </TableContainer>
