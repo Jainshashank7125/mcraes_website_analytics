@@ -39,6 +39,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { Button, Menu, MenuItem } from '@mui/material'
 import SyncStatusIndicator from './SyncStatusIndicator'
 import { isAdmin } from '../utils/roleUtils'
+import logoMacraes from '../assets/logo-macraes.png'
 
 const drawerWidth = 240
 
@@ -120,7 +121,7 @@ function Layout({ children }) {
         >
           <Box
             component="img"
-            src="/assets/logo-macraes-transparent.png"
+            src={logoMacraes}
             alt="MacRAE'S"
             sx={{
               maxHeight: 100,

@@ -236,8 +236,18 @@ def get_user_friendly_message(error: Exception, context: Optional[str] = None) -
     error_str = str(error).lower()
     error_type = type(error).__name__.lower()
     
-    # Check for specific error patterns
+    # Check for validation errors FIRST (before external service errors)
+    # to ensure validation errors get the correct message
+    validation_patterns = ["validation", "invalid", "required", "missing", "format", "must be provided"]
+    if any(pattern in error_str for pattern in validation_patterns):
+        if "date" in error_str or "format" in error_str:
+            return ERROR_MAPPINGS["date_format"]["user_message"], ERROR_MAPPINGS["date_format"]["error_code"]
+        return ERROR_MAPPINGS["validation"]["user_message"], ERROR_MAPPINGS["validation"]["error_code"]
+    
+    # Check for specific error patterns (excluding validation which we already checked)
     for error_key, error_info in ERROR_MAPPINGS.items():
+        if error_key in ["validation", "date_format"]:
+            continue  # Already handled above
         for pattern in error_info["patterns"]:
             if pattern in error_str or pattern in error_type:
                 return error_info["user_message"], error_info["error_code"]
