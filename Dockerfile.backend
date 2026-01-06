@@ -23,6 +23,10 @@ COPY . .
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
+# Copy automatic cron setup script
+COPY setup_cron_auto.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/setup_cron_auto.sh
+
 # Expose port
 EXPOSE 8000
 

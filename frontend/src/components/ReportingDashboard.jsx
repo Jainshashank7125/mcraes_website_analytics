@@ -2919,7 +2919,7 @@ function ReportingDashboard({
           {/* MacRAS Logo - Left side */}
           <Box
             component="img"
-            src="https://dvmakvtrtjvffceujlfm.supabase.co/storage/v1/object/public/brand-logos/logo-macraes-transparent.png"
+            src="/assets/logo-macraes-transparent.png"
             alt="MacRAE'S"
             sx={{
               maxHeight: isPublic ? 500 : 48,

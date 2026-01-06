@@ -120,7 +120,7 @@ function Layout({ children }) {
         >
           <Box
             component="img"
-            src="https://dvmakvtrtjvffceujlfm.supabase.co/storage/v1/object/public/brand-logos/logo-macraes-transparent.png"
+            src="/assets/logo-macraes-transparent.png"
             alt="MacRAE'S"
             sx={{
               maxHeight: 100,
