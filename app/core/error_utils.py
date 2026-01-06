@@ -3,6 +3,7 @@ Utility functions for error handling in endpoints
 """
 from functools import wraps
 from typing import Callable, Any
+from fastapi import HTTPException
 from app.core.exceptions import handle_exception, BaseAPIException
 import logging
 
@@ -26,6 +27,9 @@ def handle_api_errors(context: str = None):
             except BaseAPIException:
                 # Re-raise custom exceptions as-is
                 raise
+            except HTTPException:
+                # Re-raise FastAPI HTTPException as-is (handled by FastAPI exception handlers)
+                raise
             except Exception as e:
                 # Convert other exceptions to user-friendly errors
                 raise handle_exception(e, context=context or func.__name__)
@@ -36,6 +40,9 @@ def handle_api_errors(context: str = None):
                 return func(*args, **kwargs)
             except BaseAPIException:
                 # Re-raise custom exceptions as-is
+                raise
+            except HTTPException:
+                # Re-raise FastAPI HTTPException as-is (handled by FastAPI exception handlers)
                 raise
             except Exception as e:
                 # Convert other exceptions to user-friendly errors

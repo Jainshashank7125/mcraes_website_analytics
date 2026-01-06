@@ -87,6 +87,7 @@ import { reportingAPI, syncAPI, clientAPI, openaiAPI } from "../services/api";
 import { debugLog, debugWarn, debugError } from "../utils/debug";
 import { useAuth } from "../contexts/AuthContext";
 import ScrunchVisualizations from "./reporting/charts/ScrunchVisualizations";
+import logoMacraesTransparent from "../assets/logo-macraes-transparent.png";
 // Import reusable components and utilities
 import ChartCard from "./reporting/ChartCard";
 import SectionContainer from "./reporting/SectionContainer";
@@ -2919,7 +2920,7 @@ function ReportingDashboard({
           {/* MacRAS Logo - Left side */}
           <Box
             component="img"
-            src="/assets/logo-macraes-transparent.png"
+            src={logoMacraesTransparent}
             alt="MacRAE'S"
             sx={{
               maxHeight: isPublic ? 500 : 48,
