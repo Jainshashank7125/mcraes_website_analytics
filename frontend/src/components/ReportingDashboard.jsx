@@ -1658,6 +1658,19 @@ function ReportingDashboard({
     }
   };
 
+//  Normalizes the value 
+  const normalizePercentage = (value) => {
+    if (value === null || value === undefined || isNaN(value)) {
+      return 0;
+    }
+    
+    if (value > 100) {
+      return value / 100;
+    } else {
+      return value;
+    }
+  };
+
   const formatValue = (kpi) => {
     const { value, format, display } = kpi;
 
@@ -1711,7 +1724,8 @@ function ReportingDashboard({
     }
 
     if (format === "percentage") {
-      return `${value.toFixed(1)}%`;
+      const normalizedValue = normalizePercentage(value);
+      return `${normalizedValue.toFixed(1)}%`;
     }
 
     if (format === "duration") {
@@ -4014,12 +4028,8 @@ function ReportingDashboard({
                                             const kpi =
                                               dashboardData.kpis.bounce_rate;
                                             const value = kpi.value || 0;
-                                            if (kpi.format === "percentage") {
-                                              return `${(value * 100).toFixed(
-                                                1
-                                              )}%`;
-                                            }
-                                            return `${value.toFixed(1)}%`;
+                                            const normalizedValue = normalizePercentage(value);
+                                            return `${normalizedValue.toFixed(1)}%`;
                                           })()}
                                         </Typography>
                                         <Box
@@ -4055,11 +4065,13 @@ function ReportingDashboard({
                                                     color: "#34A853",
                                                   }}
                                                 >
-                                                  {Math.abs(
-                                                    dashboardData.kpis
-                                                      .bounce_rate.change
-                                                  ).toFixed(1)}
-                                                  % vs prev.
+                                                  {(() => {
+                                                    const change = dashboardData.kpis.bounce_rate.change || 0;
+                                                    const absChange = Math.abs(change);
+                                                    const normalizedChange = normalizePercentage(absChange);
+                                                    return `${normalizedChange.toFixed(1)}%`;
+                                                  })()}
+                                                  {" "}vs prev.
                                                 </Typography>
                                               </Box>
                                             )}
@@ -4276,14 +4288,8 @@ function ReportingDashboard({
                                               dashboardData.kpis
                                                 .ga4_engagement_rate;
                                             const value = kpi.value || 0;
-                                            if (kpi.format === "percentage") {
-                                              return `${(value * 100).toFixed(
-                                                1
-                                              )}%`;
-                                            }
-                                            return `${(value * 100).toFixed(
-                                              1
-                                            )}%`;
+                                            const normalizedValue = normalizePercentage(value);
+                                            return `${normalizedValue.toFixed(1)}%`;
                                           })()}
                                         </Typography>
                                         <Box
@@ -4322,12 +4328,14 @@ function ReportingDashboard({
                                                       color: "#34A853",
                                                     }}
                                                   >
-                                                    {Math.abs(
-                                                      dashboardData.kpis
-                                                        .ga4_engagement_rate
-                                                  .change
-                                              ).toFixed(1)}
-                                              % vs prev.
+                                                    {(() => {
+                                                      const change = dashboardData.kpis.ga4_engagement_rate.change || 0;
+                                                      // Divide by 100 if change appears to be already multiplied
+                                                      const absChange = Math.abs(change);
+                                                      const normalizedChange = normalizePercentage(absChange);
+                                                      return `${normalizedChange.toFixed(1)}%`;
+                                                    })()}
+                                                    {" "}vs prev.
                                             </Typography>
                                           </Box>
                                         )}
@@ -4860,12 +4868,8 @@ function ReportingDashboard({
                                       mb: 1,
                                     }}
                                   >
-                                    {(
-                                      (dashboardData.chart_data
-                                            .ga4_traffic_overview
-                                            .engagementRate || 0) * 100
-                                    ).toFixed(1)}
-                                    %
+                                    {(() => {
+                                    })()}
                                   </Typography>
                                   <Box
                                     sx={{
@@ -4896,12 +4900,8 @@ function ReportingDashboard({
                                             color: "success.main",
                                           }}
                                         >
-                                          {Math.abs(
-                                            dashboardData.chart_data
-                                              .ga4_traffic_overview
-                                              .engagementRateChange
-                                          ).toFixed(1)}
-                                          %
+                                          {(() => {
+                                          })()}
                                         </Typography>
                                         <Typography
                                           variant="caption"
@@ -5607,10 +5607,10 @@ function ReportingDashboard({
                                     CHART_COLORS.error,
                                     CHART_COLORS.success,
                                   ]}
-                                  formatter={(value, name) => [
-                                    `${value.toFixed(1)}%`,
-                                    name,
-                                  ]}
+                                  formatter={(value, name) => {
+                                    const normalizedValue = normalizePercentage(value);
+                                    return [`${normalizedValue.toFixed(1)}%`, name];
+                                  }}
                                   showLabel={true}
                                   height={250}
                                 />
@@ -5626,11 +5626,11 @@ function ReportingDashboard({
                                         : "success.main"
                                     }
                                   >
-                                    {(
-                                          dashboardData.kpis.bounce_rate
-                                            .value || 0
-                                    ).toFixed(1)}
-                                    %
+                                    {(() => {
+                                      const value = dashboardData.kpis.bounce_rate.value || 0;
+                                      const normalizedValue = normalizePercentage(value);
+                                      return `${normalizedValue.toFixed(1)}%`;
+                                    })()}
                                   </Typography>
                                   <Typography
                                     variant="caption"
@@ -5666,25 +5666,23 @@ function ReportingDashboard({
                                     {
                                       name: "Engaged",
                                       value:
-                                  (dashboardData.kpis.ga4_engagement_rate.value || 0) *
-                                  100,
+                                  (dashboardData.kpis.ga4_engagement_rate.value || 0),
                                     },
                                     {
                                       name: "Not Engaged",
                                       value:
                                         100 -
-                                  (dashboardData.kpis.ga4_engagement_rate.value || 0) *
-                                          100,
+                                  (dashboardData.kpis.ga4_engagement_rate.value || 0),
                                     },
                                   ]}
                             donut={true}
                                   innerRadius={60}
                                   outerRadius={90}
                             colors={[CHART_COLORS.success, theme.palette.grey[300]]}
-                                  formatter={(value, name) => [
-                                    `${value.toFixed(1)}%`,
-                                    name,
-                                  ]}
+                                  formatter={(value, name) => {
+                                    const normalizedValue = normalizePercentage(value);
+                                    return [`${normalizedValue.toFixed(1)}%`, name];
+                                  }}
                             showLabel={true}
                             height={250}
                           />
@@ -5695,10 +5693,11 @@ function ReportingDashboard({
                                 sx={{ fontSize: "2rem" }}
                                 color="success.main"
                               >
-                                {(
-                                (dashboardData.kpis.ga4_engagement_rate.value || 0) * 100
-                                ).toFixed(1)}
-                                %
+                                {(() => {
+                                  const value = dashboardData.kpis.ga4_engagement_rate.value || 0;
+                                  const normalizedValue = normalizePercentage(value);
+                                  return `${normalizedValue.toFixed(1)}%`;
+                                })()}
                               </Typography>
                               <Typography
                                 variant="caption"
@@ -5745,10 +5744,10 @@ function ReportingDashboard({
                                   innerRadius={60}
                                   outerRadius={90}
                             colors={[CHART_COLORS.success, theme.palette.grey[300]]}
-                                  formatter={(value, name) => [
-                                    `${value.toFixed(1)}%`,
-                                    name,
-                                  ]}
+                                  formatter={(value, name) => {
+                                    const normalizedValue = normalizePercentage(value);
+                                    return [`${normalizedValue.toFixed(1)}%`, name];
+                                  }}
                             showLabel={true}
                             height={250}
                           />
@@ -5759,7 +5758,11 @@ function ReportingDashboard({
                                 sx={{ fontSize: "2rem" }}
                                 color="success.main"
                               >
-                              {(dashboardData.kpis.brand_presence_rate.value || 0).toFixed(1)}%
+                              {(() => {
+                                const value = dashboardData.kpis.brand_presence_rate.value || 0;
+                                const normalizedValue = normalizePercentage(value);
+                                return `${normalizedValue.toFixed(1)}%`;
+                              })()}
                               </Typography>
                               <Typography
                                 variant="caption"
@@ -6030,10 +6033,10 @@ function ReportingDashboard({
                                               innerRadius={60}
                                               outerRadius={90}
                                         colors={[CHART_COLORS.success, theme.palette.grey[300]]}
-                                              formatter={(value, name) => [
-                                                `${value.toFixed(1)}%`,
-                                                name,
-                                              ]}
+                                              formatter={(value, name) => {
+                                                const normalizedValue = normalizePercentage(value);
+                                                return [`${normalizedValue.toFixed(1)}%`, name];
+                                              }}
                                         showLabel={true}
                                         height={250}
                                       />
@@ -6044,10 +6047,11 @@ function ReportingDashboard({
                                             sx={{ fontSize: "2rem" }}
                                             color="success.main"
                                           >
-                                            {(
-                                            scrunchKPIs.brand_presence_rate.value || 0
-                                            ).toFixed(1)}
-                                            %
+                                            {(() => {
+                                              const value = scrunchKPIs.brand_presence_rate.value || 0;
+                                              const normalizedValue = normalizePercentage(value);
+                                              return `${normalizedValue.toFixed(1)}%`;
+                                            })()}
                                           </Typography>
                                           <Typography
                                             variant="caption"
