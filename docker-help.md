@@ -194,26 +194,85 @@ SELECT pg_size_pretty(pg_total_relation_size('table_name'));
 
 ### Database Backup
 
-#### Full Database Backup
+#### Quick Backup (Recommended - Custom Format)
 ```bash
-# Create a backup file
-docker compose exec postgres pg_dump -U postgres postgres > backup_$(date +%Y%m%d_%H%M%S).sql
+# Create dump in custom format (best for local restore - handles JSON/data better)
+docker compose exec -T postgres pg_dump \
+    -U postgres \
+    -d postgres \
+    --format=custom \
+    --clean \
+    --if-exists \
+    --no-owner \
+    --no-acl \
+    --blobs \
+    --encoding=UTF8 \
+    > dumps/backup_$(date +%Y%m%d_%H%M%S).dump
 
-# Compressed backup
-docker compose exec postgres pg_dump -U postgres postgres | gzip > backup_$(date +%Y%m%d_%H%M%S).sql.gz
-
-# Backup specific table
-docker compose exec postgres pg_dump -U postgres -d postgres -t table_name > table_backup.sql
+# Or use the provided script (automatically creates in ./dumps/)
+./scripts/create_database_dump.sh
 ```
 
-#### Backup with Custom Format (Recommended)
+#### Plain SQL Backup (Alternative)
 ```bash
-# Custom format (allows selective restore)
-docker compose exec postgres pg_dump -U postgres -Fc postgres > backup_$(date +%Y%m%d_%H%M%S).dump
+# Create plain SQL backup file
+docker compose exec -T postgres pg_dump \
+    -U postgres \
+    -d postgres \
+    --clean \
+    --if-exists \
+    --no-owner \
+    --no-acl \
+    --encoding=UTF8 \
+    > dumps/backup_$(date +%Y%m%d_%H%M%S).sql
 
-# Restore from custom format
-docker compose exec -T postgres pg_restore -U postgres -d postgres < backup_file.dump
+# Compressed SQL backup
+docker compose exec -T postgres pg_dump \
+    -U postgres \
+    -d postgres \
+    --clean \
+    --if-exists \
+    --no-owner \
+    --no-acl \
+    --encoding=UTF8 \
+    | gzip > dumps/backup_$(date +%Y%m%d_%H%M%S).sql.gz
 ```
+
+#### Backup Specific Table
+```bash
+# Backup single table
+docker compose exec -T postgres pg_dump \
+    -U postgres \
+    -d postgres \
+    -t table_name \
+    --format=custom \
+    > dumps/table_name_backup_$(date +%Y%m%d_%H%M%S).dump
+
+# Backup multiple tables
+docker compose exec -T postgres pg_dump \
+    -U postgres \
+    -d postgres \
+    -t table1 -t table2 \
+    --format=custom \
+    > dumps/tables_backup_$(date +%Y%m%d_%H%M%S).dump
+```
+
+#### Backup Format Comparison
+- **Custom Format (`.dump`)** - Recommended
+  - ✅ Better handling of JSON/JSONB data
+  - ✅ Compressed (smaller file size)
+  - ✅ Faster restore
+  - ✅ Allows selective restore
+  - ✅ More reliable for complex data types
+  - Restore with: `pg_restore`
+
+- **Plain SQL (`.sql`)**
+  - ✅ Human-readable
+  - ✅ Can be edited manually
+  - ❌ Larger file size
+  - ❌ May have issues with JSON/JSONB
+  - ❌ Slower restore
+  - Restore with: `psql`
 
 ### Database Restore
 
@@ -224,12 +283,38 @@ docker compose exec -T postgres psql -U postgres -d postgres < backup_file.sql
 
 # Or from host
 cat backup_file.sql | docker compose exec -T postgres psql -U postgres -d postgres
+
+# If you encounter JSON errors, continue past them (restores what it can)
+docker compose exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=0 < backup_file.sql
+
+# Or use single transaction mode (rolls back on error, but safer)
+docker compose exec -T postgres psql -U postgres -d postgres --single-transaction < backup_file.sql
 ```
 
-#### Restore from Custom Format
+#### Restore from Custom Format (Recommended)
 ```bash
-# Restore from custom format dump
-docker compose exec -T postgres pg_restore -U postgres -d postgres -c < backup_file.dump
+# Restore from custom format dump (best option)
+docker compose exec -T postgres pg_restore \
+    -U postgres \
+    -d postgres \
+    --clean \
+    --if-exists \
+    --no-owner \
+    --no-acl \
+    < dumps/backup_file.dump
+
+# Or use the provided script
+./scripts/restore_database_dump.sh dumps/backup_file.dump
+
+# Restore to different database
+docker compose exec -T postgres pg_restore \
+    -U postgres \
+    -d target_database_name \
+    --clean \
+    --if-exists \
+    --no-owner \
+    --no-acl \
+    < dumps/backup_file.dump
 ```
 
 ### Database Maintenance
@@ -529,15 +614,46 @@ docker exec mcraes-backend python3 /app/daily_sync_job.py
 ```
 
 #### View Sync Logs
+
+**Note:** Log files are persisted on the host at `./logs/` directory and are also accessible inside the container at `/app/logs/`.
+
 ```bash
-# View recent sync logs
+# View recent sync logs (from host)
+tail -n 50 logs/daily_sync.log
+
+# Or from inside container
 docker exec mcraes-backend tail -n 50 /app/logs/daily_sync.log
 
-# Follow sync logs in real-time
+# Follow sync logs in real-time (from host)
+tail -f logs/daily_sync.log
+
+# Or from inside container
 docker exec mcraes-backend tail -f /app/logs/daily_sync.log
 
-# Search for errors in logs
+# Search for errors in logs (from host)
+grep -i error logs/daily_sync.log
+
+# Or from inside container
 docker exec mcraes-backend grep -i error /app/logs/daily_sync.log
+
+# If log file doesn't exist yet (job hasn't run), check:
+# 1. Verify logs directory exists on host
+ls -la logs/
+
+# 2. Verify logs directory exists in container
+docker exec mcraes-backend ls -la /app/logs
+
+# 3. Check if cron job is configured
+docker exec mcraes-backend crontab -l | grep daily_sync
+
+# 4. Check Docker container logs for sync-related errors
+docker logs mcraes-backend --tail 100 | grep -i -E "(sync|error|daily)"
+
+# 5. Manually test the sync job (creates log file)
+docker exec mcraes-backend python3 /app/daily_sync_job.py
+
+# 6. Check for errors after manual run (from host)
+grep -i error logs/daily_sync.log 2>/dev/null || echo "No errors found or log file not created"
 ```
 
 ### Check Sync Jobs via API
@@ -589,15 +705,16 @@ docker exec mcraes-postgres psql -U postgres -d postgres -c \
 #### GA4 Token Generation (Hourly)
 - **Schedule**: `0 * * * *` (Every hour at minute 0)
 - **Script**: `generate_ga4_token.py`
-- **Logs**: `/app/logs/ga4_token.log` (inside container)
+- **Logs**: `./logs/ga4_token.log` (on host) or `/app/logs/ga4_token.log` (in container)
 - **Purpose**: Ensures GA4 access token is always fresh (tokens expire after 1 hour)
 
 #### Daily Sync Job
 - **Schedule**: `30 18 * * *` (Daily at 18:30 UTC)
 - **IST Time**: 11:30 PM IST (IST = UTC + 5:30)
 - **Script**: `daily_sync_job.py`
-- **Logs**: `/app/logs/daily_sync.log` (inside container)
+- **Logs**: `./logs/daily_sync.log` (on host) or `/app/logs/daily_sync.log` (in container)
 - **Note**: Token generation runs before sync (via hourly job or as part of sync script)
+- **Persistence**: Log files are persisted on the host via volume mount, so they survive container restarts
 
 ### What Gets Synced
 
@@ -635,7 +752,10 @@ docker exec mcraes-backend ls -la /app/daily_sync_job.py
 # Test script manually
 docker exec mcraes-backend python3 /app/daily_sync_job.py
 
-# Check logs for errors
+# Check logs for errors (from host)
+tail -n 100 logs/daily_sync.log
+
+# Or from container
 docker exec mcraes-backend tail -n 100 /app/logs/daily_sync.log
 ```
 
