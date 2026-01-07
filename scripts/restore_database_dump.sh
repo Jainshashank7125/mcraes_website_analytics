@@ -109,18 +109,18 @@ else
         exit 1
     fi
     
-    pg_restore \
-        --verbose \
-        --clean \
-        --if-exists \
-        --create \
-        --no-owner \
-        --no-acl \
-        --dbname="$TARGET_DB_NAME" \
-        --host="$TARGET_HOST" \
-        --port="$TARGET_PORT" \
-        --username="$TARGET_DB_USER" \
-        "$DUMP_FILE"
+pg_restore \
+    --verbose \
+    --clean \
+    --if-exists \
+    --create \
+    --no-owner \
+    --no-acl \
+    --dbname="$TARGET_DB_NAME" \
+    --host="$TARGET_HOST" \
+    --port="$TARGET_PORT" \
+    --username="$TARGET_DB_USER" \
+    "$DUMP_FILE"
 fi
 
 if [ $? -eq 0 ]; then
