@@ -7459,7 +7459,8 @@ async def get_client_keywords(
         # Format response
         formatted_keywords = []
         for kw in paginated_keywords:
-            # Latest ranking in range
+            # Get the LATEST ranking within the date range (not average)
+            # This query orders by date DESC and limits to 1 to get the most recent ranking
             ranking_row = supabase.db.execute(
                 select(rankings_table)
                 .where(
@@ -7486,6 +7487,7 @@ async def get_client_keywords(
                 "keyword_phrase": kw.get("keyword_phrase", ""),
                 "campaign_id": kw.get("campaign_id"),
                 "campaign_name": campaign_name,
+                # google_ranking uses the LATEST ranking from the date range, not the average
                 "google_ranking": summary.get("google_ranking"),
                 "google_ranking_url": summary.get("google_ranking_url"),
                 "google_mobile_ranking": summary.get("google_mobile_ranking"),
@@ -7604,16 +7606,40 @@ async def get_client_keyword_rankings_over_time(
             return {"data": []}
         
         # Get rankings data using SQLAlchemy Core
+        # Use a subquery to get only the LATEST ranking per keyword per date
+        # This prevents counting duplicate rankings if there are multiple entries for the same keyword/date
         rankings_table = supabase._get_table("agency_analytics_keyword_rankings")
+        
+        # Subquery to get the max id (latest entry) per keyword_id and date
+        # This ensures we only count one ranking per keyword per date
+        latest_ids_subquery = (
+            select(
+                rankings_table.c.keyword_id,
+                rankings_table.c.date,
+                func.max(rankings_table.c.id).label("max_id")
+            )
+            .where(
+                and_(
+                    rankings_table.c.keyword_id.in_(keyword_ids),
+                    rankings_table.c.date >= start_date,
+                    rankings_table.c.date <= end_date
+                )
+            )
+            .group_by(rankings_table.c.keyword_id, rankings_table.c.date)
+            .subquery()
+        )
+        
+        # Main query to get the latest ranking per keyword per date
         rankings_query = select(
             rankings_table.c.date,
             rankings_table.c.google_ranking,
             rankings_table.c.bing_ranking
-        ).where(
+        ).join(
+            latest_ids_subquery,
             and_(
-                rankings_table.c.keyword_id.in_(keyword_ids),
-                rankings_table.c.date >= start_date,
-                rankings_table.c.date <= end_date
+                rankings_table.c.keyword_id == latest_ids_subquery.c.keyword_id,
+                rankings_table.c.date == latest_ids_subquery.c.date,
+                rankings_table.c.id == latest_ids_subquery.c.max_id
             )
         ).order_by(rankings_table.c.date.asc())
         
@@ -7621,21 +7647,34 @@ async def get_client_keyword_rankings_over_time(
         rankings_data = [dict(row._mapping) for row in rankings_result]
         
         # Group by date and calculate position buckets
+        # Each ranking in rankings_data represents one keyword's latest ranking for that date
         date_groups = {}
         for ranking in rankings_data:
-            date_str = ranking.get("date")
-            if not date_str:
+            date_val = ranking.get("date")
+            if not date_val:
                 continue
+            
+            # Convert date to string if it's a date object
+            if isinstance(date_val, date_type):
+                date_str = date_val.isoformat()
+            else:
+                date_str = str(date_val)
             
             # Handle group_by parameter
             if group_by == "week":
                 # Get week start date (Monday)
-                date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                if isinstance(date_val, date_type):
+                    date_obj = date_val
+                else:
+                    date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
                 days_since_monday = date_obj.weekday()
                 week_start = date_obj - timedelta(days=days_since_monday)
                 date_key = week_start.strftime("%Y-%m-%d")
             elif group_by == "month":
-                date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                if isinstance(date_val, date_type):
+                    date_obj = date_val
+                else:
+                    date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
                 date_key = date_obj.strftime("%Y-%m")
             else:  # day
                 date_key = date_str

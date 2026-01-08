@@ -889,11 +889,25 @@ async def sync_agency_analytics_background(
         )
         
         # Step 1: Get all campaigns and update them in database first
+        logger.info(f"[Job {job_id}] Starting campaign fetch (sync_mode={sync_mode}, campaign_id={campaign_id})")
+        
         if campaign_id:
+            logger.info(f"[Job {job_id}] Fetching specific campaign: {campaign_id}")
             campaign = await client.get_campaign(campaign_id)
             campaigns = [campaign] if campaign else []
+            logger.info(f"[Job {job_id}] Fetched campaign: {campaign.get('id') if campaign else 'None'}")
         else:
-            campaigns = await client.get_all_campaigns()
+            logger.info(f"[Job {job_id}] Fetching all campaigns from Agency Analytics API...")
+            try:
+                campaigns = await client.get_all_campaigns()
+                logger.info(f"[Job {job_id}] API returned {len(campaigns)} campaigns")
+            except Exception as e:
+                logger.error(f"[Job {job_id}] Error fetching campaigns from API: {str(e)}")
+                await sync_job_service.update_job_status(
+                    job_id, "error", progress=0,
+                    current_step=f"Error fetching campaigns: {str(e)}"
+                )
+                raise Exception(f"Failed to fetch campaigns from Agency Analytics API: {str(e)}")
         
         # Check for cancellation after fetching campaigns
         if sync_job_service.is_cancelled(job_id):
@@ -901,23 +915,40 @@ async def sync_agency_analytics_background(
             return
         
         # Filter out None campaigns
+        original_count = len(campaigns)
         campaigns = [c for c in campaigns if c is not None]
+        logger.info(f"[Job {job_id}] After filtering None values: {len(campaigns)} campaigns (from {original_count} total)")
         
         # For "new" mode, filter to only missing campaigns
         if sync_mode == "new" and not campaign_id:
             from app.db.models import AgencyAnalyticsCampaign
+            logger.info(f"[Job {job_id}] New mode: Checking for existing campaigns in database...")
             existing_campaign_ids = set(
                 db.query(AgencyAnalyticsCampaign.id).all()
             )
             existing_campaign_ids = {row[0] for row in existing_campaign_ids}
+            logger.info(f"[Job {job_id}] Found {len(existing_campaign_ids)} existing campaigns in database")
             original_count = len(campaigns)
             campaigns = [c for c in campaigns if c.get("id") not in existing_campaign_ids]
-            logger.info(f"[Job {job_id}] New mode: Filtered to {len(campaigns)} new campaigns (out of {original_count} total)")
+            logger.info(f"[Job {job_id}] New mode: Filtered to {len(campaigns)} new campaigns (out of {original_count} total from API)")
         
         total_campaigns = len(campaigns)
         
         if total_campaigns == 0:
-            raise Exception("No campaigns found to sync")
+            error_msg = "No campaigns found to sync"
+            if sync_mode == "new":
+                error_msg += " (all campaigns from API already exist in database)"
+            elif campaign_id:
+                error_msg += f" (campaign {campaign_id} not found or could not be fetched)"
+            else:
+                error_msg += " (Agency Analytics API returned no campaigns)"
+            
+            logger.warning(f"[Job {job_id}] {error_msg}")
+            await sync_job_service.update_job_status(
+                job_id, "error", progress=0,
+                current_step=error_msg
+            )
+            raise Exception(error_msg)
         
         # Step 1: Update all campaigns in database
         await sync_job_service.update_job_status(
