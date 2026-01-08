@@ -683,14 +683,32 @@ function ReportingDashboard({
     }
   }, [location.state, isPublic, selectedClientId]);
 
-  // Client-level KPI selection removed - KPIs are now selected per dashboard link
-  // Removed useEffect hooks for loadKPISelections and loadPublicKPISelections
+  // KPI selections are NOT loaded on initial render - show all KPIs/charts by default
+  // KPI selections are only loaded when a dashboard link is selected/edited (see handleEditLink)
+  // This allows users to see all available data by default, and only apply saved selections when viewing a specific link
 
-  // Client-level KPI selection function removed - KPIs are now selected per dashboard link
-  // This function is no longer used as KPI selections come from dashboard links
-
-  // Client-level public KPI selection function removed - KPIs are now selected per dashboard link
-  // This function is no longer used as KPI selections come from dashboard links
+  // Initialize selectedCharts with all available charts on initial load (admin view only)
+  useEffect(() => {
+    if (isPublic || selectedCharts.size > 0) return; // Don't override if already set or in public view
+    
+    // Initialize with all available charts from all sections
+    const allCharts = new Set();
+    ["ga4", "agency_analytics", "scrunch_ai", "all_performance_metrics"].forEach((sectionKey) => {
+      getDashboardSectionCharts(sectionKey).forEach((chart) => {
+        allCharts.add(chart.key);
+      });
+    });
+    
+    if (allCharts.size > 0) {
+      setSelectedCharts(allCharts);
+      setTempSelectedCharts(allCharts);
+      debugLog("Initialized selectedCharts with all available charts", { 
+        chartCount: allCharts.size,
+        charts: Array.from(allCharts),
+        hasChannelPerformance: allCharts.has("ga4_channel_performance")
+      });
+    }
+  }, [isPublic]); // Only run once on mount for admin view
 
   // Comprehensive data loading function - loads all dashboard data including KPI selections
   const loadAllData = async (overrideRange = null) => {
@@ -823,7 +841,7 @@ function ReportingDashboard({
       // Only clear dashboard links when client/brand changes, not when dates change
       // Dashboard links are client-specific and should persist across date changes
       if (clientChanged) {
-        debugLog("Client changed - clearing dashboard links", {
+        debugLog("Client changed - clearing dashboard links and resetting KPI selections", {
           previousClientId: prevClientIdRef.current,
           newClientId: selectedClientId,
           previousBrandId: prevBrandIdRef.current,
@@ -837,6 +855,57 @@ function ReportingDashboard({
         setOverviewCacheKey(null);
         // Clear dashboard links to prevent loading stale executive summaries from previous client
         setDashboardLinks([]);
+        
+        // Reset KPI selections to default (all KPIs and charts) when client changes
+        // This ensures each client starts with a fresh view showing all available data
+        setSelectedKPIs(new Set(KPI_ORDER));
+        setTempSelectedKPIs(new Set(KPI_ORDER));
+        setSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
+        setTempSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
+        
+        // Reset to all sections visible
+        setVisibleSections(
+          new Set([
+            "ga4",
+            "agency_analytics",
+            "scrunch_ai",
+            "all_performance_metrics",
+          ])
+        );
+        setTempVisibleSections(
+          new Set([
+            "ga4",
+            "agency_analytics",
+            "scrunch_ai",
+            "all_performance_metrics",
+          ])
+        );
+        
+        // Reset to all charts selected
+        const allCharts = new Set();
+        ["ga4", "agency_analytics", "scrunch_ai", "all_performance_metrics"].forEach((sectionKey) => {
+          getDashboardSectionCharts(sectionKey).forEach((chart) => {
+            allCharts.add(chart.key);
+          });
+        });
+        setSelectedCharts(allCharts);
+        setTempSelectedCharts(new Set(allCharts));
+        debugLog("Reset selectedCharts on client change", {
+          chartCount: allCharts.size,
+          charts: Array.from(allCharts),
+          hasChannelPerformance: allCharts.has("ga4_channel_performance")
+        });
+        
+        // Reset change period flags to all true
+        const defaultShowChangePeriod = {
+          ga4: true,
+          agency_analytics: true,
+          scrunch_ai: true,
+          all_performance_metrics: true
+        };
+        setShowChangePeriod(defaultShowChangePeriod);
+        setTempShowChangePeriod(defaultShowChangePeriod);
+        
         // Update refs to track current client
         prevClientIdRef.current = selectedClientId;
         prevBrandIdRef.current = selectedBrandId;
@@ -1531,15 +1600,30 @@ function ReportingDashboard({
         });
         setDashboardData(data);
 
-        // Initialize selected KPIs with all available KPIs if not already loaded from database
-        // (This is a fallback - loadKPISelections effect should handle this)
-        if (selectedKPIs.size === 0 && data.kpis && !isPublic) {
+        // On initial load, update selected KPIs to show all available KPIs from the data
+        // This ensures we only show KPIs that are actually available, not all from KPI_ORDER
+        // Only do this if we're still using the default (all KPIs from KPI_ORDER)
+        // and we haven't loaded selections from a dashboard link
+        if (data.kpis && !isPublic) {
           const availableKPIs = Object.keys(data.kpis).filter((k) =>
             KPI_ORDER.includes(k)
           );
-          if (availableKPIs.length > 0) {
+          // Check if we're still using the default initialization (all KPIs from KPI_ORDER)
+          // by comparing if selectedKPIs contains all KPIs from KPI_ORDER
+          const isUsingDefaults = selectedKPIs.size === KPI_ORDER.length && 
+            KPI_ORDER.every(kpi => selectedKPIs.has(kpi));
+          
+          if (isUsingDefaults && availableKPIs.length > 0) {
+            // Update to use only available KPIs from the data
             setSelectedKPIs(new Set(availableKPIs));
             setTempSelectedKPIs(new Set(availableKPIs));
+            // Also update performance metrics KPIs if they're still using defaults
+            const isUsingDefaultPerfMetrics = selectedPerformanceMetricsKPIs.size === KPI_ORDER.length &&
+              KPI_ORDER.every(kpi => selectedPerformanceMetricsKPIs.has(kpi));
+            if (isUsingDefaultPerfMetrics) {
+              setSelectedPerformanceMetricsKPIs(new Set(availableKPIs));
+              setTempSelectedPerformanceMetricsKPIs(new Set(availableKPIs));
+            }
           }
         }
 
@@ -2711,6 +2795,10 @@ function ReportingDashboard({
   const isChartVisible = (chartKey) => {
     if (!isPublic) {
       // In authenticated mode, check selectedCharts state
+      // If selectedCharts is empty, show all charts by default (initial state)
+      if (selectedCharts.size === 0) {
+        return true; // Show all charts when no selection has been made yet
+      }
       return selectedCharts.has(chartKey);
     }
     // In public mode, check publicSelectedCharts from dashboard link

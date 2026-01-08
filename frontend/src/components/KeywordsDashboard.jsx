@@ -714,6 +714,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
                           </IconButton> */}
                         </TableCell>
                         <TableCell>{keyword.keyword_phrase || ""}</TableCell>
+                        {/* google_ranking displays the LATEST ranking within the selected date range, not the average */}
                         <TableCell>{formatRanking(keyword.google_ranking)}</TableCell>
                         {/* <TableCell>
                           <Chip

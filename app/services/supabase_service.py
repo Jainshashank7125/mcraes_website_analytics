@@ -2012,11 +2012,17 @@ class SupabaseService:
     def get_ga4_traffic_sources_by_date_range(self, brand_id: int, property_id: str, start_date: str, end_date: str, client_id: Optional[int] = None) -> List[Dict]:
         """Get aggregated GA4 traffic sources data from stored daily records for a date range using SQLAlchemy Core
         
+        Aggregates data by taking the maximum values for each month, then aggregates those monthly maxes by source.
+        This prevents double-counting when the same data appears across multiple days in a month.
+        
         Supports querying by brand_id or client_id. If client_id is provided, it will be used as the primary filter.
         If no data is found for the specific client_id, falls back to querying by property_id only
         (since multiple clients can share the same GA4 property).
         """
         try:
+            from datetime import datetime
+            from collections import defaultdict
+            
             table = self._get_table("ga4_traffic_sources")
             records = []
             if client_id is not None:
@@ -2058,13 +2064,57 @@ class SupabaseService:
             if not records:
                 return []
             
-            # Aggregate by source
-            source_aggregates = {}
+            # Group records by (source, year-month) and find max values for each month
+            monthly_maxes = defaultdict(lambda: {
+                "sessions": 0,
+                "users": 0,
+                "bounce_rate": 0.0,
+                "conversions": 0.0,
+                "conversion_rate": 0.0,
+                "date": None
+            })
+            
             for record in records:
                 source = record.get("source")
                 if not source:
                     continue
                 
+                # Extract year-month from date
+                date_str = record.get("date")
+                if isinstance(date_str, str):
+                    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                else:
+                    date_obj = date_str
+                
+                month_key = (source, date_obj.year, date_obj.month)
+                
+                # Convert Decimal to float
+                sessions_val = float(record.get("sessions", 0) or 0)
+                users_val = float(record.get("users", 0) or 0)
+                bounce_rate_val = float(record.get("bounce_rate", 0) or 0)
+                conversions_val = float(record.get("conversions", 0) or 0)
+                conversion_rate_val = float(record.get("conversion_rate", 0) or 0)
+                
+                # Keep maximum values for each month
+                if sessions_val > monthly_maxes[month_key]["sessions"]:
+                    monthly_maxes[month_key]["sessions"] = sessions_val
+                    monthly_maxes[month_key]["users"] = users_val
+                    monthly_maxes[month_key]["bounce_rate"] = bounce_rate_val
+                    monthly_maxes[month_key]["conversions"] = conversions_val
+                    monthly_maxes[month_key]["conversion_rate"] = conversion_rate_val
+                    monthly_maxes[month_key]["date"] = date_str
+                elif sessions_val == monthly_maxes[month_key]["sessions"]:
+                    # If sessions are equal, prefer the one with higher users
+                    if users_val > monthly_maxes[month_key]["users"]:
+                        monthly_maxes[month_key]["users"] = users_val
+                        monthly_maxes[month_key]["bounce_rate"] = bounce_rate_val
+                        monthly_maxes[month_key]["conversions"] = conversions_val
+                        monthly_maxes[month_key]["conversion_rate"] = conversion_rate_val
+                        monthly_maxes[month_key]["date"] = date_str
+            
+            # Now aggregate the monthly maxes by source
+            source_aggregates = {}
+            for (source, year, month), monthly_data in monthly_maxes.items():
                 if source not in source_aggregates:
                     source_aggregates[source] = {
                         "source": source,
@@ -2074,23 +2124,27 @@ class SupabaseService:
                         "conversions": 0.0,
                         "conversionRate": 0.0,
                         "totalBounce": 0.0,
-                        "totalSessions": 0
+                        "totalSessions": 0,
+                        "monthCount": 0  # Track number of months for averaging
                     }
                 
-                # Convert Decimal to float for aggregation
-                sessions_val = float(record.get("sessions", 0) or 0)
-                users_val = float(record.get("users", 0) or 0)
-                bounce_rate_val = float(record.get("bounce_rate", 0) or 0)
-                source_aggregates[source]["sessions"] += sessions_val
-                source_aggregates[source]["users"] += users_val
-                source_aggregates[source]["totalBounce"] += bounce_rate_val * sessions_val
-                source_aggregates[source]["totalSessions"] += sessions_val
+                # Sum the monthly max values
+                source_aggregates[source]["sessions"] += monthly_data["sessions"]
+                source_aggregates[source]["users"] += monthly_data["users"]
+                source_aggregates[source]["conversions"] += monthly_data["conversions"]
+                source_aggregates[source]["totalBounce"] += monthly_data["bounce_rate"] * monthly_data["sessions"]
+                source_aggregates[source]["totalSessions"] += monthly_data["sessions"]
+                source_aggregates[source]["monthCount"] += 1
             
-            # Calculate weighted average bounce rate
+            # Calculate weighted average bounce rate and conversion rate
             sources = []
             for source, data in source_aggregates.items():
                 if data["totalSessions"] > 0:
                     data["bounceRate"] = data["totalBounce"] / data["totalSessions"]
+                    # Calculate conversion rate based on total conversions and sessions
+                    data["conversionRate"] = data["conversions"] / data["totalSessions"] if data["totalSessions"] > 0 else 0.0
+                # Remove monthCount from final output
+                del data["monthCount"]
                 sources.append(data)
             
             # Sort by sessions descending
