@@ -7630,10 +7630,14 @@ async def get_client_keyword_rankings_over_time(
         )
         
         # Main query to get the latest ranking per keyword per date
+        # Filter by volume > 0 to match the keywords table logic
+        # Also need keyword_id to ensure we're counting unique keywords per date
         rankings_query = select(
+            rankings_table.c.keyword_id,
             rankings_table.c.date,
             rankings_table.c.google_ranking,
-            rankings_table.c.bing_ranking
+            rankings_table.c.bing_ranking,
+            rankings_table.c.volume
         ).join(
             latest_ids_subquery,
             and_(
@@ -7641,17 +7645,45 @@ async def get_client_keyword_rankings_over_time(
                 rankings_table.c.date == latest_ids_subquery.c.date,
                 rankings_table.c.id == latest_ids_subquery.c.max_id
             )
-        ).order_by(rankings_table.c.date.asc())
+        ).where(
+            and_(
+                rankings_table.c.volume != None,
+                rankings_table.c.volume > 0
+            )
+        ).order_by(rankings_table.c.date.asc(), rankings_table.c.keyword_id.asc())
         
         rankings_result = db.execute(rankings_query)
         rankings_data = [dict(row._mapping) for row in rankings_result]
         
+        # Log raw rankings data for debugging
+        logger.info(f"[Rankings Over Time API] Client {client_id} - Fetched {len(rankings_data)} ranking records from database")
+        if rankings_data:
+            # Log sample of raw rankings
+            logger.info(f"[Rankings Over Time API] Sample raw rankings (first 10):")
+            for idx, ranking in enumerate(rankings_data[:10]):
+                logger.info(f"[Rankings Over Time API]   [{idx+1}] Date: {ranking.get('date')}, Google: {ranking.get('google_ranking')}, Bing: {ranking.get('bing_ranking')}")
+            
+            # Count by bucket from raw data (after volume filter)
+            filtered_rankings = [r for r in rankings_data if (r.get("volume", 0) or 0) > 0]
+            raw_not_found = sum(1 for r in filtered_rankings if r.get("google_ranking") is None or r.get("google_ranking") == 0)
+            raw_1_3 = sum(1 for r in filtered_rankings if r.get("google_ranking") and 1 <= r.get("google_ranking") <= 3)
+            raw_4_10 = sum(1 for r in filtered_rankings if r.get("google_ranking") and 4 <= r.get("google_ranking") <= 10)
+            raw_11_20 = sum(1 for r in filtered_rankings if r.get("google_ranking") and 11 <= r.get("google_ranking") <= 20)
+            raw_21_50 = sum(1 for r in filtered_rankings if r.get("google_ranking") and 21 <= r.get("google_ranking") <= 50)
+            raw_51_plus = sum(1 for r in filtered_rankings if r.get("google_ranking") and r.get("google_ranking") > 50)
+            logger.info(f"[Rankings Over Time API] Raw data bucket counts (after volume filter) - Not Found: {raw_not_found}, 1-3: {raw_1_3}, 4-10: {raw_4_10}, 11-20: {raw_11_20}, 21-50: {raw_21_50}, 51+: {raw_51_plus}")
+            logger.info(f"[Rankings Over Time API] Total records: {len(rankings_data)}, After volume filter: {len(filtered_rankings)}")
+        
         # Group by date and calculate position buckets
-        # Each ranking in rankings_data represents one keyword's latest ranking for that date
+        # Track unique keywords per date to ensure we don't double-count
+        # Each ranking in rankings_data represents one keyword's ranking on that date
         date_groups = {}
+        date_keyword_tracker = {}  # Track which keywords we've counted per date to avoid duplicates
+        
         for ranking in rankings_data:
             date_val = ranking.get("date")
-            if not date_val:
+            keyword_id = ranking.get("keyword_id")
+            if not date_val or not keyword_id:
                 continue
             
             # Convert date to string if it's a date object
@@ -7679,16 +7711,31 @@ async def get_client_keyword_rankings_over_time(
             else:  # day
                 date_key = date_str
             
+            # Initialize date group if needed
             if date_key not in date_groups:
                 date_groups[date_key] = {
                     "google": {"position_1_3": 0, "position_4_10": 0, "position_11_20": 0, "position_21_50": 0, "position_51_plus": 0, "not_found": 0},
                     "bing": {"position_1_3": 0, "position_4_10": 0, "position_11_20": 0, "position_21_50": 0, "position_51_plus": 0, "not_found": 0}
                 }
+                date_keyword_tracker[date_key] = set()  # Track unique keywords per date
+            
+            # Skip if we've already counted this keyword for this date (avoid duplicates)
+            if keyword_id in date_keyword_tracker[date_key]:
+                continue
+            
+            # Check volume filter (matches table filter: volume > 0)
+            volume = ranking.get("volume", 0) or 0
+            if volume <= 0:
+                continue  # Skip this ranking record if volume is 0 or null
+            
+            # Mark this keyword as counted for this date
+            date_keyword_tracker[date_key].add(keyword_id)
             
             # Process Google ranking
+            # Treat ranking 0 or None as not found
             if engine in ["google", "both"]:
                 google_rank = ranking.get("google_ranking")
-                if google_rank is None:
+                if google_rank is None or google_rank == 0:
                     date_groups[date_key]["google"]["not_found"] += 1
                 elif 1 <= google_rank <= 3:
                     date_groups[date_key]["google"]["position_1_3"] += 1
@@ -7698,13 +7745,15 @@ async def get_client_keyword_rankings_over_time(
                     date_groups[date_key]["google"]["position_11_20"] += 1
                 elif 21 <= google_rank <= 50:
                     date_groups[date_key]["google"]["position_21_50"] += 1
-                else:
+                elif google_rank > 50:
                     date_groups[date_key]["google"]["position_51_plus"] += 1
+                # else: skip invalid rankings
             
             # Process Bing ranking
+            # Treat ranking 0 or None as not found
             if engine in ["bing", "both"]:
                 bing_rank = ranking.get("bing_ranking")
-                if bing_rank is None:
+                if bing_rank is None or bing_rank == 0:
                     date_groups[date_key]["bing"]["not_found"] += 1
                 elif 1 <= bing_rank <= 3:
                     date_groups[date_key]["bing"]["position_1_3"] += 1
@@ -7714,8 +7763,9 @@ async def get_client_keyword_rankings_over_time(
                     date_groups[date_key]["bing"]["position_11_20"] += 1
                 elif 21 <= bing_rank <= 50:
                     date_groups[date_key]["bing"]["position_21_50"] += 1
-                else:
+                elif bing_rank > 50:
                     date_groups[date_key]["bing"]["position_51_plus"] += 1
+                # else: skip invalid rankings
         
         # Convert to list and calculate totals
         result_data = []
@@ -7737,6 +7787,23 @@ async def get_client_keyword_rankings_over_time(
                     "total": bing_total
                 }
             })
+        
+        # Log the result data for debugging
+        logger.info(f"[Rankings Over Time API] Client {client_id} - Returning {len(result_data)} date groups")
+        if result_data:
+            # Log summary statistics
+            total_not_found = sum(item["google"]["not_found"] for item in result_data)
+            total_1_3 = sum(item["google"]["position_1_3"] for item in result_data)
+            total_4_10 = sum(item["google"]["position_4_10"] for item in result_data)
+            total_11_20 = sum(item["google"]["position_11_20"] for item in result_data)
+            total_21_50 = sum(item["google"]["position_21_50"] for item in result_data)
+            total_51_plus = sum(item["google"]["position_51_plus"] for item in result_data)
+            logger.info(f"[Rankings Over Time API] Totals across all dates - Not Found: {total_not_found}, 1-3: {total_1_3}, 4-10: {total_4_10}, 11-20: {total_11_20}, 21-50: {total_21_50}, 51+: {total_51_plus}")
+            
+            # Log first 3 entries as sample
+            logger.info(f"[Rankings Over Time API] Sample data (first 3 entries):")
+            for item in result_data[:3]:
+                logger.info(f"[Rankings Over Time API]   Date: {item['date']}, Google buckets: {item['google']}")
         
         return {"data": result_data}
     except HTTPException:
