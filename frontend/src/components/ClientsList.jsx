@@ -44,7 +44,7 @@ import {
   Delete as DeleteIcon,
 } from '@mui/icons-material'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { clientAPI } from '../services/api'
+import { clientAPI, ga4API, dataAPI } from '../services/api'
 import { debugError } from '../utils/debug'
 import { queryKeys } from '../hooks/queryKeys'
 import ClientManagement from './ClientManagement'
@@ -68,6 +68,33 @@ function ClientsList() {
   const navigate = useNavigate()
   const theme = useTheme()
   const queryClient = useQueryClient()
+  const [availableGA4Properties, setAvailableGA4Properties] = useState([])
+  const [availableBrands, setAvailableBrands] = useState([])
+  
+  // Fetch GA4 properties and brands on component mount
+  useEffect(() => {
+    const loadGA4Properties = async () => {
+      try {
+        const ga4Response = await ga4API.getProperties()
+        setAvailableGA4Properties(ga4Response.items || [])
+      } catch (err) {
+        debugError('Error loading GA4 properties:', err)
+      }
+    }
+    
+    const loadBrands = async () => {
+      try {
+        const limit = 1000 // Load a large number to get all brands
+        const brandsResponse = await dataAPI.getBrands(limit, 0, '')
+        setAvailableBrands(brandsResponse.items || [])
+      } catch (err) {
+        debugError('Error loading brands:', err)
+      }
+    }
+    
+    loadGA4Properties()
+    loadBrands()
+  }, [])
   
   // Debounce search
   useEffect(() => {
@@ -113,14 +140,22 @@ function ClientsList() {
   // Helper function to get client stats (for display purposes)
   const getClientStats = (client) => {
     const campaigns = client.client_campaigns || []
-    const hasGA4 = !!client.ga4_property_id
-    const hasScrunch = !!client.scrunch_brand_id
+    
+    // Check if GA4 property ID exists in available GA4 properties
+    const hasGA4 = client.ga4_property_id && 
+                   availableGA4Properties.length > 0 &&
+                   availableGA4Properties.some(prop => prop.propertyId === client.ga4_property_id)
+    
+    // Check if Scrunch brand ID exists in available brands
+    const hasScrunch = client.scrunch_brand_id && 
+                       availableBrands.length > 0 &&
+                       availableBrands.some(brand => brand.id === client.scrunch_brand_id)
     
     return {
       campaignCount: campaigns.length,
-      hasGA4,
-      hasScrunch,
-      hasMappings: hasGA4 || hasScrunch
+      hasGA4: !!hasGA4,
+      hasScrunch: !!hasScrunch,
+      hasMappings: (!!hasGA4) || (!!hasScrunch)
     }
   }
   
@@ -140,6 +175,20 @@ function ClientsList() {
     setManagementOpen(false)
     setSelectedClient(null)
     queryClient.invalidateQueries({ queryKey: queryKeys.clients.all })
+    // Refresh GA4 properties and brands to ensure badges are up to date
+    const refreshIntegrations = async () => {
+      try {
+        const [ga4Response, brandsResponse] = await Promise.all([
+          ga4API.getProperties(),
+          dataAPI.getBrands(1000, 0, '')
+        ])
+        setAvailableGA4Properties(ga4Response.items || [])
+        setAvailableBrands(brandsResponse.items || [])
+      } catch (err) {
+        debugError('Error refreshing integrations:', err)
+      }
+    }
+    refreshIntegrations()
   }
 
   const handleRefresh = () => {
@@ -513,6 +562,16 @@ function ClientsList() {
               ) : clients.length > 0 ? (
                 clients.map((client) => {
                   const stats = getClientStats(client)
+                  
+                  // Explicitly check if integrations exist in available lists for rendering
+                  const hasGA4Configured = client.ga4_property_id && 
+                    availableGA4Properties.length > 0 &&
+                    availableGA4Properties.some(prop => prop.propertyId === client.ga4_property_id)
+                  
+                  const hasScrunchConfigured = client.scrunch_brand_id && 
+                    availableBrands.length > 0 &&
+                    availableBrands.some(brand => brand.id === client.scrunch_brand_id)
+                  
                   return (
                     <TableRow
                       key={client.id}
@@ -628,7 +687,7 @@ function ClientsList() {
                       </TableCell>
                       <TableCell>
                         <Box display="flex" gap={0.5} alignItems="center">
-                          {stats.hasGA4 && (
+                          {hasGA4Configured && (
                             <Tooltip title="GA4 Connected" arrow>
                               <Chip
                                 label="GA4"
@@ -639,7 +698,7 @@ function ClientsList() {
                               />
                             </Tooltip>
                           )}
-                          {stats.hasScrunch && (
+                          {hasScrunchConfigured && (
                             <Tooltip title="Scrunch Connected" arrow>
                               <Chip
                                 label="Scrunch"
@@ -650,7 +709,7 @@ function ClientsList() {
                               />
                             </Tooltip>
                           )}
-                          {!stats.hasMappings && (
+                          {!hasGA4Configured && !hasScrunchConfigured && (
                             <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
                               None
                             </Typography>
