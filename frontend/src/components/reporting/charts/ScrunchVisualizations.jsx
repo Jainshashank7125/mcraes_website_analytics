@@ -246,7 +246,7 @@ export default function ScrunchVisualizations({ brandId, startDate, endDate }) {
       })()}
 
       {/* Sentiment Distribution - Simple Card Display */}
-      {data.sentimentDistribution && (() => {
+      {data.sentimentDistribution && data.sentimentDistribution.length > 0 && (() => {
         // Find dominant sentiment category
         const dominantSentiment = data.sentimentDistribution.reduce((prev, current) => 
           (prev.value > current.value) ? prev : current
