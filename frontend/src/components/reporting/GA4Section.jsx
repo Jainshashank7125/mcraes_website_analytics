@@ -9,7 +9,7 @@ import {
 } from 'recharts'
 import { getMonthName, getChannelLabel, getChannelColor, formatValue, getSourceColor, getSourceLabel } from './utils'
 
-export default function GA4Section({ dashboardData, formatValue, getSourceColor, getSourceLabel, theme, getMonthName, getChannelLabel, getChannelColor }) {
+export default function GA4Section({ dashboardData, formatValue, getSourceColor, getSourceLabel, theme, getMonthName, getChannelLabel, getChannelColor, shouldShowChangePeriod }) {
   if (!dashboardData?.kpis?.users && !dashboardData?.chart_data?.ga4_traffic_overview) {
     return null
   }
@@ -44,31 +44,6 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
       >
         Website traffic and engagement metrics
       </Typography>
-
-            <>
-              <Typography 
-                variant="h5" 
-                fontWeight={700} 
-                sx={{ 
-                  mt: 5, 
-                  mb: 3,
-                  fontSize: '1.5rem',
-                  letterSpacing: '-0.02em',
-                  color: 'text.primary'
-                }}
-              >
-                Google Analytics 4
-              </Typography>
-              <Typography 
-                variant="body2" 
-                color="text.secondary"
-                sx={{ 
-                  mb: 3,
-                  fontSize: '0.875rem'
-                }}
-              >
-                Website traffic and engagement metrics
-              </Typography>
 
               {/* GA4 Charts and Visualizations */}
               <Box sx={{ mb: 4 }}>
@@ -170,16 +145,18 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                   dot={{ fill: theme.palette.primary.main, r: 5 }}
                                   activeDot={{ r: 7 }}
                                 />
-                                <Line 
-                                  type="monotone" 
-                                  dataKey="previous_users" 
-                                  name="Previous period"
-                                  stroke={theme.palette.grey[400]} 
-                                  strokeWidth={2.5}
-                                  strokeDasharray="5 5"
-                                  dot={{ fill: theme.palette.grey[400], r: 4 }}
-                                  activeDot={{ r: 6 }}
-                                />
+                                {shouldShowChangePeriod && shouldShowChangePeriod("ga4") && (
+                                  <Line 
+                                    type="monotone" 
+                                    dataKey="previous_users" 
+                                    name="Previous period"
+                                    stroke={theme.palette.grey[400]} 
+                                    strokeWidth={2.5}
+                                    strokeDasharray="5 5"
+                                    dot={{ fill: theme.palette.grey[400], r: 4 }}
+                                    activeDot={{ r: 6 }}
+                                  />
+                                )}
                               </LineChart>
                             </ResponsiveContainer>
                           </CardContent>
@@ -269,16 +246,18 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                   dot={{ fill: theme.palette.primary.main, r: 4 }}
                                   activeDot={{ r: 6 }}
                                 />
-                                <Line 
-                                  type="monotone" 
-                                  dataKey="previous_sessions" 
-                                  name="Previous period"
-                                  stroke={theme.palette.grey[400]} 
-                                  strokeWidth={2.5}
-                                  strokeDasharray="5 5"
-                                  dot={{ fill: theme.palette.grey[400], r: 3 }}
-                                  activeDot={{ r: 5 }}
-                                />
+                                {shouldShowChangePeriod && shouldShowChangePeriod("ga4") && (
+                                  <Line 
+                                    type="monotone" 
+                                    dataKey="previous_sessions" 
+                                    name="Previous period"
+                                    stroke={theme.palette.grey[400]} 
+                                    strokeWidth={2.5}
+                                    strokeDasharray="5 5"
+                                    dot={{ fill: theme.palette.grey[400], r: 3 }}
+                                    activeDot={{ r: 5 }}
+                                  />
+                                )}
                               </LineChart>
                             </ResponsiveContainer>
                           </CardContent>
@@ -367,16 +346,18 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                   dot={{ fill: theme.palette.success.main, r: 4 }}
                                   activeDot={{ r: 6 }}
                                 />
-                                <Line 
-                                  type="monotone" 
-                                  dataKey="previous_new_users" 
-                                  name="Previous period"
-                                  stroke={theme.palette.grey[400]} 
-                                  strokeWidth={2.5}
-                                  strokeDasharray="5 5"
-                                  dot={{ fill: theme.palette.grey[400], r: 3 }}
-                                  activeDot={{ r: 5 }}
-                                />
+                                {shouldShowChangePeriod && shouldShowChangePeriod("ga4") && (
+                                  <Line 
+                                    type="monotone" 
+                                    dataKey="previous_new_users" 
+                                    name="Previous period"
+                                    stroke={theme.palette.grey[400]} 
+                                    strokeWidth={2.5}
+                                    strokeDasharray="5 5"
+                                    dot={{ fill: theme.palette.grey[400], r: 3 }}
+                                    activeDot={{ r: 5 }}
+                                  />
+                                )}
                               </LineChart>
                             </ResponsiveContainer>
                           </CardContent>
@@ -466,16 +447,18 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                     dot={{ fill: theme.palette.warning.main, r: 4 }}
                                     activeDot={{ r: 6 }}
                                   />
-                                  <Line 
-                                    type="monotone" 
-                                    dataKey="previous_conversions" 
-                                    name="Previous period"
-                                    stroke={theme.palette.grey[400]} 
-                                    strokeWidth={2.5}
-                                    strokeDasharray="5 5"
-                                    dot={{ fill: theme.palette.grey[400], r: 3 }}
-                                    activeDot={{ r: 5 }}
-                                  />
+                                  {shouldShowChangePeriod && shouldShowChangePeriod("ga4") && (
+                                    <Line 
+                                      type="monotone" 
+                                      dataKey="previous_conversions" 
+                                      name="Previous period"
+                                      stroke={theme.palette.grey[400]} 
+                                      strokeWidth={2.5}
+                                      strokeDasharray="5 5"
+                                      dot={{ fill: theme.palette.grey[400], r: 3 }}
+                                      activeDot={{ r: 5 }}
+                                    />
+                                  )}
                                 </LineChart>
                               </ResponsiveContainer>
                             </CardContent>
@@ -568,16 +551,18 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                     dot={{ fill: theme.palette.success.main, r: 4 }}
                                     activeDot={{ r: 6 }}
                                   />
-                                  <Line 
-                                    type="monotone" 
-                                    dataKey="previous_revenue" 
-                                    name="Previous period"
-                                    stroke={theme.palette.grey[400]} 
-                                    strokeWidth={2.5}
-                                    strokeDasharray="5 5"
-                                    dot={{ fill: theme.palette.grey[400], r: 3 }}
-                                    activeDot={{ r: 5 }}
-                                  />
+                                  {shouldShowChangePeriod && shouldShowChangePeriod("ga4") && (
+                                    <Line 
+                                      type="monotone" 
+                                      dataKey="previous_revenue" 
+                                      name="Previous period"
+                                      stroke={theme.palette.grey[400]} 
+                                      strokeWidth={2.5}
+                                      strokeDasharray="5 5"
+                                      dot={{ fill: theme.palette.grey[400], r: 3 }}
+                                      activeDot={{ r: 5 }}
+                                    />
+                                  )}
                                 </LineChart>
                               </ResponsiveContainer>
                             </CardContent>
@@ -1643,16 +1628,18 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                   dot={{ fill: theme.palette.primary.main, r: 5 }}
                                   activeDot={{ r: 7 }}
                                 />
-                                <Line 
-                                  type="monotone" 
-                                  dataKey="previous_users" 
-                                  name="Previous period"
-                                  stroke={theme.palette.grey[400]} 
-                                  strokeWidth={2.5}
-                                  strokeDasharray="5 5"
-                                  dot={{ fill: theme.palette.grey[400], r: 4 }}
-                                  activeDot={{ r: 6 }}
-                                />
+                                {shouldShowChangePeriod && shouldShowChangePeriod("ga4") && (
+                                  <Line 
+                                    type="monotone" 
+                                    dataKey="previous_users" 
+                                    name="Previous period"
+                                    stroke={theme.palette.grey[400]} 
+                                    strokeWidth={2.5}
+                                    strokeDasharray="5 5"
+                                    dot={{ fill: theme.palette.grey[400], r: 4 }}
+                                    activeDot={{ r: 6 }}
+                                  />
+                                )}
                               </LineChart>
                             </ResponsiveContainer>
                           </CardContent>
@@ -1741,16 +1728,18 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                   dot={{ fill: theme.palette.primary.main, r: 4 }}
                                   activeDot={{ r: 6 }}
                                 />
-                                <Line 
-                                  type="monotone" 
-                                  dataKey="previous_sessions" 
-                                  name="Previous period"
-                                  stroke={theme.palette.grey[400]} 
-                                  strokeWidth={2.5}
-                                  strokeDasharray="5 5"
-                                  dot={{ fill: theme.palette.grey[400], r: 3 }}
-                                  activeDot={{ r: 5 }}
-                                />
+                                {shouldShowChangePeriod && shouldShowChangePeriod("ga4") && (
+                                  <Line 
+                                    type="monotone" 
+                                    dataKey="previous_sessions" 
+                                    name="Previous period"
+                                    stroke={theme.palette.grey[400]} 
+                                    strokeWidth={2.5}
+                                    strokeDasharray="5 5"
+                                    dot={{ fill: theme.palette.grey[400], r: 3 }}
+                                    activeDot={{ r: 5 }}
+                                  />
+                                )}
                               </LineChart>
                             </ResponsiveContainer>
                           </CardContent>
@@ -1839,16 +1828,18 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                   dot={{ fill: theme.palette.success.main, r: 4 }}
                                   activeDot={{ r: 6 }}
                                 />
-                                <Line 
-                                  type="monotone" 
-                                  dataKey="previous_new_users" 
-                                  name="Previous period"
-                                  stroke={theme.palette.grey[400]} 
-                                  strokeWidth={2.5}
-                                  strokeDasharray="5 5"
-                                  dot={{ fill: theme.palette.grey[400], r: 3 }}
-                                  activeDot={{ r: 5 }}
-                                />
+                                {shouldShowChangePeriod && shouldShowChangePeriod("ga4") && (
+                                  <Line 
+                                    type="monotone" 
+                                    dataKey="previous_new_users" 
+                                    name="Previous period"
+                                    stroke={theme.palette.grey[400]} 
+                                    strokeWidth={2.5}
+                                    strokeDasharray="5 5"
+                                    dot={{ fill: theme.palette.grey[400], r: 3 }}
+                                    activeDot={{ r: 5 }}
+                                  />
+                                )}
                               </LineChart>
                             </ResponsiveContainer>
                           </CardContent>
@@ -1930,15 +1921,17 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                     strokeWidth={2.5}
                                     dot={{ fill: theme.palette.warning.main, r: 3 }}
                                   />
-                                  <Line 
-                                    type="monotone" 
-                                    dataKey="previous_conversions" 
-                                    name="Previous period"
-                                    stroke={theme.palette.grey[400]} 
-                                    strokeWidth={2}
-                                    strokeDasharray="5 5"
-                                    dot={{ fill: theme.palette.grey[400], r: 2 }}
-                                  />
+                                    {shouldShowChangePeriod && shouldShowChangePeriod("ga4") && (
+                                      <Line 
+                                        type="monotone" 
+                                        dataKey="previous_conversions" 
+                                        name="Previous period"
+                                        stroke={theme.palette.grey[400]} 
+                                        strokeWidth={2}
+                                        strokeDasharray="5 5"
+                                        dot={{ fill: theme.palette.grey[400], r: 2 }}
+                                      />
+                                    )}
                                 </LineChart>
                               </ResponsiveContainer>
                             </CardContent>
@@ -2023,15 +2016,17 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                     strokeWidth={2.5}
                                     dot={{ fill: theme.palette.success.main, r: 3 }}
                                   />
-                                  <Line 
-                                    type="monotone" 
-                                    dataKey="previous_revenue" 
-                                    name="Previous period"
-                                    stroke={theme.palette.grey[400]} 
-                                    strokeWidth={2}
-                                    strokeDasharray="5 5"
-                                    dot={{ fill: theme.palette.grey[400], r: 2 }}
-                                  />
+                                    {shouldShowChangePeriod && shouldShowChangePeriod("ga4") && (
+                                      <Line 
+                                        type="monotone" 
+                                        dataKey="previous_revenue" 
+                                        name="Previous period"
+                                        stroke={theme.palette.grey[400]} 
+                                        strokeWidth={2}
+                                        strokeDasharray="5 5"
+                                        dot={{ fill: theme.palette.grey[400], r: 2 }}
+                                      />
+                                    )}
                                 </LineChart>
                               </ResponsiveContainer>
                             </CardContent>

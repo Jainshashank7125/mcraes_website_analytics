@@ -5037,13 +5037,13 @@ function ReportingDashboard({
                                     color: CHART_COLORS.comparison.current,
                                     strokeWidth: 3,
                                   },
-                                  {
+                                  ...(shouldShowChangePeriod("ga4") ? [{
                                     dataKey: "previous_users",
                                     name: "Previous period",
                                     color: CHART_COLORS.comparison.previous,
                                     strokeWidth: 2.5,
                                     strokeDasharray: "5 5",
-                                  },
+                                  }] : []),
                                 ]}
                                 xAxisFormatter={formatDateForAxis}
                                 formatter={(value) => [
@@ -5088,13 +5088,13 @@ function ReportingDashboard({
                                     color: CHART_COLORS.comparison.current,
                                     strokeWidth: 3,
                                   },
-                                  {
+                                  ...(shouldShowChangePeriod("ga4") ? [{
                                     dataKey: "previous_sessions",
                                     name: "Previous period",
                                     color: CHART_COLORS.comparison.previous,
                                     strokeWidth: 2.5,
                                     strokeDasharray: "5 5",
-                                  },
+                                  }] : []),
                                 ]}
                                 xAxisFormatter={formatDateForAxis}
                                 formatter={(value) => [
@@ -5139,13 +5139,13 @@ function ReportingDashboard({
                                     color: CHART_COLORS.success,
                                     strokeWidth: 3,
                                   },
-                                  {
+                                  ...(shouldShowChangePeriod("ga4") ? [{
                                     dataKey: "previous_new_users",
                                     name: "Previous period",
                                     color: CHART_COLORS.comparison.previous,
                                     strokeWidth: 2.5,
                                     strokeDasharray: "5 5",
-                                  },
+                                  }] : []),
                                 ]}
                                 xAxisFormatter={formatDateForAxis}
                                 formatter={(value) => [
@@ -5195,13 +5195,13 @@ function ReportingDashboard({
                                       color: CHART_COLORS.warning,
                                       strokeWidth: 2.5,
                                     },
-                                    {
+                                    ...(shouldShowChangePeriod("ga4") ? [{
                                       dataKey: "previous_conversions",
                                       name: "Previous period",
                                       color: CHART_COLORS.comparison.previous,
                                       strokeWidth: 2,
                                       strokeDasharray: "5 5",
-                                    },
+                                    }] : []),
                                   ]}
                                   xAxisFormatter={(value) => {
                                     if (value && value.length === 8) {

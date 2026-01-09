@@ -18,6 +18,7 @@ export default function DashboardContent({
   getMonthName,
   getChannelLabel,
   getChannelColor,
+  shouldShowChangePeriod,
 }) {
   if (loading) {
     return (
@@ -47,6 +48,7 @@ export default function DashboardContent({
         getMonthName={getMonthName}
         getChannelLabel={getChannelLabel}
         getChannelColor={getChannelColor}
+        shouldShowChangePeriod={shouldShowChangePeriod}
       />
 
       {/* Scrunch AI Section */}

@@ -374,16 +374,19 @@ async def sync_ga4_background(
                     logger.info(f"[Job {job_id}] Job cancelled before syncing client {client_name}")
                     return
                 
-                # Calculate date ranges for 30-day periods
-                # Current period: last 30 days from today
+                # Calculate date ranges using actual start_date and end_date
+                # Current period: use the provided start_date and end_date
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
                 end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-                start_dt = end_dt - timedelta(days=29)  # 30 days inclusive
-                period_start_date = start_dt.strftime("%Y-%m-%d")
+                period_start_date = start_date
                 period_end_date = end_date
                 
-                # Previous period: 30 days before current period
+                # Calculate period duration
+                period_duration = (end_dt - start_dt).days + 1
+                
+                # Previous period: same duration, ending the day before current period starts
                 prev_period_end_dt = start_dt - timedelta(days=1)
-                prev_period_start_dt = prev_period_end_dt - timedelta(days=29)
+                prev_period_start_dt = start_dt - timedelta(days=period_duration)
                 prev_period_start_date = prev_period_start_dt.strftime("%Y-%m-%d")
                 prev_period_end_date = prev_period_end_dt.strftime("%Y-%m-%d")
                 
