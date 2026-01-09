@@ -585,29 +585,33 @@ function ClientManagement({ open, onClose, client }) {
               <Grid container spacing={2} mb={2}>
                 <Grid item xs={12}>
                   <Autocomplete
-                    freeSolo
                     options={availableGA4Properties}
                     getOptionLabel={(option) => {
-                      if (typeof option === 'string') return option
                       return option.propertyDisplayName 
                         ? `${option.propertyDisplayName} (${option.propertyId})`
                         : option.propertyId || ''
                     }}
-                    value={ga4PropertyId ? (availableGA4Properties.find(p => p.propertyId === ga4PropertyId) || ga4PropertyId) : null}
+                    value={ga4PropertyId ? availableGA4Properties.find(p => p.propertyId === ga4PropertyId) : null}
                     onChange={(event, newValue) => {
-                      // Handle both object selection and string input
-                      if (typeof newValue === 'string') {
-                        setGa4PropertyId(newValue)
-                      } else if (newValue && newValue.propertyId) {
+                      // Only allow selection from dropdown options
+                      if (newValue && newValue.propertyId) {
                         setGa4PropertyId(newValue.propertyId)
                       } else {
                         setGa4PropertyId('')
                       }
                     }}
-                    onInputChange={(event, newInputValue, reason) => {
-                      // Allow free text input when user types
-                      if (reason === 'input') {
-                        setGa4PropertyId(newInputValue)
+                    onClose={(event, reason) => {
+                      // Validate value when dropdown closes
+                      // Only validate if properties are loaded and value exists
+                      // Don't clear if properties are still loading (might be a race condition)
+                      if (
+                        !ga4PropertiesLoading && 
+                        availableGA4Properties.length > 0 &&
+                        ga4PropertyId && 
+                        !availableGA4Properties.find(p => p.propertyId === ga4PropertyId)
+                      ) {
+                        // Value is not in available options, clear it
+                        setGa4PropertyId('')
                       }
                     }}
                     disabled={ga4PropertiesLoading || saving}
@@ -615,8 +619,8 @@ function ClientManagement({ open, onClose, client }) {
                       <TextField
                         {...params}
                         label="GA4 Property ID"
-                        placeholder="Select from list or type property ID"
-                        helperText="You can select from available properties or enter a custom property ID"
+                        placeholder="Select from available properties"
+                        helperText="Please select a property from the dropdown list"
                       />
                     )}
                     renderOption={(props, option) => (
