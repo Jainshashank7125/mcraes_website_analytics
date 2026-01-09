@@ -2558,15 +2558,30 @@ async def get_reporting_dashboard(
                     # Combine current and previous period data
                     if daily_metrics:
                         ga4_daily_comparison = []
-                        prev_data_list = sorted(prev_daily_metrics.items())
+                        # Convert prev_daily_metrics to a dict for O(1) lookup by date string
+                        prev_data_dict = {date_str: data for date_str, data in prev_daily_metrics.items()}
                         current_dates = sorted(daily_metrics.keys())
-                        logger.info(f"[GA4 DAILY DATA] Building ga4_daily_comparison with {len(current_dates)} current dates and {len(prev_data_list)} previous period dates")
                         
-                        for idx, date_str in enumerate(current_dates):
+                        # Calculate the date offset between current and previous periods
+                        # Previous period ends the day before current period starts
+                        current_start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                        prev_end_dt = current_start_dt - timedelta(days=1)
+                        period_duration = (end_dt - start_dt).days + 1
+                        date_offset_days = period_duration  # Days to go back to find corresponding previous date
+                        
+                        logger.info(f"[GA4 DAILY DATA] Building ga4_daily_comparison with {len(current_dates)} current dates and {len(prev_data_dict)} previous period dates")
+                        logger.info(f"[GA4 DAILY DATA] Date offset: {date_offset_days} days (current date - {date_offset_days} days = previous period date)")
+                        
+                        for date_str in current_dates:
                             current = daily_metrics[date_str]
-                            # Get corresponding previous period data by index
-                            prev_idx = idx if idx < len(prev_data_list) else len(prev_data_list) - 1
-                            previous = prev_data_list[prev_idx][1] if prev_data_list else {}
+                            
+                            # Calculate the corresponding previous period date for this current date
+                            current_date_dt = datetime.strptime(date_str, "%Y-%m-%d")
+                            prev_date_dt = current_date_dt - timedelta(days=date_offset_days)
+                            prev_date_str = prev_date_dt.strftime("%Y-%m-%d")
+                            
+                            # Look up the previous period data for this specific date
+                            previous = prev_data_dict.get(prev_date_str, {})
                             
                             comparison_entry = {
                                 "date": current["date"],  # Already in YYYYMMDD format
@@ -2584,8 +2599,8 @@ async def get_reporting_dashboard(
                             ga4_daily_comparison.append(comparison_entry)
                             
                             # Log first few entries and any entries with data for debugging
-                            if idx < 3 or current["users"] > 0 or current["sessions"] > 0:
-                                logger.debug(f"[GA4 DAILY DATA] Comparison entry for {date_str} ({current['date']}): current_users={current['users']}, current_sessions={current['sessions']}, current_new_users={current['new_users']}")
+                            if len(ga4_daily_comparison) <= 3 or current["users"] > 0 or current["sessions"] > 0:
+                                logger.debug(f"[GA4 DAILY DATA] Comparison entry for {date_str} ({current['date']}): current_users={current['users']}, previous_date={prev_date_str}, previous_users={previous.get('users', 0)}")
                         
                         chart_data["ga4_daily_comparison"] = ga4_daily_comparison
                         logger.info(f"[GA4 DAILY DATA] Created ga4_daily_comparison with {len(ga4_daily_comparison)} entries")
@@ -3494,15 +3509,30 @@ async def get_reporting_dashboard(
                     # Combine current and previous period data
                     if daily_metrics:
                         ga4_daily_comparison = []
-                        prev_data_list = sorted(prev_daily_metrics.items())
+                        # Convert prev_daily_metrics to a dict for O(1) lookup by date string
+                        prev_data_dict = {date_str: data for date_str, data in prev_daily_metrics.items()}
                         current_dates = sorted(daily_metrics.keys())
-                        logger.info(f"[GA4 DAILY DATA] Building ga4_daily_comparison with {len(current_dates)} current dates and {len(prev_data_list)} previous period dates")
                         
-                        for idx, date_str in enumerate(current_dates):
+                        # Calculate the date offset between current and previous periods
+                        # Previous period ends the day before current period starts
+                        current_start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                        prev_end_dt = current_start_dt - timedelta(days=1)
+                        period_duration = (end_dt - start_dt).days + 1
+                        date_offset_days = period_duration  # Days to go back to find corresponding previous date
+                        
+                        logger.info(f"[GA4 DAILY DATA] Building ga4_daily_comparison with {len(current_dates)} current dates and {len(prev_data_dict)} previous period dates")
+                        logger.info(f"[GA4 DAILY DATA] Date offset: {date_offset_days} days (current date - {date_offset_days} days = previous period date)")
+                        
+                        for date_str in current_dates:
                             current = daily_metrics[date_str]
-                            # Get corresponding previous period data by index
-                            prev_idx = idx if idx < len(prev_data_list) else len(prev_data_list) - 1
-                            previous = prev_data_list[prev_idx][1] if prev_data_list else {}
+                            
+                            # Calculate the corresponding previous period date for this current date
+                            current_date_dt = datetime.strptime(date_str, "%Y-%m-%d")
+                            prev_date_dt = current_date_dt - timedelta(days=date_offset_days)
+                            prev_date_str = prev_date_dt.strftime("%Y-%m-%d")
+                            
+                            # Look up the previous period data for this specific date
+                            previous = prev_data_dict.get(prev_date_str, {})
                             
                             comparison_entry = {
                                 "date": current["date"],  # Already in YYYYMMDD format
@@ -3520,8 +3550,8 @@ async def get_reporting_dashboard(
                             ga4_daily_comparison.append(comparison_entry)
                             
                             # Log first few entries and any entries with data for debugging
-                            if idx < 3 or current["users"] > 0 or current["sessions"] > 0:
-                                logger.debug(f"[GA4 DAILY DATA] Comparison entry for {date_str} ({current['date']}): current_users={current['users']}, current_sessions={current['sessions']}, current_new_users={current['new_users']}")
+                            if len(ga4_daily_comparison) <= 3 or current["users"] > 0 or current["sessions"] > 0:
+                                logger.debug(f"[GA4 DAILY DATA] Comparison entry for {date_str} ({current['date']}): current_users={current['users']}, previous_date={prev_date_str}, previous_users={previous.get('users', 0)}")
                         
                         chart_data["ga4_daily_comparison"] = ga4_daily_comparison
                         logger.info(f"[GA4 DAILY DATA] Created ga4_daily_comparison with {len(ga4_daily_comparison)} entries")
