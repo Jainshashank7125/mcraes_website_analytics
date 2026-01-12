@@ -981,7 +981,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                               color="text.secondary"
                               sx={{ fontSize: '0.875rem', fontWeight: 500 }}
                             >
-                              Total users
+                              Active Users
                             </Typography>
                             <IconButton size="small" sx={{ p: 0.5 }}>
                               <TrendingUpIcon sx={{ fontSize: 16, color: 'text.secondary' }} />

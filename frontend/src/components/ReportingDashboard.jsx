@@ -3624,7 +3624,7 @@ function ReportingDashboard({
                                           fontWeight: 500,
                                         }}
                                       >
-                                        Total users
+                                        Active Users
                                       </Typography>
                                           <IconButton
                                             size="small"
@@ -5035,10 +5035,10 @@ function ReportingDashboard({
                     isChartVisible("ga4_daily_comparison") && (
                       <Box sx={{ mt: 4, mb: 4 }}>
                         <Grid container spacing={3}>
-                          {/* Total Users Chart - Full Width (Primary Chart) */}
+                          {/* Active Users Chart - Full Width (Primary Chart) */}
                           <Grid item xs={12}>
                             <ChartCard
-                              title="Total Users"
+                              title="Active Users"
                               badge={getBadgeLabel("GA4")}
                               badgeColor={CHART_COLORS.ga4.primary}
                               height={500}
