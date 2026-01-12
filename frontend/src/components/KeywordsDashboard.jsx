@@ -47,12 +47,19 @@ import StackedBarChart from "./reporting/charts/StackedBarChart";
 import ChartCard from "./reporting/ChartCard";
 import { formatDateForAxis } from "./reporting/hooks/useChartData";
 
-export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: propStartDate, endDate: propEndDate }) {
+export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: propStartDate, endDate: propEndDate, isChartVisible }) {
   const theme = useTheme();
   const selectedKPISet = selectedKPIs instanceof Set ? selectedKPIs : new Set(selectedKPIs || []);
   const showKPI = (key) => {
     if (!selectedKPISet || selectedKPISet.size === 0) return true;
     return selectedKPISet.has(key);
+  };
+  
+  // Helper to check if a chart should be visible
+  // If isChartVisible is not provided, show all charts by default
+  const shouldShowChart = (chartKey) => {
+    if (!isChartVisible) return true;
+    return isChartVisible(chartKey);
   };
   
   // Return early if no clientId
@@ -548,6 +555,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
       </Grid>
       
       {/* Google Rankings Chart */}
+      {shouldShowChart("keyword_rankings_chart") && (
       <Card sx={{ mb: 3, border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
         <CardContent>
           <Typography variant="h6" fontWeight={600} mb={2}>
@@ -570,6 +578,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
           )}
         </CardContent>
       </Card>
+      )}
       
       {/* Filters and Search */}
       <Box display="flex" gap={2} mb={2} flexWrap="wrap">
@@ -623,6 +632,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
       </Box>
       
       {/* Keywords Table */}
+      {shouldShowChart("keyword_table") && (
       <Card sx={{ border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
         <CardContent>
           {keywordsLoading ? (
@@ -746,6 +756,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
           )}
         </CardContent>
       </Card>
+      )}
       
       {/* Filter Dialog */}
       <Dialog
