@@ -376,7 +376,7 @@ export default function BrandAnalyticsSection({ brandAnalytics, theme }) {
                               color="text.secondary"
                               sx={{ fontSize: '0.875rem', fontWeight: 500 }}
                             >
-                              Active users
+                              Total users
                             </Typography>
                             <IconButton size="small" sx={{ p: 0.5 }}>
                               <TrendingUpIcon sx={{ fontSize: 16, color: 'text.secondary' }} />

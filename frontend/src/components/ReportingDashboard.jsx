@@ -2087,8 +2087,8 @@ function ReportingDashboard({
           },
           {
             key: "ga4_sessions_by_channel",
-            label: "Sessions by Channel",
-            description: "Horizontal bar chart showing sessions by channel",
+            label: "Sessions by Source",
+            description: "Horizontal bar chart showing sessions by source",
           },
           {
             key: "ga4_top_pages",
@@ -3624,7 +3624,7 @@ function ReportingDashboard({
                                           fontWeight: 500,
                                         }}
                                       >
-                                        Active users
+                                        Total users
                                       </Typography>
                                           <IconButton
                                             size="small"
@@ -5035,10 +5035,10 @@ function ReportingDashboard({
                     isChartVisible("ga4_daily_comparison") && (
                       <Box sx={{ mt: 4, mb: 4 }}>
                         <Grid container spacing={3}>
-                          {/* Active Users Chart - Full Width (Primary Chart) */}
+                          {/* Total Users Chart - Full Width (Primary Chart) */}
                           <Grid item xs={12}>
                             <ChartCard
-                              title="Active Users"
+                              title="Total Users"
                               badge={getBadgeLabel("GA4")}
                               badgeColor={CHART_COLORS.ga4.primary}
                               height={500}
@@ -5298,7 +5298,7 @@ function ReportingDashboard({
                       </Box>
                     )}
 
-                  {/* Sessions by Channel - Donut Chart & Bar Chart */}
+                  {/* Sessions by Source - Donut Chart & Bar Chart */}
                   {dashboardData.chart_data?.traffic_sources &&
                     dashboardData.chart_data.traffic_sources.length > 0 && (
                       <Grid container spacing={3} sx={{ mb: 4 }}>
@@ -5447,7 +5447,7 @@ function ReportingDashboard({
                                     letterSpacing: "-0.01em",
                                   }}
                                 >
-                                  Sessions by Channel
+                                  Sessions by Source
                                 </Typography>
                                     <ResponsiveContainer
                                       width="100%"
@@ -5513,7 +5513,7 @@ function ReportingDashboard({
                       </Grid>
                     )}
 
-                  {/* Stacked Bar Chart - Sessions vs Users by Channel */}
+                  {/* Stacked Bar Chart - Sessions vs Users by Source */}
                   {dashboardData.chart_data?.traffic_sources &&
                     dashboardData.chart_data.traffic_sources.length > 0 && isChartVisible("ga4_channel_performance") && (
                       <motion.div
@@ -5539,7 +5539,7 @@ function ReportingDashboard({
                                 letterSpacing: "-0.01em",
                               }}
                             >
-                              Sessions vs Users by Channel
+                              Sessions vs Users by Source
                             </Typography>
                             <ResponsiveContainer width="100%" height={350}>
                               <BarChart

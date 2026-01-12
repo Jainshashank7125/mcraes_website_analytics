@@ -1353,7 +1353,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
                 </Card>
               )}
 
-              {/* Sessions by Channel */}
+              {/* Sessions by Source */}
               {ga4Data.analytics.trafficSources && ga4Data.analytics.trafficSources.length > 0 && (
                 <Card sx={{ mb: 3 }}>
                   <CardContent sx={{ p: 3 }}>
@@ -1363,7 +1363,7 @@ function BrandAnalyticsDetail({ brandId, brand, onBack }) {
                       fontWeight={600}
                       sx={{ fontSize: '18px', letterSpacing: '-0.01em' }}
                     >
-                      Sessions by Channel
+                      Sessions by Source
                     </Typography>
                     <Typography 
                       variant="body2" 
