@@ -633,7 +633,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                   </motion.div>
                 )}
 
-                {/* Sessions by Channel - Donut Chart & Bar Chart */}
+                {/* Sessions by Source - Donut Chart & Bar Chart */}
                 {dashboardData.chart_data?.traffic_sources && dashboardData.chart_data.traffic_sources.length > 0 && (
                   <Grid container spacing={3} sx={{ mb: 3 }}>
                     {/* Donut Chart */}
@@ -716,7 +716,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                               fontWeight={600}
                               sx={{ fontSize: '1.125rem', letterSpacing: '-0.01em' }}
                             >
-                              Sessions by Channel
+                              Sessions by Source
                             </Typography>
                             <ResponsiveContainer width="100%" height={300}>
                               <BarChart
@@ -758,7 +758,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                   </Grid>
                 )}
 
-                {/* Stacked Bar Chart - Sessions vs Users by Channel */}
+                {/* Stacked Bar Chart - Sessions vs Users by Source */}
                 {dashboardData.chart_data?.traffic_sources && dashboardData.chart_data.traffic_sources.length > 0 && (
                   <motion.div
                     initial={{ opacity: 0, y: 20 }}
@@ -773,7 +773,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                           fontWeight={600}
                           sx={{ fontSize: '1.125rem', letterSpacing: '-0.01em' }}
                         >
-                          Sessions vs Users by Channel
+                          Sessions vs Users by Source
                         </Typography>
                         <ResponsiveContainer width="100%" height={350}>
                           <BarChart
@@ -981,7 +981,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                               color="text.secondary"
                               sx={{ fontSize: '0.875rem', fontWeight: 500 }}
                             >
-                              Active users
+                              Total users
                             </Typography>
                             <IconButton size="small" sx={{ p: 0.5 }}>
                               <TrendingUpIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
@@ -2098,7 +2098,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                 </motion.div>
               )}
 
-              {/* Sessions by Channel - Donut Chart & Bar Chart */}
+              {/* Sessions by Source - Donut Chart & Bar Chart */}
               {dashboardData.chart_data?.traffic_sources && dashboardData.chart_data.traffic_sources.length > 0 && (
                 <Grid container spacing={3} sx={{ mb: 3 }}>
                   {/* Donut Chart */}
@@ -2181,7 +2181,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                             fontWeight={600}
                             sx={{ fontSize: '1.125rem', letterSpacing: '-0.01em' }}
                           >
-                            Sessions by Channel
+                            Sessions by Source
                           </Typography>
                           <ResponsiveContainer width="100%" height={300}>
                             <BarChart
@@ -2223,7 +2223,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                 </Grid>
               )}
 
-              {/* Stacked Bar Chart - Sessions vs Users by Channel */}
+              {/* Stacked Bar Chart - Sessions vs Users by Source */}
               {dashboardData.chart_data?.traffic_sources && dashboardData.chart_data.traffic_sources.length > 0 && (
                 <motion.div
                   initial={{ opacity: 0, y: 20 }}
@@ -2238,7 +2238,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                         fontWeight={600}
                         sx={{ fontSize: '1.125rem', letterSpacing: '-0.01em' }}
                       >
-                        Sessions vs Users by Channel
+                        Sessions vs Users by Source
                       </Typography>
                       <ResponsiveContainer width="100%" height={350}>
                         <BarChart
