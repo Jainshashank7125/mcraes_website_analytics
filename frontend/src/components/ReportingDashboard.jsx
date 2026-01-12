@@ -2081,9 +2081,14 @@ function ReportingDashboard({
             description: "Traffic by marketing channel",
           },
           {
-            key: "ga4_traffic_sources",
-            label: "Traffic Sources",
-            description: "Sessions by channel (donut and bar charts)",
+            key: "ga4_traffic_sources_distribution",
+            label: "Traffic Sources Distribution",
+            description: "Donut chart showing traffic sources",
+          },
+          {
+            key: "ga4_sessions_by_channel",
+            label: "Sessions by Channel",
+            description: "Horizontal bar chart showing sessions by channel",
           },
           {
             key: "ga4_top_pages",
@@ -2091,9 +2096,19 @@ function ReportingDashboard({
             description: "Most visited pages",
           },
           {
-            key: "ga4_geographic_breakdown",
+            key: "ga4_geographic_distribution",
             label: "Geographic Distribution",
-            description: "Traffic by country",
+            description: "Bar chart showing traffic by country",
+          },
+          {
+            key: "ga4_top_countries",
+            label: "Top Countries",
+            description: "Pie chart showing top countries",
+          },
+          {
+            key: "bounce_rate_donut",
+            label: "Bounce Rate Donut",
+            description: "Bounce rate visualization",
           },
         ];
       case "agency_analytics":
@@ -2138,6 +2153,11 @@ function ReportingDashboard({
             key: "scrunch_visualizations",
             label: "Advanced Query Visualizations",
             description: "Query API-based visualizations",
+          },
+          {
+            key: "brand_presence_rate_donut",
+            label: "Brand Presence Rate Donut",
+            description: "Brand presence rate visualization",
           },
         ];
       case "brand_analytics":
@@ -5280,10 +5300,10 @@ function ReportingDashboard({
 
                   {/* Sessions by Channel - Donut Chart & Bar Chart */}
                   {dashboardData.chart_data?.traffic_sources &&
-                    dashboardData.chart_data.traffic_sources.length > 0 &&
-                    isChartVisible("ga4_traffic_sources") && (
+                    dashboardData.chart_data.traffic_sources.length > 0 && (
                       <Grid container spacing={3} sx={{ mb: 4 }}>
                         {/* Donut Chart */}
+                        {isChartVisible("ga4_traffic_sources_distribution") && (
                         <Grid item xs={12} md={6}>
                           <motion.div
                             initial={{ opacity: 0, y: 20 }}
@@ -5399,8 +5419,10 @@ function ReportingDashboard({
                             </Card>
                           </motion.div>
                         </Grid>
+                        )}
 
                         {/* Horizontal Bar Chart */}
+                        {isChartVisible("ga4_sessions_by_channel") && (
                         <Grid item xs={12} md={6}>
                           <motion.div
                             initial={{ opacity: 0, y: 20 }}
@@ -5487,6 +5509,7 @@ function ReportingDashboard({
                             </Card>
                           </motion.div>
                         </Grid>
+                        )}
                       </Grid>
                     )}
 
@@ -5585,10 +5608,10 @@ function ReportingDashboard({
                   {/* Geographic Breakdown - Bar Chart & Pie Chart */}
                   {dashboardData.chart_data?.geographic_breakdown &&
                         dashboardData.chart_data.geographic_breakdown.length >
-                          0 &&
-                    isChartVisible("ga4_geographic_breakdown") && (
+                          0 && (
                       <Grid container spacing={3} sx={{ mb: 3 }}>
                         {/* Bar Chart */}
+                        {isChartVisible("ga4_geographic_distribution") && (
                         <Grid item xs={12} md={7}>
                           <ChartCard
                             title="Geographic Distribution"
@@ -5625,8 +5648,10 @@ function ReportingDashboard({
                             />
                           </ChartCard>
                         </Grid>
+                        )}
 
                         {/* Pie Chart */}
+                        {isChartVisible("ga4_top_countries") && (
                         <Grid item xs={12} md={5}>
                           <ChartCard
                             title="Top Countries"
@@ -5652,6 +5677,7 @@ function ReportingDashboard({
                             />
                           </ChartCard>
                         </Grid>
+                        )}
                       </Grid>
                     )}
 
@@ -5661,7 +5687,8 @@ function ReportingDashboard({
                     <Grid container spacing={3} sx={{ mb: 3 }}>
                       {/* Bounce Rate Donut */}
                       {dashboardData?.kpis?.bounce_rate &&
-                        shouldShowKPI("bounce_rate") && (
+                        shouldShowKPI("bounce_rate") &&
+                        isChartVisible("bounce_rate_donut") && (
                           <Grid item xs={12} sm={6} md={4}>
                             <ChartCard
                               title="Bounce Rate"
@@ -6093,6 +6120,8 @@ function ReportingDashboard({
                                 Brand Presence Metrics
                               </Typography>
                               <Grid container spacing={3}>
+                                {shouldShowKPI("brand_presence_rate") &&
+                                  isChartVisible("brand_presence_rate_donut") && (
                                 <Grid item xs={12} sm={6} md={4}>
                                   <ChartCard
                                     title="Brand Presence Rate"
@@ -6156,6 +6185,7 @@ function ReportingDashboard({
                                     </Box>
                                   </ChartCard>
                                 </Grid>
+                                )}
                               </Grid>
                             </Box>
                           )} */}
@@ -7386,6 +7416,7 @@ function ReportingDashboard({
                       }
                       startDate={startDate}
                       endDate={endDate}
+                      isChartVisible={isChartVisible}
                     />
                   </Box>
                 </SectionContainer>
