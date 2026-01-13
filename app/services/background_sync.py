@@ -904,8 +904,16 @@ async def sync_agency_analytics_background(
             try:
                 campaigns = await client.get_all_campaigns()
                 logger.info(f"[Job {job_id}] API returned {len(campaigns)} campaigns")
+                if len(campaigns) == 0:
+                    logger.warning(f"[Job {job_id}] WARNING: API returned 0 campaigns. This may indicate an API issue or authentication problem.")
+                    # Log API key status (first 10 chars only for security)
+                    from app.core.config import settings
+                    api_key_preview = settings.AGENCY_ANALYTICS_API_KEY[:10] + "..." if settings.AGENCY_ANALYTICS_API_KEY else "NOT SET"
+                    logger.info(f"[Job {job_id}] API Key status: {api_key_preview} (length: {len(settings.AGENCY_ANALYTICS_API_KEY) if settings.AGENCY_ANALYTICS_API_KEY else 0})")
             except Exception as e:
                 logger.error(f"[Job {job_id}] Error fetching campaigns from API: {str(e)}")
+                import traceback
+                logger.error(f"[Job {job_id}] Traceback: {traceback.format_exc()}")
                 await sync_job_service.update_job_status(
                     job_id, "error", progress=0,
                     current_step=f"Error fetching campaigns: {str(e)}"
