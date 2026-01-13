@@ -1998,8 +1998,8 @@ function ReportingDashboard({
           },
           {
             key: "scrunch_visualizations",
-            label: "Advanced Query Visualizations",
-            description: "Query API-based visualizations",
+            label: "Position (% of total) & Brand Sentiment Analysis",
+            description: "Position distribution and brand sentiment charts",
           },
           {
             key: "brand_presence_rate_donut",
