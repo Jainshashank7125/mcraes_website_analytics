@@ -58,7 +58,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
 
                 {/* GA4 Daily Comparison Charts - Users, Sessions, New Users, Conversions */}
                 {dashboardData.chart_data?.ga4_daily_comparison?.length > 0 && (
-                  <Grid container spacing={3} sx={{ mb: 4 }}>
+                  <Grid container spacing={3} sx={{ mb: 4 }} alignItems="flex-start">
                     {/* Total Users Chart - Full Width (Primary Chart) */}
                     <Grid item xs={12}>
                       <motion.div
@@ -165,7 +165,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                     </Grid>
 
                     {/* Sessions Comparison Chart */}
-                    <Grid item xs={12} md={6}>
+                    <Grid item xs={12} md={6} sx={{ alignSelf: 'flex-start' }}>
                       <motion.div
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -266,7 +266,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                     </Grid>
 
                     {/* New Users Comparison Chart */}
-                    <Grid item xs={12} md={6}>
+                    <Grid item xs={12} md={6} sx={{ alignSelf: 'flex-start' }}>
                       <motion.div
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -367,7 +367,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
 
                     {/* Conversions Chart */}
                     {dashboardData.chart_data.ga4_daily_comparison.some(d => d.current_conversions > 0 || d.previous_conversions > 0) && (
-                      <Grid item xs={12} md={dashboardData.chart_data.ga4_daily_comparison.some(d => d.current_revenue > 0 || d.previous_revenue > 0) ? 6 : 12}>
+                      <Grid item xs={12} md={dashboardData.chart_data.ga4_daily_comparison.some(d => d.current_revenue > 0 || d.previous_revenue > 0) ? 6 : 12} sx={{ alignSelf: 'flex-start' }}>
                         <motion.div
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
@@ -469,7 +469,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
 
                     {/* Revenue Chart */}
                     {dashboardData.chart_data.ga4_daily_comparison.some(d => d.current_revenue > 0 || d.previous_revenue > 0) && (
-                      <Grid item xs={12} md={6}>
+                      <Grid item xs={12} md={6} sx={{ alignSelf: 'flex-start' }}>
                         <motion.div
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
@@ -1545,7 +1545,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
               {/* GA4 Performance Charts - Prominent Line Graphs */}
               {dashboardData.chart_data?.ga4_daily_comparison?.length > 0 && (
                 <Box sx={{ mt: 4 }}>
-                  <Grid container spacing={3}>
+                  <Grid container spacing={3} alignItems="flex-start">
                     {/* Total Users Chart - Full Width (Primary Chart) */}
                     <Grid item xs={12}>
                       <motion.div
@@ -1651,7 +1651,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                     </Grid>
 
                     {/* Sessions Comparison Chart */}
-                    <Grid item xs={12} md={6}>
+                    <Grid item xs={12} md={6} sx={{ alignSelf: 'flex-start' }}>
                       <motion.div
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -1751,7 +1751,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                     </Grid>
 
                     {/* New Users Comparison Chart */}
-                    <Grid item xs={12} md={6}>
+                    <Grid item xs={12} md={6} sx={{ alignSelf: 'flex-start' }}>
                       <motion.div
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -1852,7 +1852,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
 
                     {/* Conversions Comparison Chart */}
                     {dashboardData.chart_data.ga4_daily_comparison.some(d => d.current_conversions > 0 || d.previous_conversions > 0) && (
-                      <Grid item xs={12} md={dashboardData.chart_data.ga4_daily_comparison.some(d => d.current_revenue > 0 || d.previous_revenue > 0) ? 6 : 12}>
+                      <Grid item xs={12} md={dashboardData.chart_data.ga4_daily_comparison.some(d => d.current_revenue > 0 || d.previous_revenue > 0) ? 6 : 12} sx={{ alignSelf: 'flex-start' }}>
                         <motion.div
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
@@ -1945,7 +1945,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
 
                     {/* Revenue Comparison Chart */}
                     {dashboardData.chart_data.ga4_daily_comparison.some(d => d.current_revenue > 0 || d.previous_revenue > 0) && (
-                      <Grid item xs={12} md={6}>
+                      <Grid item xs={12} md={6} sx={{ alignSelf: 'flex-start' }}>
                         <motion.div
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
