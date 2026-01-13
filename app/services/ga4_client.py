@@ -114,7 +114,7 @@ class GA4APIClient:
                     Dimension(name="date"),
                 ],
                 metrics=[
-                    Metric(name="activeUsers"),
+                    Metric(name="activeUsers"),  # Used for daily breakdown and as fallback
                     Metric(name="sessions"),
                     Metric(name="newUsers"),
                     Metric(name="bounceRate"),
@@ -143,7 +143,7 @@ class GA4APIClient:
                     metric_name = request.metrics[i].name
                     value = float(metric_value.value)
                     if metric_name == "activeUsers":
-                        totals["users"] += int(value)
+                        totals["users"] += int(value)  # Sum activeUsers across dates (this is the total users)
                     elif metric_name == "sessions":
                         totals["sessions"] += int(value)
                     elif metric_name == "newUsers":

@@ -349,7 +349,7 @@ export default function BrandAnalyticsSection({ brandAnalytics, theme }) {
               
               {/* GA4 Summary Cards - Key Metrics */}
               <Grid container spacing={2.5} sx={{ mb: 4 }}>
-                {/* Active Users */}
+                {/* Total Users */}
                 {dashboardData?.kpis?.users && (
                   <Grid item xs={12} sm={6} md={3}>
                     <motion.div
@@ -376,7 +376,7 @@ export default function BrandAnalyticsSection({ brandAnalytics, theme }) {
                               color="text.secondary"
                               sx={{ fontSize: '0.875rem', fontWeight: 500 }}
                             >
-                              Active Users
+                              Total Users
                             </Typography>
                             <IconButton size="small" sx={{ p: 0.5 }}>
                               <TrendingUpIcon sx={{ fontSize: 16, color: 'text.secondary' }} />

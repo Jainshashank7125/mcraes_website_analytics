@@ -1419,7 +1419,7 @@ async def get_reporting_dashboard(
                             "value": snapshot.get("users", 0),
                             "change": float(snapshot.get("users_change", 0)),
                             "source": "GA4",
-                            "label": "Users",
+                            "label": "Total Users",
                             "icon": "People"
                         },
                         "sessions": {
@@ -1612,7 +1612,7 @@ async def get_reporting_dashboard(
                             "value": traffic_overview.get("users", 0),
                             "change": users_change,
                             "source": "GA4",
-                            "label": "Users",
+                            "label": "Total Users",
                             "icon": "People"
                         },
                         "sessions": {

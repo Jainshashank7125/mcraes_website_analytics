@@ -59,7 +59,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                 {/* GA4 Daily Comparison Charts - Users, Sessions, New Users, Conversions */}
                 {dashboardData.chart_data?.ga4_daily_comparison?.length > 0 && (
                   <Grid container spacing={3} sx={{ mb: 4 }}>
-                    {/* Active Users Chart - Full Width (Primary Chart) */}
+                    {/* Total Users Chart - Full Width (Primary Chart) */}
                     <Grid item xs={12}>
                       <motion.div
                         initial={{ opacity: 0, y: 20 }}
@@ -77,7 +77,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                           <CardContent sx={{ p: 3 }}>
                             <Box display="flex" alignItems="center" justifyContent="space-between" mb={3}>
                               <Typography variant="h6" fontWeight={600} sx={{ fontSize: '1.125rem' }}>
-                                Active Users
+                                Total Users
                               </Typography>
                               <Chip
                                 label="GA4"
@@ -981,7 +981,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                               color="text.secondary"
                               sx={{ fontSize: '0.875rem', fontWeight: 500 }}
                             >
-                              Active Users
+                              Total Users
                             </Typography>
                             <IconButton size="small" sx={{ p: 0.5 }}>
                               <TrendingUpIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
@@ -1543,7 +1543,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
               {dashboardData.chart_data?.ga4_daily_comparison?.length > 0 && (
                 <Box sx={{ mt: 4 }}>
                   <Grid container spacing={3}>
-                    {/* Active Users Chart - Full Width (Primary Chart) */}
+                    {/* Total Users Chart - Full Width (Primary Chart) */}
                     <Grid item xs={12}>
                       <motion.div
                         initial={{ opacity: 0, y: 20 }}
@@ -1560,7 +1560,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                           <CardContent sx={{ p: 3 }}>
                             <Box display="flex" alignItems="center" justifyContent="space-between" mb={3}>
                               <Typography variant="h6" fontWeight={600} sx={{ fontSize: '1.125rem' }}>
-                                Active Users
+                                Total Users
                               </Typography>
                               <Chip
                                 label="GA4"

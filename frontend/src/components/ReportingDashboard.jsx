@@ -159,7 +159,7 @@ const KPI_ORDER = [
 // KPI metadata for display
 const KPI_METADATA = {
   // GA4 KPIs
-  users: { label: "Users", source: "GA4", icon: "People" },
+  users: { label: "Total Users", source: "GA4", icon: "People" },
   sessions: { label: "Sessions", source: "GA4", icon: "BarChart" },
   new_users: { label: "New Users", source: "GA4", icon: "PersonAdd" },
   engaged_sessions: {
@@ -3624,7 +3624,7 @@ function ReportingDashboard({
                                           fontWeight: 500,
                                         }}
                                       >
-                                        Active Users
+                                        Total Users
                                       </Typography>
                                           <IconButton
                                             size="small"
@@ -5035,10 +5035,10 @@ function ReportingDashboard({
                     isChartVisible("ga4_daily_comparison") && (
                       <Box sx={{ mt: 4, mb: 4 }}>
                         <Grid container spacing={3}>
-                          {/* Active Users Chart - Full Width (Primary Chart) */}
+                          {/* Total Users Chart - Full Width (Primary Chart) */}
                           <Grid item xs={12}>
                             <ChartCard
-                              title="Active Users"
+                              title="Total Users"
                               badge={getBadgeLabel("GA4")}
                               badgeColor={CHART_COLORS.ga4.primary}
                               height={500}
