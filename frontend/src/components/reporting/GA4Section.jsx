@@ -716,18 +716,21 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                               fontWeight={600}
                               sx={{ fontSize: '1.125rem', letterSpacing: '-0.01em' }}
                             >
-                              Sessions by Source
+                              Sessions by Channel
                             </Typography>
                             <ResponsiveContainer width="100%" height={300}>
                               <BarChart
-                                data={dashboardData.chart_data.traffic_sources.slice(0, 8)}
+                                data={dashboardData.chart_data.traffic_sources.slice(0, 8).map(item => ({
+                                  ...item,
+                                  displayName: item.channel || item.source || 'Unknown'
+                                }))}
                                 layout="vertical"
                                 margin={{ top: 5, right: 30, left: 80, bottom: 5 }}
                               >
                                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E4E4E7" />
                                 <XAxis type="number" tick={{ fontSize: 12 }} stroke="#71717A" />
                                 <YAxis 
-                                  dataKey="source" 
+                                  dataKey="displayName" 
                                   type="category" 
                                   width={75} 
                                   stroke="#71717A"
@@ -2238,16 +2241,19 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                         fontWeight={600}
                         sx={{ fontSize: '1.125rem', letterSpacing: '-0.01em' }}
                       >
-                        Sessions vs Users by Source
+                        Sessions vs Users by Channel
                       </Typography>
                       <ResponsiveContainer width="100%" height={350}>
                         <BarChart
-                          data={dashboardData.chart_data.traffic_sources.slice(0, 8)}
+                          data={dashboardData.chart_data.traffic_sources.slice(0, 8).map(item => ({
+                            ...item,
+                            displayName: item.channel || item.source || 'Unknown'
+                          }))}
                           margin={{ top: 5, right: 30, left: 20, bottom: 60 }}
                         >
                           <CartesianGrid strokeDasharray="3 3" stroke="#E4E4E7" />
                           <XAxis 
-                            dataKey="source" 
+                            dataKey="displayName" 
                             tick={{ fontSize: 11 }}
                             stroke="#71717A"
                             angle={-45}

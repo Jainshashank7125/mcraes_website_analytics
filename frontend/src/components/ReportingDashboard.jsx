@@ -2087,7 +2087,7 @@ function ReportingDashboard({
           },
           {
             key: "ga4_sessions_by_channel",
-            label: "Sessions by Source",
+            label: "Sessions by Channel",
             description: "Horizontal bar chart showing sessions by source",
           },
           {
@@ -5447,7 +5447,7 @@ function ReportingDashboard({
                                     letterSpacing: "-0.01em",
                                   }}
                                 >
-                                  Sessions by Source
+                                  Sessions by Channel
                                 </Typography>
                                     <ResponsiveContainer
                                       width="100%"
@@ -5457,7 +5457,10 @@ function ReportingDashboard({
                                     data={dashboardData.chart_data.traffic_sources.slice(
                                       0,
                                       8
-                                    )}
+                                    ).map(item => ({
+                                      ...item,
+                                      displayName: item.channel || item.source || 'Unknown'
+                                    }))}
                                     layout="vertical"
                                     margin={{
                                       top: 5,
@@ -5477,7 +5480,7 @@ function ReportingDashboard({
                                       stroke="#71717A"
                                     />
                                     <YAxis
-                                      dataKey="source"
+                                      dataKey="displayName"
                                       type="category"
                                       width={75}
                                       stroke="#71717A"
@@ -5539,14 +5542,17 @@ function ReportingDashboard({
                                 letterSpacing: "-0.01em",
                               }}
                             >
-                              Sessions vs Users by Source
+                              Sessions vs Users by Channel
                             </Typography>
                             <ResponsiveContainer width="100%" height={350}>
                               <BarChart
                                 data={dashboardData.chart_data.traffic_sources.slice(
                                   0,
                                   8
-                                )}
+                                ).map(item => ({
+                                  ...item,
+                                  displayName: item.channel || item.source || 'Unknown'
+                                }))}
                                 margin={{
                                   top: 5,
                                   right: 30,
@@ -5559,7 +5565,7 @@ function ReportingDashboard({
                                   stroke="#E4E4E7"
                                 />
                                 <XAxis
-                                  dataKey="source"
+                                  dataKey="displayName"
                                   tick={{ fontSize: 11 }}
                                   stroke="#71717A"
                                   angle={0}
