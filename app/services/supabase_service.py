@@ -2226,8 +2226,8 @@ class SupabaseService:
             for country, data in country_aggregates.items():
                 countries.append(data)
             
-            # Sort by users descending and limit
-            countries.sort(key=lambda x: x["users"], reverse=True)
+            # Sort by sessions descending and limit
+            countries.sort(key=lambda x: x["sessions"], reverse=True)
             return countries[:limit]
         except Exception as e:
             logger.error(f"Error getting GA4 geographic data for date range: {str(e)}")

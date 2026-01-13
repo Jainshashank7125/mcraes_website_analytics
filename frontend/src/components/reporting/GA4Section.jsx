@@ -863,14 +863,14 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                     boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
                                     backgroundColor: '#FFFFFF'
                                   }}
-                                  formatter={(value) => [value.toLocaleString(), 'Users']}
+                                  formatter={(value) => [value.toLocaleString(), 'Sessions']}
                                 />
                                 <Legend />
                                 <Bar 
-                                  dataKey="users" 
+                                  dataKey="sessions" 
                                   radius={[4, 4, 0, 0]}
                                   fill={theme.palette.primary.main}
-                                  name="Users"
+                                  name="Sessions"
                                 />
                               </BarChart>
                             </ResponsiveContainer>
@@ -901,7 +901,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                 <Pie
                                   data={dashboardData.chart_data.geographic_breakdown.slice(0, 6).map((item) => ({
                                     name: item.country || 'Unknown',
-                                    value: item.users || 0,
+                                    value: item.sessions || 0,
                                   }))}
                                   cx="50%"
                                   cy="50%"
@@ -2328,14 +2328,14 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                   boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
                                   backgroundColor: '#FFFFFF'
                                 }}
-                                formatter={(value) => [value.toLocaleString(), 'Users']}
+                                formatter={(value) => [value.toLocaleString(), 'Sessions']}
                               />
                               <Legend />
                               <Bar 
-                                dataKey="users" 
+                                dataKey="sessions" 
                                 radius={[4, 4, 0, 0]}
                                 fill={theme.palette.primary.main}
-                                name="Users"
+                                name="Sessions"
                               />
                             </BarChart>
                           </ResponsiveContainer>
@@ -2366,7 +2366,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                               <Pie
                                 data={dashboardData.chart_data.geographic_breakdown.slice(0, 6).map((item) => ({
                                   name: item.country || 'Unknown',
-                                  value: item.users || 0,
+                                  value: item.sessions || 0,
                                 }))}
                                 cx="50%"
                                 cy="50%"
@@ -2395,7 +2395,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                   boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
                                   backgroundColor: '#FFFFFF'
                                 }}
-                                formatter={(value) => [value.toLocaleString(), 'Users']}
+                                formatter={(value) => [value.toLocaleString(), 'Sessions']}
                               />
                               <Legend 
                                 wrapperStyle={{ paddingTop: '20px' }}
