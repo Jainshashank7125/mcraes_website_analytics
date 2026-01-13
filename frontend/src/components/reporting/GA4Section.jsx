@@ -651,14 +651,14 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                               fontWeight={600}
                               sx={{ fontSize: '1.125rem', letterSpacing: '-0.01em' }}
                             >
-                              Traffic Sources Distribution by Channel
+                              Total Users by Channel
                             </Typography>
                             <ResponsiveContainer width="100%" height={300}>
                               <PieChart>
                                 <Pie
                                   data={dashboardData.chart_data.traffic_sources.slice(0, 6).map((item) => ({
-                                    name: item.channel || item.source || 'Unknown',
-                                    value: item.sessions || 0,
+                                    name: getChannelLabel ? getChannelLabel(item.channel || item.source || 'Unknown') : (item.channel || item.source || 'Unknown'),
+                                    value: item.users || 0,
                                   }))}
                                   cx="50%"
                                   cy="50%"
@@ -2199,14 +2199,14 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                             fontWeight={600}
                             sx={{ fontSize: '1.125rem', letterSpacing: '-0.01em' }}
                           >
-                            Traffic Sources Distribution by Channel
+                            Total Users by Channel
                           </Typography>
                           <ResponsiveContainer width="100%" height={300}>
                             <PieChart>
                               <Pie
                                 data={dashboardData.chart_data.traffic_sources.slice(0, 6).map((item) => ({
-                                  name: item.channel || item.source || 'Unknown',
-                                  value: item.sessions || 0,
+                                  name: getChannelLabel ? getChannelLabel(item.channel || item.source || 'Unknown') : (item.channel || item.source || 'Unknown'),
+                                  value: item.users || 0,
                                 }))}
                                 cx="50%"
                                 cy="50%"
