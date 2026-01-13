@@ -1929,8 +1929,8 @@ function ReportingDashboard({
           },
           {
             key: "ga4_traffic_sources_distribution",
-            label: "Traffic Sources Distribution by Channel",
-            description: "Donut chart showing traffic sources",
+            label: "Total Users by Channel",
+            description: "Donut chart showing users distribution by channel",
           },
           {
             key: "ga4_sessions_by_channel",
@@ -5248,7 +5248,7 @@ function ReportingDashboard({
                                     letterSpacing: "-0.01em",
                                   }}
                                 >
-                                  Traffic Sources Distribution by Channel
+                                  Total Users by Channel
                                 </Typography>
                                 <Box
                                   sx={{
@@ -5273,8 +5273,8 @@ function ReportingDashboard({
                                         data={dashboardData.chart_data.traffic_sources
                                           .slice(0, 6)
                                           .map((item) => ({
-                                            name: item.channel || item.source || "Unknown",
-                                            value: item.sessions || 0,
+                                            name: getChannelLabel(item.channel || item.source || "Unknown"),
+                                            value: item.users || 0,
                                           }))}
                                         cx="50%"
                                         cy="50%"
