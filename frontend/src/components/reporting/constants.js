@@ -183,17 +183,17 @@ export const KPI_METADATA = {
     icon: "List",
   },
   average_google_ranking: {
-    label: "Average Google Ranking",
+    label: "Avg Google Ranking",
     source: "AgencyAnalytics",
     icon: "Search",
   },
   average_bing_ranking: {
-    label: "Average Bing Ranking",
+    label: "Avg Bing Ranking",
     source: "AgencyAnalytics",
     icon: "Search",
   },
   average_search_volume: {
-    label: "Average Search Volume",
+    label: "Avg Search Volume",
     source: "AgencyAnalytics",
     icon: "Search",
   },
@@ -215,18 +215,18 @@ export const KPI_METADATA = {
   stable_keywords_count: {
     label: "Stable Keywords",
     source: "AgencyAnalytics",
-    icon: "Remove",
+    icon: "Insights",
   },
   // Scrunch KPIs
   total_citations: {
     label: "Total Citations",
     source: "Scrunch",
-    icon: "Visibility",
+    icon: "Link",
   },
   brand_presence_rate: {
     label: "Brand Presence Rate",
     source: "Scrunch",
-    icon: "TrendingUp",
+    icon: "CheckCircle",
   },
   brand_sentiment_score: {
     label: "Brand Sentiment Score",
@@ -234,9 +234,9 @@ export const KPI_METADATA = {
     icon: "SentimentSatisfied",
   },
   top10_prompt_percentage: {
-    label: "Top 10 Prompt %",
+    label: "Top 10 Prompt",
     source: "Scrunch",
-    icon: "TrendingUp",
+    icon: "Article",
   },
   prompt_search_volume: {
     label: "Prompt Search Volume",

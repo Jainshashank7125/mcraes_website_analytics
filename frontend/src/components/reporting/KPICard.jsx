@@ -2,12 +2,15 @@ import { Box, Card, CardContent, Chip, Grid, Typography, alpha } from '@mui/mate
 import { TrendingUp as TrendingUpIcon, TrendingDown as TrendingDownIcon } from '@mui/icons-material'
 import { motion } from 'framer-motion'
 import { formatValue, getSourceColor, getSourceLabel as getSourceLabelUtil } from './utils'
+import { KPI_METADATA } from './constants'
 
 export default function KPICard({ kpi, kpiKey, index = 0, theme, getSourceLabel }) {
   if (!kpi) return null
 
   const sourceColor = getSourceColor(kpi.source, theme)
   const sourceLabel = getSourceLabel ? getSourceLabel(kpi.source) : getSourceLabelUtil(kpi.source)
+  // Use metadata label to ensure consistency with config box, fallback to kpi.label from API
+  const displayLabel = KPI_METADATA[kpiKey]?.label || kpi.label || kpiKey
 
   return (
     <Grid item xs={12} sm={6} md={3} key={kpiKey}>
@@ -73,7 +76,7 @@ export default function KPICard({ kpi, kpiKey, index = 0, theme, getSourceLabel 
                   mb: 0.5
                 }}
               >
-                {kpi.label}
+                {displayLabel}
               </Typography>
               
               {/* KPI Value */}
