@@ -365,7 +365,7 @@ class GA4APIClient:
             request = RunReportRequest(
                 property=f"properties/{property_id}",
                 date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
-                dimensions=[Dimension(name="sessionSourceMedium")],
+                dimensions=[Dimension(name="sessionDefaultChannelGroup")],  # Use channel dimension instead of source/medium
                 metrics=[
                     Metric(name="sessions"),
                     Metric(name="activeUsers"),
@@ -388,8 +388,11 @@ class GA4APIClient:
                 conversions = float(row.metric_values[3].value) if len(row.metric_values) > 3 else 0
                 conversion_rate = (conversions / sessions * 100) if sessions > 0 else 0
                 
+                channel = row.dimension_values[0].value
+                # Keep source field for backward compatibility, but use channel value
                 sources.append({
-                    "source": row.dimension_values[0].value,
+                    "source": channel,  # Store channel in source field for backward compatibility
+                    "channel": channel,  # Add explicit channel field
                     "sessions": sessions,
                     "users": int(row.metric_values[1].value),
                     "bounceRate": float(row.metric_values[2].value),

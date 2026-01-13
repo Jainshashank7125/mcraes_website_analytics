@@ -2145,6 +2145,8 @@ class SupabaseService:
                     data["conversionRate"] = data["conversions"] / data["totalSessions"] if data["totalSessions"] > 0 else 0.0
                 # Remove monthCount from final output
                 del data["monthCount"]
+                # Add channel field (maps to source for backward compatibility)
+                data["channel"] = data["source"]
                 sources.append(data)
             
             # Sort by sessions descending
