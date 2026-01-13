@@ -1837,27 +1837,52 @@ function ReportingDashboard({
   // Helper function to get simplified channel label
   const getChannelLabel = (source) => {
     if (!source) return source;
-    const sourceLower = source.toLowerCase();
-
-    if (sourceLower.includes("direct") || sourceLower.includes("(none)")) {
-      return "Direct";
-    } else if (sourceLower.includes("organic")) {
-      return "Organic";
-    } else if (
-      sourceLower.includes("social") ||
-      sourceLower.includes("paid_social") ||
-      sourceLower.includes("facebook")
-    ) {
-      return "Social";
-    } else if (
-      sourceLower.includes("referral") ||
-      sourceLower.includes("refer") ||
-      sourceLower.includes("cpc")
-    ) {
-      return "Referral";
+    const sourceLower = source.toLowerCase().trim();
+    
+    // Handle GA4 channel names (from sessionDefaultChannelGroup)
+    if (sourceLower === 'direct' || sourceLower.includes('(none)') || sourceLower === '(direct)') {
+      return 'Direct';
+    } else if (sourceLower === 'organic search' || sourceLower === 'organic') {
+      return 'Organic Search';
+    } else if (sourceLower === 'paid search' || sourceLower === 'paid_search') {
+      return 'Paid Search';
+    } else if (sourceLower === 'social' || sourceLower.includes('paid_social') || sourceLower.includes('facebook')) {
+      return 'Social';
+    } else if (sourceLower === 'referral') {
+      return 'Referral';
+    } else if (sourceLower === 'email') {
+      return 'Email';
+    } else if (sourceLower === 'display' || sourceLower === 'display advertising') {
+      return 'Display';
+    } else if (sourceLower === 'affiliates') {
+      return 'Affiliates';
+    } else if (sourceLower === 'audio') {
+      return 'Audio';
+    } else if (sourceLower === 'sms') {
+      return 'SMS';
+    } else if (sourceLower === 'cross-network') {
+      return 'Cross-Network';
+    } else if (sourceLower === 'video') {
+      return 'Video';
+    } else if (sourceLower === 'other') {
+      return 'Other';
     }
-    // Return original if no match
-    return source;
+    
+    // Handle source/medium combinations (legacy data)
+    if (sourceLower.includes('google') && sourceLower.includes('organic')) {
+      return 'Organic Search';
+    } else if (sourceLower.includes('google') && (sourceLower.includes('cpc') || sourceLower.includes('paid'))) {
+      return 'Paid Search';
+    } else if (sourceLower.includes('organic')) {
+      return 'Organic Search';
+    } else if (sourceLower.includes('direct')) {
+      return 'Direct';
+    } else if (sourceLower.includes('referral') || sourceLower.includes('refer')) {
+      return 'Referral';
+    }
+    
+    // Return original if no match (capitalize first letter)
+    return source.charAt(0).toUpperCase() + source.slice(1).toLowerCase();
   };
 
   // Helper function to get channel color
