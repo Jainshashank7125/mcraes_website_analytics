@@ -722,7 +722,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                               <BarChart
                                 data={dashboardData.chart_data.traffic_sources.slice(0, 8).map(item => ({
                                   ...item,
-                                  displayName: item.channel || item.source || 'Unknown'
+                                  displayName: getChannelLabel ? getChannelLabel(item.channel || item.source || 'Unknown') : (item.channel || item.source || 'Unknown')
                                 }))}
                                 layout="vertical"
                                 margin={{ top: 5, right: 30, left: 80, bottom: 5 }}
@@ -761,7 +761,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                   </Grid>
                 )}
 
-                {/* Stacked Bar Chart - Sessions vs Users by Source */}
+                {/* Stacked Bar Chart - Sessions vs Users by Channel */}
                 {dashboardData.chart_data?.traffic_sources && dashboardData.chart_data.traffic_sources.length > 0 && (
                   <motion.div
                     initial={{ opacity: 0, y: 20 }}
@@ -776,16 +776,19 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                           fontWeight={600}
                           sx={{ fontSize: '1.125rem', letterSpacing: '-0.01em' }}
                         >
-                          Sessions vs Users by Source
+                          Sessions vs Users by Channel
                         </Typography>
                         <ResponsiveContainer width="100%" height={350}>
                           <BarChart
-                            data={dashboardData.chart_data.traffic_sources.slice(0, 8)}
+                            data={dashboardData.chart_data.traffic_sources.slice(0, 8).map(item => ({
+                              ...item,
+                              displayName: getChannelLabel ? getChannelLabel(item.channel || item.source || 'Unknown') : (item.channel || item.source || 'Unknown')
+                            }))}
                             margin={{ top: 5, right: 30, left: 20, bottom: 60 }}
                           >
                             <CartesianGrid strokeDasharray="3 3" stroke="#E4E4E7" />
                             <XAxis 
-                              dataKey="source" 
+                              dataKey="displayName" 
                               tick={{ fontSize: 11 }}
                               stroke="#71717A"
                               angle={-45}
@@ -2303,7 +2306,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                 </Grid>
               )}
 
-              {/* Stacked Bar Chart - Sessions vs Users by Source */}
+              {/* Stacked Bar Chart - Sessions vs Users by Channel */}
               {dashboardData.chart_data?.traffic_sources && dashboardData.chart_data.traffic_sources.length > 0 && (
                 <motion.div
                   initial={{ opacity: 0, y: 20 }}
@@ -2324,7 +2327,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                         <BarChart
                           data={dashboardData.chart_data.traffic_sources.slice(0, 8).map(item => ({
                             ...item,
-                            displayName: item.channel || item.source || 'Unknown'
+                            displayName: getChannelLabel ? getChannelLabel(item.channel || item.source || 'Unknown') : (item.channel || item.source || 'Unknown')
                           }))}
                           margin={{ top: 5, right: 30, left: 20, bottom: 60 }}
                         >
