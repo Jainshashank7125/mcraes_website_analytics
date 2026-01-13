@@ -5519,8 +5519,7 @@ function ReportingDashboard({
                         </Grid>
                         )}
 
-                        {/* Horizontal Bar Chart */}
-                        {isChartVisible("ga4_sessions_by_channel") && (
+                        {/* Horizontal Bar Chart - Sessions by Channel */}
                         <Grid item xs={12} md={6}>
                           <motion.div
                             initial={{ opacity: 0, y: 20 }}
@@ -5555,10 +5554,13 @@ function ReportingDashboard({
                                     data={dashboardData.chart_data.traffic_sources.slice(
                                       0,
                                       8
-                                    ).map(item => ({
-                                      ...item,
-                                      displayName: item.channel || item.source || 'Unknown'
-                                    }))}
+                                    ).map(item => {
+                                      const channelName = item.channel || item.source || 'Unknown'
+                                      return {
+                                        ...item,
+                                        displayName: getChannelLabel(channelName)
+                                      }
+                                    })}
                                     layout="vertical"
                                     margin={{
                                       top: 5,
@@ -5614,9 +5616,9 @@ function ReportingDashboard({
                       </Grid>
                     )}
 
-                  {/* Stacked Bar Chart - Sessions vs Users by Source */}
+                  {/* Stacked Bar Chart - Sessions vs Users by Channel */}
                   {dashboardData.chart_data?.traffic_sources &&
-                    dashboardData.chart_data.traffic_sources.length > 0 && isChartVisible("ga4_channel_performance") && (
+                    dashboardData.chart_data.traffic_sources.length > 0 && (
                       <motion.div
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
