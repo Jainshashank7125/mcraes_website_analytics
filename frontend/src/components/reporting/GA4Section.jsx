@@ -651,13 +651,13 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                               fontWeight={600}
                               sx={{ fontSize: '1.125rem', letterSpacing: '-0.01em' }}
                             >
-                              Traffic Sources Distribution
+                              Traffic Sources Distribution by Channel
                             </Typography>
                             <ResponsiveContainer width="100%" height={300}>
                               <PieChart>
                                 <Pie
                                   data={dashboardData.chart_data.traffic_sources.slice(0, 6).map((item) => ({
-                                    name: item.source || 'Unknown',
+                                    name: item.channel || item.source || 'Unknown',
                                     value: item.sessions || 0,
                                   }))}
                                   cx="50%"
@@ -2119,13 +2119,13 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                             fontWeight={600}
                             sx={{ fontSize: '1.125rem', letterSpacing: '-0.01em' }}
                           >
-                            Traffic Sources Distribution
+                            Traffic Sources Distribution by Channel
                           </Typography>
                           <ResponsiveContainer width="100%" height={300}>
                             <PieChart>
                               <Pie
                                 data={dashboardData.chart_data.traffic_sources.slice(0, 6).map((item) => ({
-                                  name: item.source || 'Unknown',
+                                  name: item.channel || item.source || 'Unknown',
                                   value: item.sessions || 0,
                                 }))}
                                 cx="50%"
