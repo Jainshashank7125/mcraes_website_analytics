@@ -1998,8 +1998,8 @@ function ReportingDashboard({
           },
           {
             key: "scrunch_visualizations",
-            label: "Position (% of total) & Brand Sentiment Analysis",
-            description: "Position distribution and brand sentiment charts",
+            label: "Advanced Query Visualizations",
+            description: "Includes: AI Platform Distribution, Competitive Presence Analysis, Brand Presence Trend Over Time, Position (% of total), and Brand Sentiment Analysis",
           },
           {
             key: "brand_presence_rate_donut",
