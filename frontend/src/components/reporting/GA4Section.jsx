@@ -367,7 +367,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
 
                     {/* Conversions Chart */}
                     {dashboardData.chart_data.ga4_daily_comparison.some(d => d.current_conversions > 0 || d.previous_conversions > 0) && (
-                      <Grid item xs={12} md={6}>
+                      <Grid item xs={12} md={dashboardData.chart_data.ga4_daily_comparison.some(d => d.current_revenue > 0 || d.previous_revenue > 0) ? 6 : 12}>
                         <motion.div
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
@@ -1852,7 +1852,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
 
                     {/* Conversions Comparison Chart */}
                     {dashboardData.chart_data.ga4_daily_comparison.some(d => d.current_conversions > 0 || d.previous_conversions > 0) && (
-                      <Grid item xs={12} md={6}>
+                      <Grid item xs={12} md={dashboardData.chart_data.ga4_daily_comparison.some(d => d.current_revenue > 0 || d.previous_revenue > 0) ? 6 : 12}>
                         <motion.div
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
