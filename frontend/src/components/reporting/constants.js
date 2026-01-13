@@ -85,3 +85,162 @@ export const CHART_CONFIG = {
     fontSize: { mobile: 10, tablet: 11, desktop: 12 },
   },
 }
+
+// KPI Order - defines the order KPIs should appear
+export const KPI_ORDER = [
+  // GA4 KPIs
+  "users",
+  "sessions",
+  "new_users",
+  "engaged_sessions",
+  "bounce_rate",
+  "avg_session_duration",
+  "ga4_engagement_rate",
+  "conversions",
+  // AgencyAnalytics KPIs
+  "search_volume",
+  "avg_keyword_rank",
+  "ranking_change",
+  // New/Updated Google Ranking KPIs
+  "google_ranking_count",
+  "google_ranking",
+  "google_ranking_change",
+  "all_keywords_ranking",
+  "average_google_ranking",
+  "average_bing_ranking",
+  "average_search_volume",
+  "top_10_visibility_percentage",
+  "improving_keywords_count",
+  "declining_keywords_count",
+  "stable_keywords_count",
+  // Scrunch KPIs
+  "total_citations",
+  "brand_presence_rate",
+  "brand_sentiment_score",
+  "top10_prompt_percentage",
+  "prompt_search_volume",
+];
+
+// KPI metadata for display
+export const KPI_METADATA = {
+  // GA4 KPIs
+  users: { label: "Total Users", source: "GA4", icon: "People" },
+  sessions: { label: "Sessions", source: "GA4", icon: "BarChart" },
+  new_users: { label: "New Users", source: "GA4", icon: "PersonAdd" },
+  engaged_sessions: {
+    label: "Engaged Sessions",
+    source: "GA4",
+    icon: "People",
+  },
+  bounce_rate: { label: "Bounce Rate", source: "GA4", icon: "TrendingDown" },
+  avg_session_duration: {
+    label: "Avg Session Duration",
+    source: "GA4",
+    icon: "AccessTime",
+  },
+  ga4_engagement_rate: {
+    label: "Engagement Rate",
+    source: "GA4",
+    icon: "TrendingUp",
+  },
+  conversions: { label: "Conversions", source: "GA4", icon: "TrendingUp" },
+  revenue: { label: "Revenue", source: "GA4", icon: "TrendingUp" },
+  // AgencyAnalytics KPIs
+  search_volume: {
+    label: "Search Volume",
+    source: "AgencyAnalytics",
+    icon: "Search",
+  },
+  avg_keyword_rank: {
+    label: "Avg Keyword Rank",
+    source: "AgencyAnalytics",
+    icon: "Search",
+  },
+  ranking_change: {
+    label: "Avg Ranking Change",
+    source: "AgencyAnalytics",
+    icon: "TrendingUp",
+  },
+  // New/Updated Google Ranking KPIs
+  google_ranking_count: {
+    label: "Google Ranking Count",
+    source: "AgencyAnalytics",
+    icon: "Search",
+  },
+  google_ranking: {
+    label: "Google Ranking",
+    source: "AgencyAnalytics",
+    icon: "Search",
+  },
+  google_ranking_change: {
+    label: "Google Ranking Change",
+    source: "AgencyAnalytics",
+    icon: "TrendingUp",
+  },
+  all_keywords_ranking: {
+    label: "All Keywords Ranking",
+    source: "AgencyAnalytics",
+    icon: "List",
+  },
+  average_google_ranking: {
+    label: "Average Google Ranking",
+    source: "AgencyAnalytics",
+    icon: "Search",
+  },
+  average_bing_ranking: {
+    label: "Average Bing Ranking",
+    source: "AgencyAnalytics",
+    icon: "Search",
+  },
+  average_search_volume: {
+    label: "Average Search Volume",
+    source: "AgencyAnalytics",
+    icon: "Search",
+  },
+  top_10_visibility_percentage: {
+    label: "Top 10 Visibility %",
+    source: "AgencyAnalytics",
+    icon: "TrendingUp",
+  },
+  improving_keywords_count: {
+    label: "Improving Keywords",
+    source: "AgencyAnalytics",
+    icon: "TrendingUp",
+  },
+  declining_keywords_count: {
+    label: "Declining Keywords",
+    source: "AgencyAnalytics",
+    icon: "TrendingDown",
+  },
+  stable_keywords_count: {
+    label: "Stable Keywords",
+    source: "AgencyAnalytics",
+    icon: "Remove",
+  },
+  // Scrunch KPIs
+  total_citations: {
+    label: "Total Citations",
+    source: "Scrunch",
+    icon: "Visibility",
+  },
+  brand_presence_rate: {
+    label: "Brand Presence Rate",
+    source: "Scrunch",
+    icon: "TrendingUp",
+  },
+  brand_sentiment_score: {
+    label: "Brand Sentiment Score",
+    source: "Scrunch",
+    icon: "SentimentSatisfied",
+  },
+  top10_prompt_percentage: {
+    label: "Top 10 Prompt %",
+    source: "Scrunch",
+    icon: "TrendingUp",
+  },
+  prompt_search_volume: {
+    label: "Prompt Search Volume",
+    source: "Scrunch",
+    icon: "Search",
+  },
+};
