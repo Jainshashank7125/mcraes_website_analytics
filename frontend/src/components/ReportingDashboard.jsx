@@ -5622,10 +5622,13 @@ function ReportingDashboard({
                                 data={dashboardData.chart_data.traffic_sources.slice(
                                   0,
                                   8
-                                ).map(item => ({
-                                  ...item,
-                                  displayName: item.channel || item.source || 'Unknown'
-                                }))}
+                                ).map(item => {
+                                  const channelName = item.channel || item.source || 'Unknown'
+                                  return {
+                                    ...item,
+                                    displayName: getChannelLabel(channelName)
+                                  }
+                                })}
                                 margin={{
                                   top: 5,
                                   right: 30,
