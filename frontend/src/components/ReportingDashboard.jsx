@@ -5628,14 +5628,14 @@ function ReportingDashboard({
                               dataKey="country"
                               bars={[
                                 {
-                                  dataKey: "users",
-                                  name: "Users",
+                                  dataKey: "sessions",
+                                  name: "Sessions",
                                   color: CHART_COLORS.primary,
                                 },
                               ]}
                               formatter={(value) => [
                                 value.toLocaleString(),
-                                "Users",
+                                "Sessions",
                               ]}
                               xAxisFormatter={(value) => value}
                               margin={{
@@ -5665,13 +5665,13 @@ function ReportingDashboard({
                                 .slice(0, 6)
                                 .map((item) => ({
                                   name: item.country || "Unknown",
-                                  value: item.users || 0,
+                                  value: item.sessions || 0,
                                 }))}
                               donut={false}
                               colors={CHART_COLORS.palette}
                               formatter={(value, name) => [
                                 value.toLocaleString(),
-                                "Users",
+                                "Sessions",
                               ]}
                               height={350}
                             />

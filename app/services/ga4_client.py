@@ -431,7 +431,7 @@ class GA4APIClient:
                 limit=limit,
                 order_bys=[
                     OrderBy(
-                        metric=OrderBy.MetricOrderBy(metric_name="activeUsers"),
+                        metric=OrderBy.MetricOrderBy(metric_name="sessions"),
                         desc=True
                     )
                 ],
