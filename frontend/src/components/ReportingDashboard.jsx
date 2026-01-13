@@ -3180,6 +3180,79 @@ function ReportingDashboard({
           </Box>
         </Box>
 
+        {/* Date Range Display for Public View */}
+        {isPublic && startDate && endDate && (
+          <Paper
+            elevation={0}
+            sx={{
+              p: 2,
+              display: "flex",
+              gap: 2,
+              alignItems: "center",
+              border: `1px solid ${theme.palette.divider}`,
+              borderRadius: 2,
+              bgcolor: "background.paper",
+            }}
+          >
+            <Box display="flex" alignItems="center" gap={1}>
+              <CalendarTodayIcon sx={{ fontSize: 18, color: "text.secondary" }} />
+              <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
+                Date Range:
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                {new Date(startDate).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })}{" "}
+                -{" "}
+                {new Date(endDate).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })}
+              </Typography>
+            </Box>
+          </Paper>
+        )}
+
+        {/* Date Range Display for Public View */}
+        {isPublic && startDate && endDate && (
+          <Paper
+            elevation={0}
+            sx={{
+              p: 2,
+              display: "flex",
+              gap: 2,
+              alignItems: "center",
+              border: `1px solid ${theme.palette.divider}`,
+              borderRadius: 2,
+              bgcolor: "background.paper",
+              mb: 3,
+            }}
+          >
+            <Box display="flex" alignItems="center" gap={1}>
+              <CalendarTodayIcon sx={{ fontSize: 18, color: "text.secondary" }} />
+              <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
+                Date Range:
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                {new Date(startDate).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })}{" "}
+                -{" "}
+                {new Date(endDate).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })}
+              </Typography>
+            </Box>
+          </Paper>
+        )}
+
         {/* Filters - Hidden for public view since date range selector is commented out */}
         {!isPublic && (
           <Paper
