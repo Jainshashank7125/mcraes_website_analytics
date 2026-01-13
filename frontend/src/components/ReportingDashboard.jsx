@@ -7522,9 +7522,10 @@ function ReportingDashboard({
                 // },
               ].map((section) => {
                 // For "All Performance Metrics", use all KPIs from KPI_ORDER
+                // Use Set to ensure no duplicates
                 const sectionKPIs =
                   section.key === "all_performance_metrics"
-                  ? KPI_ORDER.filter((key) => {
+                  ? Array.from(new Set(KPI_ORDER.filter((key) => {
                       const allKPIs = {
                         ...(dashboardData?.kpis || {}),
                         ...(scrunchData?.kpis || {}),
@@ -7532,7 +7533,7 @@ function ReportingDashboard({
                         return (
                           allKPIs[key] && key !== "competitive_benchmarking"
                         );
-                    })
+                    })))
                   : getDashboardSectionKPIs(section.key);
                 const sectionCharts = getDashboardSectionCharts(section.key);
                 // For "All Performance Metrics", use tempSelectedPerformanceMetricsKPIs
@@ -7748,7 +7749,7 @@ function ReportingDashboard({
                               </Box>
                             </Box>
                             <Box display="flex" flexDirection="column" gap={1}>
-                              {sectionKPIs.map((key) => {
+                              {Array.from(new Set(sectionKPIs)).map((key) => {
                                 const metadata = KPI_METADATA[key];
                                 const kpi = dashboardData?.kpis?.[key];
                                 // Auth view: always allow selecting KPIs (so user can configure public view)
