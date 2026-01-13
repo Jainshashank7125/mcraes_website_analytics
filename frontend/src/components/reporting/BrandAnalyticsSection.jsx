@@ -1,5 +1,6 @@
 import { Box, Card, CardContent, Grid, Typography } from '@mui/material'
 import { motion } from 'framer-motion'
+import { KPI_METADATA } from './constants'
 
 export default function BrandAnalyticsSection({ brandAnalytics, theme }) {
   if (!brandAnalytics) {
@@ -1008,7 +1009,7 @@ export default function BrandAnalyticsSection({ brandAnalytics, theme }) {
                                 mb: 0.5
                               }}
                             >
-                              {kpi.label}
+                              {KPI_METADATA[kpiKey]?.label || kpi.label}
                             </Typography>
                             
                             {/* KPI Value */}
