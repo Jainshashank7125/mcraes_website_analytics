@@ -1939,7 +1939,7 @@ function ReportingDashboard({
           },
           {
             key: "ga4_top_pages",
-            label: "Top Landing Pages",
+            label: "Top Performing Pages",
             description: "Most visited pages",
           },
           {
@@ -1954,7 +1954,7 @@ function ReportingDashboard({
           },
           {
             key: "bounce_rate_donut",
-            label: "Bounce Rate Donut",
+            label: "Bounce Rate",
             description: "Bounce rate visualization",
           },
         ];
@@ -2003,7 +2003,7 @@ function ReportingDashboard({
           },
           {
             key: "brand_presence_rate_donut",
-            label: "Brand Presence Rate Donut",
+            label: "Brand Presence Rate",
             description: "Brand presence rate visualization",
           },
         ];
