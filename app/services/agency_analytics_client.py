@@ -41,6 +41,7 @@ class AgencyAnalyticsClient:
     async def _request(self, body: Dict) -> Dict:
         """Make HTTP request to Agency Analytics API"""
         try:
+            logger.debug(f"[Agency Analytics] Making API request to {self.base_url}")
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     self.base_url,
@@ -48,8 +49,15 @@ class AgencyAnalyticsClient:
                     json=body
                 )
                 
+                logger.debug(f"[Agency Analytics] API response status: {response.status_code}")
+                
                 # API always returns 200, but check response status field
-                response_data = response.json()
+                try:
+                    response_data = response.json()
+                except Exception as json_error:
+                    logger.error(f"[Agency Analytics] Failed to parse JSON response: {str(json_error)}")
+                    logger.error(f"[Agency Analytics] Response text: {response.text[:500]}")
+                    raise Exception(f"Invalid JSON response from Agency Analytics API: {str(json_error)}")
                 
                 # Check for errors in response
                 if response_data.get("status") == "error":
@@ -60,20 +68,27 @@ class AgencyAnalyticsClient:
                     if error_messages:
                         error_msg += f": {json.dumps(error_messages)}"
                     
-                    logger.error(error_msg)
+                    logger.error(f"[Agency Analytics] {error_msg}")
                     raise Exception(error_msg)
                 
                 # Check HTTP status code (should be 200, but handle other codes)
                 if response.status_code != 200:
-                    logger.error(f"HTTP error: {response.status_code} - {response.text}")
+                    logger.error(f"[Agency Analytics] HTTP error: {response.status_code} - {response.text[:500]}")
                     response.raise_for_status()
+                
+                # Log successful response structure
+                results = response_data.get("results", {})
+                rows = results.get("rows", [])
+                logger.debug(f"[Agency Analytics] Response contains {len(rows)} rows")
                 
                 return response_data
         except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
+            logger.error(f"[Agency Analytics] HTTP error: {e.response.status_code} - {e.response.text[:500]}")
             raise
         except Exception as e:
-            logger.error(f"Error making request: {str(e)}")
+            logger.error(f"[Agency Analytics] Error making request: {str(e)}")
+            import traceback
+            logger.error(f"[Agency Analytics] Traceback: {traceback.format_exc()}")
             raise
     
     async def get_campaigns(self, limit: int = 50, offset: int = 0) -> List[Dict]:
@@ -126,23 +141,40 @@ class AgencyAnalyticsClient:
         offset = 0
         batch_size = 100  # Reasonable batch size
         
+        logger.info(f"[Agency Analytics] Starting to fetch all campaigns (batch_size={batch_size})")
+        
         while True:
             try:
+                logger.debug(f"[Agency Analytics] Fetching campaigns batch: offset={offset}, limit={batch_size}")
                 campaigns = await self.get_campaigns(limit=batch_size, offset=offset)
+                logger.info(f"[Agency Analytics] Batch at offset {offset}: received {len(campaigns)} campaigns")
+                
                 if not campaigns:
+                    logger.info(f"[Agency Analytics] No more campaigns at offset {offset}, stopping pagination")
                     break
                 
                 all_campaigns.extend(campaigns)
+                logger.info(f"[Agency Analytics] Total campaigns so far: {len(all_campaigns)}")
                 
                 # If we got fewer than batch_size, we've reached the end
                 if len(campaigns) < batch_size:
+                    logger.info(f"[Agency Analytics] Received fewer than batch_size ({len(campaigns)} < {batch_size}), reached end")
                     break
                 
                 offset += batch_size
             except Exception as e:
-                logger.error(f"Error fetching campaigns batch at offset {offset}: {str(e)}")
-                break
+                logger.error(f"[Agency Analytics] Error fetching campaigns batch at offset {offset}: {str(e)}")
+                import traceback
+                logger.error(f"[Agency Analytics] Traceback: {traceback.format_exc()}")
+                # Don't break on first error - try to continue, but log the error
+                # Only break if we have no campaigns at all
+                if len(all_campaigns) == 0:
+                    logger.error(f"[Agency Analytics] No campaigns fetched yet, stopping due to error")
+                    break
+                # Otherwise, continue to next batch
+                offset += batch_size
         
+        logger.info(f"[Agency Analytics] Finished fetching all campaigns. Total: {len(all_campaigns)}")
         return all_campaigns
     
     async def get_campaign(self, campaign_id: int) -> Optional[Dict]:
