@@ -825,10 +825,15 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                 )}
 
                 {/* Geographic Breakdown - Bar Chart & Pie Chart */}
-                {dashboardData.chart_data?.geographic_breakdown && dashboardData.chart_data.geographic_breakdown.length > 0 && (
-                  <Grid container spacing={3} sx={{ mb: 3 }}>
-                    {/* Bar Chart */}
-                    <Grid item xs={12} md={7}>
+                {((dashboardData.chart_data?.geographic_breakdown && dashboardData.chart_data.geographic_breakdown.length > 0) || dashboardData?.kpis?.bounce_rate) && (
+                  <Grid container spacing={3} sx={{ mb: 3 }} alignItems="flex-start">
+                    {/* Bar Chart - Geographic Distribution */}
+                    {dashboardData.chart_data?.geographic_breakdown && dashboardData.chart_data.geographic_breakdown.length > 0 && (
+                    <Grid item xs={12} md={
+                      // If Top Countries is visible, take 7, otherwise if Bounce Rate is visible take 7, else full width
+                      dashboardData.chart_data?.geographic_breakdown && dashboardData.chart_data.geographic_breakdown.length > 0 ? 7 : 
+                      (dashboardData?.kpis?.bounce_rate ? 7 : 12)
+                    } sx={{ alignSelf: 'flex-start' }}>
                       <motion.div
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -881,9 +886,15 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                         </Card>
                       </motion.div>
                     </Grid>
+                    )}
 
-                    {/* Pie Chart */}
-                    <Grid item xs={12} md={5}>
+                    {/* Pie Chart - Top Countries */}
+                    {dashboardData.chart_data?.geographic_breakdown && dashboardData.chart_data.geographic_breakdown.length > 0 && (
+                    <Grid item xs={12} md={
+                      // If Geographic Distribution is visible, take 5, otherwise if Bounce Rate is visible take 5, else full width
+                      dashboardData.chart_data?.geographic_breakdown && dashboardData.chart_data.geographic_breakdown.length > 0 ? 5 : 
+                      (dashboardData?.kpis?.bounce_rate ? 5 : 12)
+                    } sx={{ alignSelf: 'flex-start' }}>
                       <motion.div
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -944,6 +955,72 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                         </Card>
                       </motion.div>
                     </Grid>
+                    )}
+
+                    {/* Bounce Rate Donut - Appears in same row when there's space (when only one geographic chart would be visible) */}
+                    {dashboardData?.kpis?.bounce_rate && (
+                      <Grid item xs={12} sm={6} md={5} sx={{ alignSelf: 'flex-start' }}>
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.3, delay: 0.65 }}
+                        >
+                          <Card sx={{ height: '100%', borderRadius: 2, border: `1px solid ${theme.palette.divider}`, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+                            <CardContent sx={{ p: 3, textAlign: 'center' }}>
+                              <Typography 
+                                variant="h6" 
+                                mb={2} 
+                                fontWeight={600}
+                                sx={{ fontSize: '1rem', letterSpacing: '-0.01em' }}
+                              >
+                                Bounce Rate
+                              </Typography>
+                              <ResponsiveContainer width="100%" height={250}>
+                                <PieChart>
+                                  <Pie
+                                    data={[
+                                      { name: 'Bounced', value: dashboardData.kpis.bounce_rate.value || 0 },
+                                      { name: 'Engaged', value: 100 - (dashboardData.kpis.bounce_rate.value || 0) }
+                                    ]}
+                                    cx="50%"
+                                    cy="50%"
+                                    innerRadius={60}
+                                    outerRadius={90}
+                                    startAngle={90}
+                                    endAngle={-270}
+                                    dataKey="value"
+                                    label={({ name, value }) => `${name}: ${value.toFixed(1)}%`}
+                                    labelLine={false}
+                                  >
+                                    <Cell fill={theme.palette.error.main} />
+                                    <Cell fill={theme.palette.success.main} />
+                                  </Pie>
+                                  <Tooltip 
+                                    formatter={(value) => [`${value.toFixed(1)}%`, '']}
+                                  />
+                                </PieChart>
+                              </ResponsiveContainer>
+                              <Box sx={{ mt: 2, textAlign: 'center' }}>
+                                <Typography
+                                  variant="h5"
+                                  fontWeight={700}
+                                  color={dashboardData.kpis.bounce_rate.value > 50 ? 'error.main' : 'success.main'}
+                                >
+                                  {(dashboardData.kpis.bounce_rate.value || 0).toFixed(1)}%
+                                </Typography>
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ fontSize: '0.75rem', display: 'block', mt: 0.5 }}
+                                >
+                                  Bounced Sessions
+                                </Typography>
+                              </Box>
+                            </CardContent>
+                          </Card>
+                        </motion.div>
+                      </Grid>
+                    )}
                   </Grid>
                 )}
 
@@ -956,10 +1033,10 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                 >
                   Performance Metrics
                 </Typography>
-                <Grid container spacing={3} sx={{ mb: 4 }}>
-                  {/* Bounce Rate Donut */}
-                  {dashboardData?.kpis?.bounce_rate && (
-                  <Grid item xs={12} sm={6} md={3}>
+                <Grid container spacing={3} sx={{ mb: 4 }} alignItems="flex-start">
+                  {/* Bounce Rate Donut - Only show here if Geographic charts section is not visible */}
+                  {dashboardData?.kpis?.bounce_rate && (!dashboardData.chart_data?.geographic_breakdown || dashboardData.chart_data.geographic_breakdown.length === 0) && (
+                  <Grid item xs={12} sm={6} md={3} sx={{ alignSelf: 'flex-start' }}>
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
