@@ -156,7 +156,7 @@ export default function ScrunchVisualizations({
   return (
     <Grid container spacing={3}>
       {/* Position Distribution - Simple Card Display */}
-      {data.positionDistribution !== null && data.positionDistribution !== undefined && (() => {
+      {showPositionDistribution && data.positionDistribution !== null && data.positionDistribution !== undefined && (() => {
         // Get the average brand_position_score directly from API
         const positionScore = data.positionDistribution
         
