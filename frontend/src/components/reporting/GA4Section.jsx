@@ -19,6 +19,46 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
     return 'Current Period' // TODO: Pass as prop or calculate from date range
   }
 
+  // Helper function to deduplicate and aggregate traffic sources by channel
+  const deduplicateTrafficSources = (trafficSources) => {
+    if (!trafficSources || trafficSources.length === 0) return [];
+    
+    const channelMap = new Map();
+    
+    trafficSources.forEach((item) => {
+      const channelName = item.channel || item.source || 'Unknown';
+      const normalizedChannel = getChannelLabel ? getChannelLabel(channelName) : channelName;
+      
+      if (channelMap.has(normalizedChannel)) {
+        // Aggregate values for duplicate channels
+        const existing = channelMap.get(normalizedChannel);
+        existing.users = (existing.users || 0) + (item.users || 0);
+        existing.sessions = (existing.sessions || 0) + (item.sessions || 0);
+        existing.source = normalizedChannel; // Use normalized name
+        existing.channel = normalizedChannel;
+      } else {
+        // Create new entry with normalized channel name
+        channelMap.set(normalizedChannel, {
+          ...item,
+          channel: normalizedChannel,
+          source: normalizedChannel,
+          displayName: normalizedChannel,
+          users: item.users || 0,
+          sessions: item.sessions || 0,
+        });
+      }
+    });
+    
+    // Convert map to array and sort by sessions (descending) or users (descending)
+    return Array.from(channelMap.values()).sort((a, b) => {
+      // Sort by sessions first, then by users
+      if (b.sessions !== a.sessions) {
+        return (b.sessions || 0) - (a.sessions || 0);
+      }
+      return (b.users || 0) - (a.users || 0);
+    });
+  };
+
   return (
     <>
       <Typography 
@@ -656,10 +696,12 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                             <ResponsiveContainer width="100%" height={300}>
                               <PieChart>
                                 <Pie
-                                  data={dashboardData.chart_data.traffic_sources.slice(0, 6).map((item) => ({
-                                    name: getChannelLabel ? getChannelLabel(item.channel || item.source || 'Unknown') : (item.channel || item.source || 'Unknown'),
-                                    value: item.users || 0,
-                                  }))}
+                                  data={deduplicateTrafficSources(dashboardData.chart_data.traffic_sources)
+                                    .slice(0, 6)
+                                    .map((item) => ({
+                                      name: item.channel || item.displayName || 'Unknown',
+                                      value: item.users || 0,
+                                    }))}
                                   cx="50%"
                                   cy="50%"
                                   labelLine={false}
@@ -669,7 +711,9 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                   fill="#8884d8"
                                   dataKey="value"
                                 >
-                                  {dashboardData.chart_data.traffic_sources.slice(0, 6).map((entry, index) => {
+                                  {deduplicateTrafficSources(dashboardData.chart_data.traffic_sources)
+                                    .slice(0, 6)
+                                    .map((entry, index) => {
                                     const colors = [
                                       theme.palette.primary.main,
                                       theme.palette.secondary.main,
@@ -780,10 +824,12 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                         </Typography>
                         <ResponsiveContainer width="100%" height={350}>
                           <BarChart
-                            data={dashboardData.chart_data.traffic_sources.slice(0, 8).map(item => ({
-                              ...item,
-                              displayName: getChannelLabel ? getChannelLabel(item.channel || item.source || 'Unknown') : (item.channel || item.source || 'Unknown')
-                            }))}
+                            data={deduplicateTrafficSources(dashboardData.chart_data.traffic_sources)
+                              .slice(0, 8)
+                              .map(item => ({
+                                ...item,
+                                displayName: item.channel || item.displayName || 'Unknown'
+                              }))}
                             margin={{ top: 5, right: 30, left: 20, bottom: 60 }}
                           >
                             <CartesianGrid strokeDasharray="3 3" stroke="#E4E4E7" />
