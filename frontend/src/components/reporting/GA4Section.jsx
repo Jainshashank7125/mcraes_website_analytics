@@ -2263,7 +2263,9 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                 fill="#8884d8"
                                 dataKey="value"
                               >
-                                {dashboardData.chart_data.traffic_sources.slice(0, 6).map((entry, index) => {
+                                {deduplicateTrafficSources(dashboardData.chart_data.traffic_sources)
+                                  .slice(0, 6)
+                                  .map((entry, index) => {
                                   const colors = [
                                     theme.palette.primary.main,
                                     theme.palette.secondary.main,
@@ -2371,10 +2373,12 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                       </Typography>
                       <ResponsiveContainer width="100%" height={350}>
                         <BarChart
-                          data={dashboardData.chart_data.traffic_sources.slice(0, 8).map(item => ({
-                            ...item,
-                            displayName: getChannelLabel ? getChannelLabel(item.channel || item.source || 'Unknown') : (item.channel || item.source || 'Unknown')
-                          }))}
+                          data={deduplicateTrafficSources(dashboardData.chart_data.traffic_sources)
+                            .slice(0, 8)
+                            .map(item => ({
+                              ...item,
+                              displayName: item.channel || item.displayName || 'Unknown'
+                            }))}
                           margin={{ top: 5, right: 30, left: 20, bottom: 60 }}
                         >
                           <CartesianGrid strokeDasharray="3 3" stroke="#E4E4E7" />
