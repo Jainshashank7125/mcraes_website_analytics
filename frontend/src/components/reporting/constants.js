@@ -97,6 +97,7 @@ export const KPI_ORDER = [
   "avg_session_duration",
   "ga4_engagement_rate",
   "conversions",
+  "revenue",
   // AgencyAnalytics KPIs
   "search_volume",
   "avg_keyword_rank",
