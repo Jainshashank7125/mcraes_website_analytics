@@ -46,7 +46,7 @@ export default function ScrunchAISection({ dashboardData, formatValue, theme }) 
             mb={2}
             sx={{ fontSize: '1.125rem', letterSpacing: '-0.01em' }}
           >
-            Brand Presence Metrics
+            Brand Presence Rate
           </Typography>
           <Grid container spacing={3}>
             <Grid item xs={12} sm={6} md={4}>
