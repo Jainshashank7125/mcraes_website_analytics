@@ -1707,6 +1707,46 @@ function ReportingDashboard({
     return source.charAt(0).toUpperCase() + source.slice(1).toLowerCase();
   };
 
+  // Helper function to deduplicate and aggregate traffic sources by channel
+  const deduplicateTrafficSources = (trafficSources) => {
+    if (!trafficSources || trafficSources.length === 0) return [];
+    
+    const channelMap = new Map();
+    
+    trafficSources.forEach((item) => {
+      const channelName = item.channel || item.source || 'Unknown';
+      const normalizedChannel = getChannelLabel(channelName);
+      
+      if (channelMap.has(normalizedChannel)) {
+        // Aggregate values for duplicate channels
+        const existing = channelMap.get(normalizedChannel);
+        existing.users = (existing.users || 0) + (item.users || 0);
+        existing.sessions = (existing.sessions || 0) + (item.sessions || 0);
+        existing.source = normalizedChannel; // Use normalized name
+        existing.channel = normalizedChannel;
+      } else {
+        // Create new entry with normalized channel name
+        channelMap.set(normalizedChannel, {
+          ...item,
+          channel: normalizedChannel,
+          source: normalizedChannel,
+          displayName: normalizedChannel,
+          users: item.users || 0,
+          sessions: item.sessions || 0,
+        });
+      }
+    });
+    
+    // Convert map to array and sort by sessions (descending) or users (descending)
+    return Array.from(channelMap.values()).sort((a, b) => {
+      // Sort by sessions first, then by users
+      if (b.sessions !== a.sessions) {
+        return (b.sessions || 0) - (a.sessions || 0);
+      }
+      return (b.users || 0) - (a.users || 0);
+    });
+  };
+
   // Helper function to get channel color
   const getChannelColor = (source) => {
     if (!source) return "rgba(59, 130, 246, 0.6)";
@@ -5270,10 +5310,10 @@ function ReportingDashboard({
                                       }}
                                     >
                                       <Pie
-                                        data={dashboardData.chart_data.traffic_sources
+                                        data={deduplicateTrafficSources(dashboardData.chart_data.traffic_sources)
                                           .slice(0, 6)
                                           .map((item) => ({
-                                            name: getChannelLabel(item.channel || item.source || "Unknown"),
+                                            name: item.channel || item.displayName || "Unknown",
                                             value: item.users || 0,
                                           }))}
                                         cx="50%"
@@ -5285,7 +5325,7 @@ function ReportingDashboard({
                                         fill="#8884d8"
                                         dataKey="value"
                                       >
-                                        {dashboardData.chart_data.traffic_sources
+                                        {deduplicateTrafficSources(dashboardData.chart_data.traffic_sources)
                                           .slice(0, 6)
                                           .map((entry, index) => {
                                             const colors = [
@@ -5373,16 +5413,12 @@ function ReportingDashboard({
                                       height={300}
                                     >
                                   <BarChart
-                                    data={dashboardData.chart_data.traffic_sources.slice(
-                                      0,
-                                      8
-                                    ).map(item => {
-                                      const channelName = item.channel || item.source || 'Unknown'
-                                      return {
+                                    data={deduplicateTrafficSources(dashboardData.chart_data.traffic_sources)
+                                      .slice(0, 8)
+                                      .map(item => ({
                                         ...item,
-                                        displayName: getChannelLabel(channelName)
-                                      }
-                                    })}
+                                        displayName: item.channel || item.displayName || 'Unknown'
+                                      }))}
                                     layout="vertical"
                                     margin={{
                                       top: 5,
@@ -5468,16 +5504,12 @@ function ReportingDashboard({
                             </Typography>
                             <ResponsiveContainer width="100%" height={350}>
                               <BarChart
-                                data={dashboardData.chart_data.traffic_sources.slice(
-                                  0,
-                                  8
-                                ).map(item => {
-                                  const channelName = item.channel || item.source || 'Unknown'
-                                  return {
+                                data={deduplicateTrafficSources(dashboardData.chart_data.traffic_sources)
+                                  .slice(0, 8)
+                                  .map(item => ({
                                     ...item,
-                                    displayName: getChannelLabel(channelName)
-                                  }
-                                })}
+                                    displayName: item.channel || item.displayName || 'Unknown'
+                                  }))}
                                 margin={{
                                   top: 5,
                                   right: 30,
