@@ -6080,7 +6080,7 @@ function ReportingDashboard({
                                   letterSpacing: "-0.01em",
                                 }}
                               >
-                                Brand Presence Metrics
+                                Brand Presence Rate
                               </Typography>
                               <Grid container spacing={3}>
                                 {shouldShowKPI("brand_presence_rate") &&
