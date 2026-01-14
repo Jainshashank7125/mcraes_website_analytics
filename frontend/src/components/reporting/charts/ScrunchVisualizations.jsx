@@ -14,7 +14,16 @@ import { debugError } from '../../../utils/debug'
  * Scrunch AI Visualizations Component
  * Fetches and displays Query API-based visualizations
  */
-export default function ScrunchVisualizations({ brandId, startDate, endDate }) {
+export default function ScrunchVisualizations({ 
+  brandId, 
+  startDate, 
+  endDate,
+  showPositionDistribution = true,
+  showPlatformDistribution = true,
+  showCompetitivePresence = true,
+  showBrandPresenceTrend = true,
+  showBrandSentimentAnalysis = true
+}) {
   const theme = useTheme()
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState({
@@ -246,7 +255,7 @@ export default function ScrunchVisualizations({ brandId, startDate, endDate }) {
       })()}
 
       {/* Sentiment Distribution - Simple Card Display */}
-      {data.sentimentDistribution && data.sentimentDistribution.length > 0 && (() => {
+      {showBrandSentimentAnalysis && data.sentimentDistribution && data.sentimentDistribution.length > 0 && (() => {
         // Find dominant sentiment category
         const dominantSentiment = data.sentimentDistribution.reduce((prev, current) => 
           (prev.value > current.value) ? prev : current
@@ -403,7 +412,7 @@ export default function ScrunchVisualizations({ brandId, startDate, endDate }) {
       })()}
 
       {/* Platform Distribution */}
-      {data.platformDistribution && (
+      {showPlatformDistribution && data.platformDistribution && (
         <Grid item xs={12} sm={6} md={6}>
           <ChartCard
             title="AI Platform Distribution"
@@ -515,7 +524,7 @@ export default function ScrunchVisualizations({ brandId, startDate, endDate }) {
       )}
 
       {/* Time Series Trends */}
-      {data.timeSeries && data.timeSeries.length > 0 && (
+      {showBrandPresenceTrend && data.timeSeries && data.timeSeries.length > 0 && (
         <Grid item xs={12} md={6}>
           <ChartCard
             title="Brand Presence Trend Over Time"

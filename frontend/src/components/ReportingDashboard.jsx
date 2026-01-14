@@ -2037,9 +2037,29 @@ function ReportingDashboard({
             description: "Platform distribution, funnel stages, and sentiment",
           },
           {
-            key: "scrunch_visualizations",
-            label: "Advanced Query Visualizations",
-            description: "Includes: AI Platform Distribution, Competitive Presence Analysis, Brand Presence Trend Over Time, Position (% of total), and Brand Sentiment Analysis",
+            key: "ai_platform_distribution",
+            label: "AI Platform Distribution",
+            description: "Distribution of responses across different AI platforms",
+          },
+          {
+            key: "competitive_presence_analysis",
+            label: "Competitive Presence Analysis",
+            description: "Brand presence percentage for your brand and top competitors",
+          },
+          {
+            key: "brand_presence_trend",
+            label: "Brand Presence Trend Over Time",
+            description: "Weekly trend of your brand's presence percentage",
+          },
+          {
+            key: "position_distribution",
+            label: "Position (% of total)",
+            description: "Where your brand is positioned in AI responses",
+          },
+          {
+            key: "brand_sentiment_analysis_chart",
+            label: "Brand Sentiment Analysis",
+            description: "Dominant sentiment category in AI responses",
           },
           {
             key: "brand_presence_rate_donut",
@@ -7281,16 +7301,26 @@ function ReportingDashboard({
                         )}
 
                       {/* Advanced Query Visualizations - Sub-section under Scrunch AI (no separate heading) */}
-                      {selectedBrandId &&
-                        isChartVisible("scrunch_visualizations") && (
+                      {selectedBrandId && (
+                        (isChartVisible("position_distribution") ||
+                         isChartVisible("ai_platform_distribution") ||
+                         isChartVisible("competitive_presence_analysis") ||
+                         isChartVisible("brand_presence_trend") ||
+                         isChartVisible("brand_sentiment_analysis_chart")) && (
                           <Box sx={{ mb: 4, mt: 4 }}>
                             <ScrunchVisualizations
                               brandId={selectedBrandId}
                               startDate={startDate}
                               endDate={endDate}
+                              showPositionDistribution={isChartVisible("position_distribution")}
+                              showPlatformDistribution={isChartVisible("ai_platform_distribution")}
+                              showCompetitivePresence={isChartVisible("competitive_presence_analysis")}
+                              showBrandPresenceTrend={isChartVisible("brand_presence_trend")}
+                              showBrandSentimentAnalysis={isChartVisible("brand_sentiment_analysis_chart")}
                             />
                           </Box>
-                        )}
+                        )
+                      )}
                     </>
                   );
                 })()}
