@@ -2009,7 +2009,7 @@ function ReportingDashboard({
           },
           {
             key: "ga4_channel_performance",
-            label: "Channel Performance",
+            label: "Sessions vs Users by Channel",
             description: "Traffic by marketing channel",
           },
           {
