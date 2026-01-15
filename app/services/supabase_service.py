@@ -873,35 +873,29 @@ class SupabaseService:
                         use_property_id_query = True
                 
                 if use_property_id_query:
-                    # Query by property_id only, but deduplicate by date (prefer records matching client_id if available)
-                    # Use DISTINCT ON to get one record per date, prioritizing client_id matches
+                    # Query by property_id only (no client_id filter)
                     query = text("""
-                        SELECT DISTINCT ON (date) *
-                        FROM ga4_traffic_overview
+                        SELECT * FROM ga4_traffic_overview
                         WHERE property_id = :property_id
                           AND date >= CAST(:start_date AS DATE)
                           AND date <= CAST(:end_date AS DATE)
-                        ORDER BY date ASC, 
-                                 CASE WHEN client_id = :client_id THEN 0 ELSE 1 END ASC
+                        ORDER BY date ASC
                     """)
                     result = self.db.execute(query, {
                         "property_id": property_id,
-                        "client_id": client_id,
                         "start_date": start_date,
                         "end_date": end_date
                     })
                     records = [dict(row._mapping) for row in result]
                 else:
-                    # Query by client_id first - use DISTINCT ON to handle duplicate records with same client_id but different brand_id
+                    # Query by client_id first
                     query = text("""
-                        SELECT DISTINCT ON (date) *
-                        FROM ga4_traffic_overview
+                        SELECT * FROM ga4_traffic_overview
                         WHERE client_id = :client_id
                           AND property_id = :property_id
                           AND date >= CAST(:start_date AS DATE)
                           AND date <= CAST(:end_date AS DATE)
-                        ORDER BY date ASC,
-                                 CASE WHEN brand_id IS NOT NULL THEN 0 ELSE 1 END ASC
+                        ORDER BY date ASC
                     """)
                     result = self.db.execute(query, {
                         "client_id": client_id,
@@ -913,21 +907,17 @@ class SupabaseService:
                     
                     # If no records found for this specific client_id, fall back to property_id only
                     # (data is shared across clients with the same property)
-                    # Deduplicate by date to prevent double-counting when multiple clients share the same property
                     if not records:
-                        logger.info(f"No GA4 traffic overview data found for client_id={client_id}, falling back to property_id={property_id} query (with deduplication)")
+                        logger.info(f"No GA4 traffic overview data found for client_id={client_id}, falling back to property_id={property_id} query")
                         query = text("""
-                            SELECT DISTINCT ON (date) *
-                            FROM ga4_traffic_overview
+                            SELECT * FROM ga4_traffic_overview
                             WHERE property_id = :property_id
                               AND date >= CAST(:start_date AS DATE)
                               AND date <= CAST(:end_date AS DATE)
-                            ORDER BY date ASC,
-                                     CASE WHEN client_id = :client_id THEN 0 ELSE 1 END ASC
+                            ORDER BY date ASC
                         """)
                         result = self.db.execute(query, {
                             "property_id": property_id,
-                            "client_id": client_id,
                             "start_date": start_date,
                             "end_date": end_date
                         })
@@ -1922,13 +1912,11 @@ class SupabaseService:
                 requested_start = start_dt
                 requested_end = end_dt
                 
-                # Check if the snapshot's period matches the requested period (within tolerance)
+                # Check if the snapshot's period matches the requested period (within 2 days tolerance)
                 start_diff = abs((snapshot_start - requested_start).days)
                 end_diff = abs((snapshot_end - requested_end).days)
                 
-                # Allow using snapshot if end date matches (within 2 days) and start date is reasonable
-                # This allows using snapshots for longer periods (e.g., 45 days) when available
-                if end_diff <= 2 and start_diff <= 15:
+                if start_diff <= 2 and end_diff <= 2:
                     return snapshot
             
             return None
@@ -1947,45 +1935,28 @@ class SupabaseService:
             table = self._get_table("ga4_top_pages")
             records = []
             if client_id is not None:
-                # Use DISTINCT ON to handle duplicate records with same client_id/date/page_path but different brand_id
-                query = text("""
-                    SELECT DISTINCT ON (date, page_path) *
-                    FROM ga4_top_pages
-                    WHERE client_id = :client_id
-                      AND property_id = :property_id
-                      AND date >= CAST(:start_date AS DATE)
-                      AND date <= CAST(:end_date AS DATE)
-                    ORDER BY date ASC, page_path ASC,
-                             CASE WHEN brand_id IS NOT NULL THEN 0 ELSE 1 END ASC
-                """)
-                result = self.db.execute(query, {
-                    "client_id": client_id,
-                    "property_id": property_id,
-                    "start_date": start_date,
-                    "end_date": end_date
-                })
+                query = select(table).where(
+                    and_(
+                        table.c.client_id == client_id,
+                        table.c.property_id == property_id,
+                        table.c.date >= start_date,
+                        table.c.date <= end_date
+                    )
+                )
+                result = self.db.execute(query)
                 records = [dict(row._mapping) for row in result]
                 
                 # If no records found for this specific client_id, fall back to property_id only
-                # Use DISTINCT ON to deduplicate by date and page_path to prevent double-counting
                 if not records:
-                    logger.info(f"No GA4 top pages data found for client_id={client_id}, falling back to property_id={property_id} query (with deduplication)")
-                    # Use raw SQL for DISTINCT ON since SQLAlchemy Core doesn't support it directly
-                    query = text("""
-                        SELECT DISTINCT ON (date, page_path) *
-                        FROM ga4_top_pages
-                        WHERE property_id = :property_id
-                          AND date >= CAST(:start_date AS DATE)
-                          AND date <= CAST(:end_date AS DATE)
-                        ORDER BY date ASC, page_path ASC,
-                                 CASE WHEN client_id = :client_id THEN 0 ELSE 1 END ASC
-                    """)
-                    result = self.db.execute(query, {
-                        "property_id": property_id,
-                        "client_id": client_id,
-                        "start_date": start_date,
-                        "end_date": end_date
-                    })
+                    logger.info(f"No GA4 top pages data found for client_id={client_id}, falling back to property_id={property_id} query")
+                    query = select(table).where(
+                        and_(
+                            table.c.property_id == property_id,
+                            table.c.date >= start_date,
+                            table.c.date <= end_date
+                        )
+                    )
+                    result = self.db.execute(query)
                     records = [dict(row._mapping) for row in result]
             else:
                 query = select(table).where(
@@ -2055,44 +2026,28 @@ class SupabaseService:
             table = self._get_table("ga4_traffic_sources")
             records = []
             if client_id is not None:
-                # Use DISTINCT ON to handle duplicate records with same client_id/date/source but different brand_id
-                query = text("""
-                    SELECT DISTINCT ON (date, source) *
-                    FROM ga4_traffic_sources
-                    WHERE client_id = :client_id
-                      AND property_id = :property_id
-                      AND date >= CAST(:start_date AS DATE)
-                      AND date <= CAST(:end_date AS DATE)
-                    ORDER BY date ASC, source ASC,
-                             CASE WHEN brand_id IS NOT NULL THEN 0 ELSE 1 END ASC
-                """)
-                result = self.db.execute(query, {
-                    "client_id": client_id,
-                    "property_id": property_id,
-                    "start_date": start_date,
-                    "end_date": end_date
-                })
+                query = select(table).where(
+                    and_(
+                        table.c.client_id == client_id,
+                        table.c.property_id == property_id,
+                        table.c.date >= start_date,
+                        table.c.date <= end_date
+                    )
+                )
+                result = self.db.execute(query)
                 records = [dict(row._mapping) for row in result]
                 
                 # If no records found for this specific client_id, fall back to property_id only
-                # Use DISTINCT ON to deduplicate by date and source to prevent double-counting
                 if not records:
-                    logger.info(f"No GA4 traffic sources data found for client_id={client_id}, falling back to property_id={property_id} query (with deduplication)")
-                    query = text("""
-                        SELECT DISTINCT ON (date, source) *
-                        FROM ga4_traffic_sources
-                        WHERE property_id = :property_id
-                          AND date >= CAST(:start_date AS DATE)
-                          AND date <= CAST(:end_date AS DATE)
-                        ORDER BY date ASC, source ASC,
-                                 CASE WHEN client_id = :client_id THEN 0 ELSE 1 END ASC
-                    """)
-                    result = self.db.execute(query, {
-                        "property_id": property_id,
-                        "client_id": client_id,
-                        "start_date": start_date,
-                        "end_date": end_date
-                    })
+                    logger.info(f"No GA4 traffic sources data found for client_id={client_id}, falling back to property_id={property_id} query")
+                    query = select(table).where(
+                        and_(
+                            table.c.property_id == property_id,
+                            table.c.date >= start_date,
+                            table.c.date <= end_date
+                        )
+                    )
+                    result = self.db.execute(query)
                     records = [dict(row._mapping) for row in result]
             else:
                 query = select(table).where(
@@ -2212,44 +2167,28 @@ class SupabaseService:
             table = self._get_table("ga4_geographic")
             records = []
             if client_id is not None:
-                # Use DISTINCT ON to handle duplicate records with same client_id/date/country but different brand_id
-                query = text("""
-                    SELECT DISTINCT ON (date, country) *
-                    FROM ga4_geographic
-                    WHERE client_id = :client_id
-                      AND property_id = :property_id
-                      AND date >= CAST(:start_date AS DATE)
-                      AND date <= CAST(:end_date AS DATE)
-                    ORDER BY date ASC, country ASC,
-                             CASE WHEN brand_id IS NOT NULL THEN 0 ELSE 1 END ASC
-                """)
-                result = self.db.execute(query, {
-                    "client_id": client_id,
-                    "property_id": property_id,
-                    "start_date": start_date,
-                    "end_date": end_date
-                })
+                query = select(table).where(
+                    and_(
+                        table.c.client_id == client_id,
+                        table.c.property_id == property_id,
+                        table.c.date >= start_date,
+                        table.c.date <= end_date
+                    )
+                )
+                result = self.db.execute(query)
                 records = [dict(row._mapping) for row in result]
                 
                 # If no records found for this specific client_id, fall back to property_id only
-                # Use DISTINCT ON to deduplicate by date and country to prevent double-counting
                 if not records:
-                    logger.info(f"No GA4 geographic data found for client_id={client_id}, falling back to property_id={property_id} query (with deduplication)")
-                    query = text("""
-                        SELECT DISTINCT ON (date, country) *
-                        FROM ga4_geographic
-                        WHERE property_id = :property_id
-                          AND date >= CAST(:start_date AS DATE)
-                          AND date <= CAST(:end_date AS DATE)
-                        ORDER BY date ASC, country ASC,
-                                 CASE WHEN client_id = :client_id THEN 0 ELSE 1 END ASC
-                    """)
-                    result = self.db.execute(query, {
-                        "property_id": property_id,
-                        "client_id": client_id,
-                        "start_date": start_date,
-                        "end_date": end_date
-                    })
+                    logger.info(f"No GA4 geographic data found for client_id={client_id}, falling back to property_id={property_id} query")
+                    query = select(table).where(
+                        and_(
+                            table.c.property_id == property_id,
+                            table.c.date >= start_date,
+                            table.c.date <= end_date
+                        )
+                    )
+                    result = self.db.execute(query)
                     records = [dict(row._mapping) for row in result]
             else:
                 query = select(table).where(
@@ -2307,44 +2246,28 @@ class SupabaseService:
             table = self._get_table("ga4_devices")
             records = []
             if client_id is not None:
-                # Use DISTINCT ON to handle duplicate records with same client_id/date/device but different brand_id
-                query = text("""
-                    SELECT DISTINCT ON (date, device_category) *
-                    FROM ga4_devices
-                    WHERE client_id = :client_id
-                      AND property_id = :property_id
-                      AND date >= CAST(:start_date AS DATE)
-                      AND date <= CAST(:end_date AS DATE)
-                    ORDER BY date ASC, device_category ASC,
-                             CASE WHEN brand_id IS NOT NULL THEN 0 ELSE 1 END ASC
-                """)
-                result = self.db.execute(query, {
-                    "client_id": client_id,
-                    "property_id": property_id,
-                    "start_date": start_date,
-                    "end_date": end_date
-                })
+                query = select(table).where(
+                    and_(
+                        table.c.client_id == client_id,
+                        table.c.property_id == property_id,
+                        table.c.date >= start_date,
+                        table.c.date <= end_date
+                    )
+                )
+                result = self.db.execute(query)
                 records = [dict(row._mapping) for row in result]
                 
                 # If no records found for this specific client_id, fall back to property_id only
-                # Use DISTINCT ON to deduplicate by date and device_category to prevent double-counting
                 if not records:
-                    logger.info(f"No GA4 devices data found for client_id={client_id}, falling back to property_id={property_id} query (with deduplication)")
-                    query = text("""
-                        SELECT DISTINCT ON (date, device_category) *
-                        FROM ga4_devices
-                        WHERE property_id = :property_id
-                          AND date >= CAST(:start_date AS DATE)
-                          AND date <= CAST(:end_date AS DATE)
-                        ORDER BY date ASC, device_category ASC,
-                                 CASE WHEN client_id = :client_id THEN 0 ELSE 1 END ASC
-                    """)
-                    result = self.db.execute(query, {
-                        "property_id": property_id,
-                        "client_id": client_id,
-                        "start_date": start_date,
-                        "end_date": end_date
-                    })
+                    logger.info(f"No GA4 devices data found for client_id={client_id}, falling back to property_id={property_id} query")
+                    query = select(table).where(
+                        and_(
+                            table.c.property_id == property_id,
+                            table.c.date >= start_date,
+                            table.c.date <= end_date
+                        )
+                    )
+                    result = self.db.execute(query)
                     records = [dict(row._mapping) for row in result]
             else:
                 query = select(table).where(
