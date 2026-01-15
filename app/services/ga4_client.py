@@ -137,17 +137,8 @@ class GA4APIClient:
                 "engagementRate": 0,
             }
             
-            # Track weighted sums for rates (weighted by sessions)
-            weighted_duration = 0
-            weighted_bounce = 0
-            weighted_engagement = 0
-            
+            count = 0
             for row in response.rows:
-                daily_sessions = 0
-                daily_bounce_rate = 0
-                daily_avg_duration = 0
-                daily_engagement_rate = 0
-                
                 for i, metric_value in enumerate(row.metric_values):
                     metric_name = request.metrics[i].name
                     value = float(metric_value.value)
@@ -155,29 +146,22 @@ class GA4APIClient:
                         totals["users"] += int(value)  # Sum activeUsers across dates (this is the total users)
                     elif metric_name == "sessions":
                         totals["sessions"] += int(value)
-                        daily_sessions = int(value)
                     elif metric_name == "newUsers":
                         totals["newUsers"] += int(value)
                     elif metric_name == "bounceRate":
-                        daily_bounce_rate = value
+                        totals["bounceRate"] += value
                     elif metric_name == "averageSessionDuration":
-                        daily_avg_duration = value
+                        totals["averageSessionDuration"] += value
                     elif metric_name == "engagedSessions":
                         totals["engagedSessions"] += int(value)
                     elif metric_name == "engagementRate":
-                        daily_engagement_rate = value
-                
-                # Calculate weighted sums (weight by session count for this day)
-                weighted_duration += daily_avg_duration * daily_sessions
-                weighted_bounce += daily_bounce_rate * daily_sessions
-                weighted_engagement += daily_engagement_rate * daily_sessions
+                        totals["engagementRate"] += value
+                count += 1
             
-            # Calculate weighted averages (weighted by session count - consistent with GA4 reporting)
-            if totals["sessions"] > 0:
-                totals["averageSessionDuration"] = weighted_duration / totals["sessions"]
-                totals["bounceRate"] = weighted_bounce / totals["sessions"]
-                totals["engagementRate"] = weighted_engagement / totals["sessions"]
-                logger.info(f"[GA4 CLIENT] Weighted averages calculated - avgDuration: {totals['averageSessionDuration']:.1f}s, bounceRate: {totals['bounceRate']:.4f}, engagementRate: {totals['engagementRate']:.4f}")
+            if count > 0:
+                totals["bounceRate"] = totals["bounceRate"] / count
+                totals["averageSessionDuration"] = totals["averageSessionDuration"] / count
+                totals["engagementRate"] = totals["engagementRate"] / count
             
             # Store daily breakdown for later use
             daily_data = []
@@ -252,38 +236,24 @@ class GA4APIClient:
                     "averageSessionDuration": 0,
                     "engagementRate": 0,
                 }
-                
-                # Track weighted sums for previous period rates
-                prev_weighted_duration = 0
-                prev_weighted_engagement = 0
-                
+                prev_count = 0
                 for row in prev_response.rows:
-                    daily_sessions = 0
-                    daily_avg_duration = 0
-                    daily_engagement_rate = 0
-                    
                     for i, metric_value in enumerate(row.metric_values):
                         metric_name = prev_request.metrics[i].name
                         value = float(metric_value.value)
                         if metric_name == "sessions":
                             prev_totals["sessions"] += int(value)
-                            daily_sessions = int(value)
                         elif metric_name == "engagedSessions":
                             prev_totals["engagedSessions"] += int(value)
                         elif metric_name == "averageSessionDuration":
-                            daily_avg_duration = value
+                            prev_totals["averageSessionDuration"] += value
                         elif metric_name == "engagementRate":
-                            daily_engagement_rate = value
-                    
-                    # Calculate weighted sums
-                    prev_weighted_duration += daily_avg_duration * daily_sessions
-                    prev_weighted_engagement += daily_engagement_rate * daily_sessions
+                            prev_totals["engagementRate"] += value
+                    prev_count += 1
                 
-                # Calculate weighted averages for previous period
-                if prev_totals["sessions"] > 0:
-                    prev_totals["averageSessionDuration"] = prev_weighted_duration / prev_totals["sessions"]
-                    prev_totals["engagementRate"] = prev_weighted_engagement / prev_totals["sessions"]
-                    logger.info(f"[GA4 CLIENT] Previous period weighted averages - avgDuration: {prev_totals['averageSessionDuration']:.1f}s, engagementRate: {prev_totals['engagementRate']:.4f}")
+                if prev_count > 0:
+                    prev_totals["averageSessionDuration"] = prev_totals["averageSessionDuration"] / prev_count
+                    prev_totals["engagementRate"] = prev_totals["engagementRate"] / prev_count
                 
                 # Calculate percentage changes
                 logger.info(f"[GA4 CLIENT] Previous period values - sessions: {prev_totals.get('sessions')}, engagedSessions: {prev_totals.get('engagedSessions')}")

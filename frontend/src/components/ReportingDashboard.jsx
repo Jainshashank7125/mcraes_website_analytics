@@ -1958,14 +1958,9 @@ function ReportingDashboard({
           //   description: "Overall traffic metrics",
           // },
           {
-            key: "ga4_user_metrics",
-            label: "User Metrics",
-            description: "Total users and new users trends",
-          },
-          {
             key: "ga4_daily_comparison",
-            label: "Daily Comparison (Sessions & Conversions)",
-            description: "Daily sessions and conversions only",
+            label: "Daily Comparison",
+            description: "Daily users, sessions, and conversions",
           },
           {
             key: "ga4_channel_performance",
@@ -3091,6 +3086,42 @@ function ReportingDashboard({
             )}
           </Box>
         </Box>
+
+        {/* Date Range Display for Public View */}
+        {isPublic && startDate && endDate && (
+          <Paper
+            elevation={0}
+            sx={{
+              p: 2,
+              display: "flex",
+              gap: 2,
+              alignItems: "center",
+              border: `1px solid ${theme.palette.divider}`,
+              borderRadius: 2,
+              bgcolor: "background.paper",
+            }}
+          >
+            <Box display="flex" alignItems="center" gap={1}>
+              <CalendarTodayIcon sx={{ fontSize: 18, color: "text.secondary" }} />
+              <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
+                Date Range:
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                {new Date(startDate).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })}{" "}
+                -{" "}
+                {new Date(endDate).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })}
+              </Typography>
+            </Box>
+          </Paper>
+        )}
 
         {/* Date Range Display for Public View */}
         {isPublic && startDate && endDate && (
@@ -4978,15 +5009,13 @@ function ReportingDashboard({
                       </Grid>
                     )}
 
-                  {/* User Metrics Section - Separate provision for Total Users and New Users */}
+                  {/* GA4 Performance Charts - Prominent Line Graphs */}
                       {dashboardData.chart_data?.ga4_daily_comparison?.length >
                         0 &&
-                    isChartVisible("ga4_user_metrics") && 
-                    (shouldShowKPI("users") || shouldShowKPI("new_users")) && (
+                    isChartVisible("ga4_daily_comparison") && (
                       <Box sx={{ mt: 4, mb: 4 }}>
                         <Grid container spacing={3}>
                           {/* Total Users Chart - Full Width (Primary Chart) */}
-                          {shouldShowKPI("users") && (
                           <Grid item xs={12}>
                             <ChartCard
                               title="Total Users"
@@ -5036,70 +5065,7 @@ function ReportingDashboard({
                               />
                             </ChartCard>
                           </Grid>
-                          )}
 
-                          {/* New Users Comparison Chart - Full Width */}
-                          {shouldShowKPI("new_users") && (
-                          <Grid item xs={12}>
-                            <ChartCard
-                              title="New Users"
-                              badge={getBadgeLabel("GA4")}
-                              badgeColor={CHART_COLORS.ga4.primary}
-                              height={400}
-                              animationDelay={0.4}
-                            >
-                              <LineChartEnhanced
-                                data={
-                                      dashboardData.chart_data
-                                        .ga4_daily_comparison
-                                }
-                                dataKey="date"
-                                lines={[
-                                  {
-                                    dataKey: "current_new_users",
-                                    name: getDateRangeLabel(),
-                                    color: CHART_COLORS.success,
-                                    strokeWidth: 3,
-                                  },
-                                  ...(shouldShowChangePeriod("ga4") ? [{
-                                    dataKey: "previous_new_users",
-                                    name: "Previous period",
-                                    color: CHART_COLORS.comparison.previous,
-                                    strokeWidth: 2.5,
-                                    strokeDasharray: "5 5",
-                                  }] : []),
-                                ]}
-                                xAxisFormatter={formatDateForAxis}
-                                formatter={(value) => [
-                                  value.toLocaleString(),
-                                  "New Users",
-                                ]}
-                                labelFormatter={(label) => {
-                                  if (label && label.length === 8) {
-                                    const year = label.substring(0, 4);
-                                    const month = label.substring(4, 6);
-                                    const day = label.substring(6, 8);
-                                    return `${day} ${getMonthName(
-                                      parseInt(month)
-                                    )} ${year}`;
-                                  }
-                                  return label;
-                                }}
-                                height={400}
-                              />
-                            </ChartCard>
-                          </Grid>
-                          )}
-                        </Grid>
-                      </Box>
-                    )}
-
-                  {/* GA4 Daily Comparison - Sessions & Conversions Only */}
-                      {dashboardData.chart_data?.ga4_daily_comparison?.length >
-                        0 &&
-                    isChartVisible("ga4_daily_comparison") && (
-                      <Box sx={{ mt: 4, mb: 4 }}>
-                        <Grid container spacing={3}>
                           {/* Sessions Comparison Chart */}
                           <Grid item xs={12} md={6}>
                             <ChartCard
@@ -5134,6 +5100,57 @@ function ReportingDashboard({
                                 formatter={(value) => [
                                   value.toLocaleString(),
                                   "Sessions",
+                                ]}
+                                labelFormatter={(label) => {
+                                  if (label && label.length === 8) {
+                                    const year = label.substring(0, 4);
+                                    const month = label.substring(4, 6);
+                                    const day = label.substring(6, 8);
+                                    return `${day} ${getMonthName(
+                                      parseInt(month)
+                                    )} ${year}`;
+                                  }
+                                  return label;
+                                }}
+                                height={320}
+                              />
+                            </ChartCard>
+                          </Grid>
+
+                          {/* New Users Comparison Chart */}
+                          <Grid item xs={12} md={6}>
+                            <ChartCard
+                              title="New Users"
+                              badge={getBadgeLabel("GA4")}
+                              badgeColor={CHART_COLORS.ga4.primary}
+                              height={400}
+                              animationDelay={0.4}
+                            >
+                              <LineChartEnhanced
+                                data={
+                                      dashboardData.chart_data
+                                        .ga4_daily_comparison
+                                }
+                                dataKey="date"
+                                lines={[
+                                  {
+                                    dataKey: "current_new_users",
+                                    name: getDateRangeLabel(),
+                                    color: CHART_COLORS.success,
+                                    strokeWidth: 3,
+                                  },
+                                  ...(shouldShowChangePeriod("ga4") ? [{
+                                    dataKey: "previous_new_users",
+                                    name: "Previous period",
+                                    color: CHART_COLORS.comparison.previous,
+                                    strokeWidth: 2.5,
+                                    strokeDasharray: "5 5",
+                                  }] : []),
+                                ]}
+                                xAxisFormatter={formatDateForAxis}
+                                formatter={(value) => [
+                                  value.toLocaleString(),
+                                  "New Users",
                                 ]}
                                 labelFormatter={(label) => {
                                   if (label && label.length === 8) {
@@ -5361,7 +5378,7 @@ function ReportingDashboard({
                                         }}
                                         formatter={(value) => [
                                           value.toLocaleString(),
-                                          "Users",
+                                          "Sessions",
                                         ]}
                                       />
                                       <Legend
@@ -5385,7 +5402,6 @@ function ReportingDashboard({
                         )}
 
                         {/* Horizontal Bar Chart - Sessions by Channel */}
-                        {isChartVisible("ga4_sessions_by_channel") && (
                         <Grid item xs={12} md={6}>
                           <motion.div
                             initial={{ opacity: 0, y: 20 }}
@@ -5731,7 +5747,137 @@ function ReportingDashboard({
                           </Grid>
                         )}
 
-                   
+                      {/* Engagement Rate Donut
+                  {dashboardData?.kpis?.ga4_engagement_rate && (
+                    <Grid item xs={12} sm={6} md={4}>
+                      <ChartCard
+                        title="Engagement Rate"
+                        badge="Analytics"
+                        badgeColor={CHART_COLORS.ga4.primary}
+                        height="100%"
+                        animationDelay={1.35}
+                        sx={{ textAlign: "center" }}
+                      >
+                        <Box>
+                          <PieChartEnhanced
+                                  data={[
+                                    {
+                                      name: "Engaged",
+                                      value:
+                                  (dashboardData.kpis.ga4_engagement_rate.value || 0),
+                                    },
+                                    {
+                                      name: "Not Engaged",
+                                      value:
+                                        100 -
+                                  (dashboardData.kpis.ga4_engagement_rate.value || 0),
+                                    },
+                                  ]}
+                            donut={true}
+                                  innerRadius={60}
+                                  outerRadius={90}
+                            colors={[CHART_COLORS.success, theme.palette.grey[300]]}
+                                  formatter={(value, name) => {
+                                    const normalizedValue = normalizePercentage(value);
+                                    return [`${normalizedValue.toFixed(1)}%`, name];
+                                  }}
+                            showLabel={true}
+                            height={250}
+                          />
+                            <Box mt={2}>
+                              <Typography
+                                variant="h4"
+                                fontWeight={700}
+                                sx={{ fontSize: "2rem" }}
+                                color="success.main"
+                              >
+                                {(() => {
+                                  const value = dashboardData.kpis.ga4_engagement_rate.value || 0;
+                                  const normalizedValue = normalizePercentage(value);
+                                  return `${normalizedValue.toFixed(1)}%`;
+                                })()}
+                              </Typography>
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                sx={{
+                                  fontSize: "0.75rem",
+                                  display: "block",
+                                  mt: 0.5,
+                                }}
+                              >
+                                Engaged Sessions
+                              </Typography>
+                            </Box>
+                        </Box>
+                      </ChartCard>
+                    </Grid>
+                  )} */}
+
+                      {/* Brand Presence Rate Donut
+                  {dashboardData?.kpis?.brand_presence_rate && (
+                    <Grid item xs={12} sm={6} md={4}>
+                      <ChartCard
+                        title="Brand Presence Rate"
+                        badge={getBadgeLabel("Scrunch")}
+                        badgeColor={CHART_COLORS.scrunch.primary}
+                        height="100%"
+                        animationDelay={1.4}
+                        sx={{ textAlign: "center" }}
+                      >
+                        <Box>
+                          <PieChartEnhanced
+                                  data={[
+                                    {
+                                      name: "Present",
+                                value: dashboardData.kpis.brand_presence_rate.value || 0,
+                                    },
+                                    {
+                                      name: "Absent",
+                                      value:
+                                  100 - (dashboardData.kpis.brand_presence_rate.value || 0),
+                                    },
+                                  ]}
+                            donut={true}
+                                  innerRadius={60}
+                                  outerRadius={90}
+                            colors={[CHART_COLORS.success, theme.palette.grey[300]]}
+                                  formatter={(value, name) => {
+                                    const normalizedValue = normalizePercentage(value);
+                                    return [`${normalizedValue.toFixed(1)}%`, name];
+                                  }}
+                            showLabel={true}
+                            height={250}
+                          />
+                            <Box mt={2}>
+                              <Typography
+                                variant="h4"
+                                fontWeight={700}
+                                sx={{ fontSize: "2rem" }}
+                                color="success.main"
+                              >
+                              {(() => {
+                                const value = dashboardData.kpis.brand_presence_rate.value || 0;
+                                const normalizedValue = normalizePercentage(value);
+                                return `${normalizedValue.toFixed(1)}%`;
+                              })()}
+                              </Typography>
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                sx={{
+                                  fontSize: "0.75rem",
+                                  display: "block",
+                                  mt: 0.5,
+                                }}
+                              >
+                                Brand Present in Responses
+                              </Typography>
+                            </Box>
+                        </Box>
+                      </ChartCard>
+                    </Grid>
+                  )} */}
                     </Grid>
                   )}
                 </Box>
@@ -7155,37 +7301,26 @@ function ReportingDashboard({
                         )}
 
                       {/* Advanced Query Visualizations - Sub-section under Scrunch AI (no separate heading) */}
-                      {(() => {
-                        const chartVisibility = {
-                          position_distribution: isChartVisible("position_distribution"),
-                          ai_platform_distribution: isChartVisible("ai_platform_distribution"),
-                          competitive_presence_analysis: isChartVisible("competitive_presence_analysis"),
-                          brand_presence_trend: isChartVisible("brand_presence_trend"),
-                          brand_sentiment_analysis_chart: isChartVisible("brand_sentiment_analysis_chart")
-                        }
-                        console.log('[ReportingDashboard] Scrunch chart visibility:', chartVisibility, 'brandId:', selectedBrandId)
-                        
-                        return selectedBrandId && (
-                          (chartVisibility.position_distribution ||
-                           chartVisibility.ai_platform_distribution ||
-                           chartVisibility.competitive_presence_analysis ||
-                           chartVisibility.brand_presence_trend ||
-                           chartVisibility.brand_sentiment_analysis_chart) && (
-                            <Box sx={{ mb: 4, mt: 4 }}>
-                              <ScrunchVisualizations
-                                brandId={selectedBrandId}
-                                startDate={startDate}
-                                endDate={endDate}
-                                showPositionDistribution={chartVisibility.position_distribution}
-                                showPlatformDistribution={chartVisibility.ai_platform_distribution}
-                                showCompetitivePresence={chartVisibility.competitive_presence_analysis}
-                                showBrandPresenceTrend={chartVisibility.brand_presence_trend}
-                                showBrandSentimentAnalysis={chartVisibility.brand_sentiment_analysis_chart}
-                              />
-                            </Box>
-                          )
+                      {selectedBrandId && (
+                        (isChartVisible("position_distribution") ||
+                         isChartVisible("ai_platform_distribution") ||
+                         isChartVisible("competitive_presence_analysis") ||
+                         isChartVisible("brand_presence_trend") ||
+                         isChartVisible("brand_sentiment_analysis_chart")) && (
+                          <Box sx={{ mb: 4, mt: 4 }}>
+                            <ScrunchVisualizations
+                              brandId={selectedBrandId}
+                              startDate={startDate}
+                              endDate={endDate}
+                              showPositionDistribution={isChartVisible("position_distribution")}
+                              showPlatformDistribution={isChartVisible("ai_platform_distribution")}
+                              showCompetitivePresence={isChartVisible("competitive_presence_analysis")}
+                              showBrandPresenceTrend={isChartVisible("brand_presence_trend")}
+                              showBrandSentimentAnalysis={isChartVisible("brand_sentiment_analysis_chart")}
+                            />
+                          </Box>
                         )
-                      })()}
+                      )}
                     </>
                   );
                 })()}
@@ -7227,7 +7362,7 @@ function ReportingDashboard({
                             data={dashboardData.chart_data.all_keywords_ranking.map(
                               (kw) => ({
                                 keyword: kw.keyword || "Unknown",
-                                avgRank: Math.round(kw.average_ranking || 0),
+                                avgRank: kw.average_ranking || 0,
                                 avgVolume: kw.average_search_volume || 0,
                               })
                             )}
@@ -7243,7 +7378,7 @@ function ReportingDashboard({
                             formatter={(value, name) => {
                               if (name === "avgRank")
                                 return [
-                                  `Position ${Math.round(value)}`,
+                                  `Position ${value.toFixed(1)}`,
                                   "Avg Google Ranking",
                                 ];
                               if (name === "avgVolume")
@@ -7253,7 +7388,6 @@ function ReportingDashboard({
                                 ];
                               return [value, name];
                             }}
-                            xAxisFormatter={(value) => Math.round(value)}
                             margin={{
                               top: 5,
                               right: 30,
@@ -7280,7 +7414,6 @@ function ReportingDashboard({
                   </Box>
                 </SectionContainer>
               )}
-          </Box>
 
             {/* General KPI Grid - All Other KPIs */}
             {/* "All Performance Metrics" section should always show if there are KPIs to display */}
@@ -7301,8 +7434,9 @@ function ReportingDashboard({
                 </Grid>
               </SectionContainer>
             )} */}
-          </>
-        )}
+          </Box>
+            </>
+          )}
         </>
       ) : !loading &&
         (selectedBrandId || (isPublic && publicSlug)) &&
