@@ -130,6 +130,7 @@ export default function BarChart({
                 fill: CHART_CONFIG.axis.stroke
               }} 
               stroke={CHART_CONFIG.axis.stroke}
+              tickFormatter={xAxisFormatter || undefined}
             />
             <YAxis 
               dataKey={dataKey}

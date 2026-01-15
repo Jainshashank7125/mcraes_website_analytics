@@ -54,9 +54,10 @@ export default function ScrunchVisualizations({
           timeSeriesData
         ] = await Promise.allSettled([
           // Position distribution - get average brand_position_score
+          // Include responses to ensure proper grouping and data availability
           reportingAPI.queryScrunchAnalytics(
             brandId,
-            ['brand_position_score'],
+            ['brand_position_score', 'responses'],
             startDate,
             endDate
           ),
@@ -98,14 +99,27 @@ export default function ScrunchVisualizations({
         ])
         
         // Process results (handle both fulfilled and rejected promises)
-        setData({
+        // Debug: Log all data to understand response structure
+        console.log('[Scrunch Visualizations Debug] Date range:', { startDate, endDate, brandId })
+        if (positionData.status === 'fulfilled') {
+          console.log('[Position Debug] Raw API response:', JSON.stringify(positionData.value, null, 2))
+          const processed = processPositionData(positionData.value)
+          console.log('[Position Debug] Processed value:', processed)
+        } else {
+          console.log('[Position Debug] API request failed:', positionData.reason)
+        }
+        
+        const processedData = {
           positionDistribution: positionData.status === 'fulfilled' ? processPositionData(positionData.value) : null,
           platformDistribution: platformData.status === 'fulfilled' ? processPlatformData(platformData.value) : null,
           sentimentDistribution: sentimentData.status === 'fulfilled' ? processSentimentData(sentimentData.value) : null,
           citationSourceBreakdown: citationData.status === 'fulfilled' ? processCitationData(citationData.value) : null,
           competitorPresence: competitorData.status === 'fulfilled' ? processCompetitorData(competitorData.value) : null,
           timeSeries: timeSeriesData.status === 'fulfilled' ? processTimeSeriesData(timeSeriesData.value) : null
-        })
+        }
+        
+        console.log('[Scrunch Visualizations Debug] Processed data:', processedData)
+        setData(processedData)
       } catch (err) {
         debugError('Error fetching Scrunch visualizations:', err)
         // Don't show error if Query API is not available - just show empty state
@@ -147,17 +161,69 @@ export default function ScrunchVisualizations({
   }
 
   // Check if we have any data to display
-  const hasData = Object.values(data).some(value => value !== null && (Array.isArray(value) ? value.length > 0 : true))
+  // For positionDistribution, a number value (even 0) is valid data
+  console.log('[ScrunchVisualizations] Checking hasData...')
+  const dataChecks = Object.entries(data).map(([key, value]) => {
+    const isValid = (() => {
+      if (value === null || value === undefined) return false
+      if (typeof value === 'number') return true // Numbers (including 0) are valid
+      if (Array.isArray(value)) return value.length > 0
+      return true
+    })()
+    console.log(`[ScrunchVisualizations] ${key}:`, { value, isValid })
+    return isValid
+  })
+  
+  const hasData = dataChecks.some(check => check === true)
+  console.log('[ScrunchVisualizations] hasData result:', hasData)
   
   if (!hasData) {
+    console.log('[ScrunchVisualizations] No data to display, returning null')
     return null // Don't show empty section
   }
 
+  console.log('[ScrunchVisualizations] Rendering with props:', {
+    showPositionDistribution,
+    showPlatformDistribution,
+    showCompetitivePresence,
+    showBrandPresenceTrend,
+    showBrandSentimentAnalysis
+  })
+  
   return (
     <Grid container spacing={3}>
       {/* Position Distribution - Simple Card Display */}
-      {showPositionDistribution && data.positionDistribution !== null && data.positionDistribution !== undefined && (() => {
-        // Get the average brand_position_score directly from API
+      {(() => {
+        const shouldShow = showPositionDistribution && data.positionDistribution !== null && data.positionDistribution !== undefined && typeof data.positionDistribution === 'number'
+        console.log('[Position Chart] Should show:', shouldShow, 'Data:', data.positionDistribution, 'Type:', typeof data.positionDistribution)
+        
+        // Show "no data" message if checked but no data
+        if (showPositionDistribution && !shouldShow) {
+          return (
+            <Grid item xs={12} sm={6} md={6}>
+              <ChartCard
+                title="Position (% of total)"
+                badge="Scrunch"
+                badgeColor={CHART_COLORS.scrunch.primary}
+                height="100%"
+                animationDelay={0.1}
+              >
+                <Box p={2}>
+                  <Typography variant="body2" color="text.secondary">
+                    No position data available for this brand in the selected date range.
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                    Position metrics depend on the Scrunch API platform (typically 30% coverage). Try selecting a different date range or check if responses exist for this brand.
+                  </Typography>
+                </Box>
+              </ChartCard>
+            </Grid>
+          )
+        }
+        
+        if (!shouldShow) return null
+        
+        // Get the average brand_position_score (weighted average)
         const positionScore = data.positionDistribution
         
         // Determine color and icon based on score ranges
@@ -575,39 +641,135 @@ export default function ScrunchVisualizations({
 
 // Data processing functions
 function processPositionData(data) {
-  if (!data) return null
+  console.log('[processPositionData] Input:', data)
   
-  const items = data.items || (Array.isArray(data) ? data : [])
-  if (items.length === 0) {
+  if (!data) {
+    console.log('[processPositionData] No data, returning null')
     return null
   }
   
-  // Get the average brand_position_score directly from API
-  // The API returns the average score when querying just the metric
-  const averageScore = items[0]?.brand_position_score || 0
+  // Handle different response formats
+  // Case 1: Direct value (when querying just metric without dimension)
+  if (typeof data === 'number' && !isNaN(data)) {
+    console.log('[processPositionData] Direct number value:', data)
+    return data
+  }
   
+  // Case 2: Object with direct brand_position_score property
+  if (data.brand_position_score !== undefined && data.items === undefined) {
+    const score = data.brand_position_score
+    console.log('[processPositionData] Direct score property:', score)
+    if (score !== null && score !== undefined && !isNaN(score)) {
+      return score
+    }
+  }
+  
+  // Case 3: Items array (when querying with dimension like responses)
+  // Handle both {items: [...]} and direct array [...] formats
+  // Scrunch Query API returns direct array, not wrapped in items
+  let items = []
+  if (Array.isArray(data)) {
+    items = data
+  } else if (data.items && Array.isArray(data.items)) {
+    items = data.items
+  }
+  
+  console.log('[processPositionData] Items array length:', items.length)
+  console.log('[processPositionData] First few items:', items.slice(0, 3))
+  
+  if (items.length === 0) {
+    console.log('[processPositionData] No items, returning null')
+    return null
+  }
+  
+  // Calculate weighted average of brand_position_score
+  // When querying with responses, we get multiple rows with scores and response counts
+  // We need to calculate the weighted average: sum(score * responses) / sum(responses)
+  let totalScore = 0
+  let totalResponses = 0
+  
+  items.forEach((item, idx) => {
+    const score = item.brand_position_score
+    const responses = item.responses || 0
+    console.log(`[processPositionData] Item ${idx}:`, { score, responses })
+    
+    // Only include items with valid scores (not null/undefined)
+    if (score !== null && score !== undefined && !isNaN(score) && responses > 0) {
+      totalScore += score * responses
+      totalResponses += responses
+    }
+  })
+  
+  console.log('[processPositionData] Totals:', { totalScore, totalResponses })
+  
+  // If no valid data, return null (not 0, to indicate no data)
+  if (totalResponses === 0) {
+    console.log('[processPositionData] No valid responses, returning null')
+    return null
+  }
+  
+  // Return weighted average
+  const averageScore = totalScore / totalResponses
+  console.log('[processPositionData] Final weighted average:', averageScore)
   return averageScore
 }
 
 function processPlatformData(data) {
-  if (!data) return null
+  console.log('[processPlatformData] Input:', data)
   
-  const items = data.items || (Array.isArray(data) ? data : [])
-  if (items.length === 0) return null
+  if (!data) {
+    console.log('[processPlatformData] No data, returning null')
+    return null
+  }
   
-  return items
+  // Handle both {items: [...]} and direct array [...] formats
+  let items = []
+  if (Array.isArray(data)) {
+    items = data
+  } else if (data.items && Array.isArray(data.items)) {
+    items = data.items
+  }
+  
+  console.log('[processPlatformData] Items length:', items.length)
+  
+  if (items.length === 0) {
+    console.log('[processPlatformData] No items, returning null')
+    return null
+  }
+  
+  const result = items
     .filter(item => item.responses > 0)
     .map(item => ({
       name: item.ai_platform || 'Unknown',
       value: item.responses || 0
     }))
+  
+  console.log('[processPlatformData] Processed result:', result)
+  return result
 }
 
 function processSentimentData(data) {
-  if (!data) return null
+  console.log('[processSentimentData] Input:', data)
   
-  const items = data.items || (Array.isArray(data) ? data : [])
-  if (items.length === 0) return null
+  if (!data) {
+    console.log('[processSentimentData] No data, returning null')
+    return null
+  }
+  
+  // Handle both {items: [...]} and direct array [...] formats
+  let items = []
+  if (Array.isArray(data)) {
+    items = data
+  } else if (data.items && Array.isArray(data.items)) {
+    items = data.items
+  }
+  
+  console.log('[processSentimentData] Items length:', items.length)
+  
+  if (items.length === 0) {
+    console.log('[processSentimentData] No items, returning null')
+    return null
+  }
   
   // Categorize sentiment scores: Positive (67-100), Mixed (34-66), Negative (0-33), None (null)
   const distribution = { Positive: 0, Mixed: 0, Negative: 0, None: 0 }
@@ -627,9 +789,14 @@ function processSentimentData(data) {
     }
   })
   
-  return Object.entries(distribution)
+  console.log('[processSentimentData] Distribution:', distribution)
+  
+  const result = Object.entries(distribution)
     .filter(([_, value]) => value > 0)
     .map(([name, value]) => ({ name, value }))
+  
+  console.log('[processSentimentData] Processed result:', result)
+  return result
 }
 
 function processCitationData(data) {

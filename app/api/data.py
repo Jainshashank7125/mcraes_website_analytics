@@ -1365,46 +1365,45 @@ async def get_reporting_dashboard(
                 end_dt = datetime.strptime(end_date, "%Y-%m-%d")
                 period_duration = (end_dt - start_dt).days + 1
                 
-                # If it's approximately 30 days, try to find a matching stored snapshot
+                # Try to find a matching stored snapshot (for any date range)
                 use_stored_snapshot = False
-                if 28 <= period_duration <= 32:  # Allow some flexibility for 30-day periods
-                    # Try to get snapshot that matches the requested date range
-                    # Use client_id if available, otherwise use brand_id for backward compatibility
+                # Use client_id if available, otherwise use brand_id for backward compatibility
+                query_brand_id = scrunch_brand_id if client_id else brand_id
+                kpi_snapshot = supabase.get_ga4_kpi_snapshot_by_date_range(query_brand_id, start_date, end_date, client_id=client_id)
+                if kpi_snapshot:
+                    # Ensure dates are strings (convert if they're date objects)
+                    # Use date_type to avoid conflict with local 'date' variables later in function
+                    if isinstance(kpi_snapshot.get("period_start_date"), date_type):
+                        kpi_snapshot["period_start_date"] = kpi_snapshot["period_start_date"].strftime("%Y-%m-%d")
+                    if isinstance(kpi_snapshot.get("period_end_date"), date_type):
+                        kpi_snapshot["period_end_date"] = kpi_snapshot["period_end_date"].strftime("%Y-%m-%d")
+                    use_stored_snapshot = True
+                    logger.info(f"[GA4 KPI] Using stored KPI snapshot for brand {brand_id}, period_end_date: {kpi_snapshot['period_end_date']}, period_start_date: {kpi_snapshot['period_start_date']}")
+                else:
+                    # Fallback: try to get latest snapshot if no exact match found
+                    # This handles cases where data might be slightly out of sync
                     query_brand_id = scrunch_brand_id if client_id else brand_id
-                    kpi_snapshot = supabase.get_ga4_kpi_snapshot_by_date_range(query_brand_id, start_date, end_date, client_id=client_id)
+                    kpi_snapshot = supabase.get_latest_ga4_kpi_snapshot(query_brand_id, client_id=client_id)
                     if kpi_snapshot:
                         # Ensure dates are strings (convert if they're date objects)
                         # Use date_type to avoid conflict with local 'date' variables later in function
-                        if isinstance(kpi_snapshot.get("period_start_date"), date_type):
-                            kpi_snapshot["period_start_date"] = kpi_snapshot["period_start_date"].strftime("%Y-%m-%d")
-                        if isinstance(kpi_snapshot.get("period_end_date"), date_type):
-                            kpi_snapshot["period_end_date"] = kpi_snapshot["period_end_date"].strftime("%Y-%m-%d")
-                        use_stored_snapshot = True
-                        logger.info(f"[GA4 KPI] Using stored KPI snapshot for brand {brand_id}, period_end_date: {kpi_snapshot['period_end_date']}, period_start_date: {kpi_snapshot['period_start_date']}")
-                    else:
-                        # Fallback: try to get latest snapshot if no exact match found
-                        # This handles cases where data might be slightly out of sync
-                        query_brand_id = scrunch_brand_id if client_id else brand_id
-                        kpi_snapshot = supabase.get_latest_ga4_kpi_snapshot(query_brand_id, client_id=client_id)
-                        if kpi_snapshot:
-                            # Ensure dates are strings (convert if they're date objects)
-                            # Use date_type to avoid conflict with local 'date' variables later in function
-                            period_start_date = kpi_snapshot["period_start_date"]
-                            period_end_date = kpi_snapshot["period_end_date"]
-                            if isinstance(period_start_date, date_type):
-                                period_start_date = period_start_date.strftime("%Y-%m-%d")
-                            if isinstance(period_end_date, date_type):
-                                period_end_date = period_end_date.strftime("%Y-%m-%d")
-                            period_start_str = str(period_start_date)
-                            period_end_str = str(period_end_date)
-                            snapshot_start_dt = datetime.strptime(period_start_str, "%Y-%m-%d")
-                            snapshot_end_dt = datetime.strptime(period_end_str, "%Y-%m-%d")
-                            # Check if the snapshot's date range matches the requested range (within 2 days tolerance)
-                            start_diff = abs((snapshot_start_dt - start_dt).days)
-                            end_diff = abs((snapshot_end_dt - end_dt).days)
-                            if start_diff <= 2 and end_diff <= 2:
-                                use_stored_snapshot = True
-                                logger.info(f"[GA4 KPI] Using latest stored KPI snapshot for brand {brand_id}, period_end_date: {kpi_snapshot['period_end_date']} (within tolerance)")
+                        period_start_date = kpi_snapshot["period_start_date"]
+                        period_end_date = kpi_snapshot["period_end_date"]
+                        if isinstance(period_start_date, date_type):
+                            period_start_date = period_start_date.strftime("%Y-%m-%d")
+                        if isinstance(period_end_date, date_type):
+                            period_end_date = period_end_date.strftime("%Y-%m-%d")
+                        period_start_str = str(period_start_date)
+                        period_end_str = str(period_end_date)
+                        snapshot_start_dt = datetime.strptime(period_start_str, "%Y-%m-%d")
+                        snapshot_end_dt = datetime.strptime(period_end_str, "%Y-%m-%d")
+                        # Check if the snapshot's date range matches the requested range (within tolerance)
+                        start_diff = abs((snapshot_start_dt - start_dt).days)
+                        end_diff = abs((snapshot_end_dt - end_dt).days)
+                        # Allow using snapshot if end date matches (within 2 days) and start date is reasonable
+                        if end_diff <= 2 and start_diff <= 15:  # More flexible for longer periods
+                            use_stored_snapshot = True
+                            logger.info(f"[GA4 KPI] Using latest stored KPI snapshot for brand {brand_id}, period_end_date: {kpi_snapshot['period_end_date']} (within tolerance)")
                 
                 if use_stored_snapshot:
                     # Use stored KPI snapshot
@@ -2572,6 +2571,13 @@ async def get_reporting_dashboard(
                         logger.info(f"[GA4 DAILY DATA] Building ga4_daily_comparison with {len(current_dates)} current dates and {len(prev_data_dict)} previous period dates")
                         logger.info(f"[GA4 DAILY DATA] Date offset: {date_offset_days} days (current date - {date_offset_days} days = previous period date)")
                         
+                        # Calculate proportional new_users from KPI snapshot
+                        total_new_users_from_snapshot = 0
+                        total_users_sum = sum(daily_metrics[d]["users"] for d in current_dates)
+                        if stored_kpi_snapshot and 'new_users' in stored_kpi_snapshot:
+                            total_new_users_from_snapshot = stored_kpi_snapshot.get('new_users', 0)
+                            logger.info(f"[GA4 CHART FIX] Using snapshot new_users={total_new_users_from_snapshot}, total_users={total_users_sum} for proportional distribution")
+                        
                         for date_str in current_dates:
                             current = daily_metrics[date_str]
                             
@@ -2583,13 +2589,18 @@ async def get_reporting_dashboard(
                             # Look up the previous period data for this specific date
                             previous = prev_data_dict.get(prev_date_str, {})
                             
+                            # Fix: Calculate proportional new_users from snapshot if daily record is 0
+                            current_new_users = current["new_users"]
+                            if total_new_users_from_snapshot > 0 and total_users_sum > 0 and current_new_users == 0:
+                                current_new_users = int((current["users"] / total_users_sum) * total_new_users_from_snapshot)
+                            
                             comparison_entry = {
                                 "date": current["date"],  # Already in YYYYMMDD format
                                 "current_users": current["users"],
                                 "previous_users": previous.get("users", 0),
                                 "current_sessions": current["sessions"],
                                 "previous_sessions": previous.get("sessions", 0),
-                                "current_new_users": current["new_users"],
+                                "current_new_users": current_new_users,
                                 "previous_new_users": previous.get("new_users", 0),
                                 "current_conversions": current["conversions"],
                                 "previous_conversions": previous.get("conversions", 0),
@@ -3523,6 +3534,13 @@ async def get_reporting_dashboard(
                         logger.info(f"[GA4 DAILY DATA] Building ga4_daily_comparison with {len(current_dates)} current dates and {len(prev_data_dict)} previous period dates")
                         logger.info(f"[GA4 DAILY DATA] Date offset: {date_offset_days} days (current date - {date_offset_days} days = previous period date)")
                         
+                        # Calculate proportional new_users from KPI snapshot
+                        total_new_users_from_snapshot = 0
+                        total_users_sum = sum(daily_metrics[d]["users"] for d in current_dates)
+                        if stored_kpi_snapshot and 'new_users' in stored_kpi_snapshot:
+                            total_new_users_from_snapshot = stored_kpi_snapshot.get('new_users', 0)
+                            logger.info(f"[GA4 CHART FIX] Using snapshot new_users={total_new_users_from_snapshot}, total_users={total_users_sum} for proportional distribution")
+                        
                         for date_str in current_dates:
                             current = daily_metrics[date_str]
                             
@@ -3534,13 +3552,18 @@ async def get_reporting_dashboard(
                             # Look up the previous period data for this specific date
                             previous = prev_data_dict.get(prev_date_str, {})
                             
+                            # Fix: Calculate proportional new_users from snapshot if daily record is 0
+                            current_new_users = current["new_users"]
+                            if total_new_users_from_snapshot > 0 and total_users_sum > 0 and current_new_users == 0:
+                                current_new_users = int((current["users"] / total_users_sum) * total_new_users_from_snapshot)
+                            
                             comparison_entry = {
                                 "date": current["date"],  # Already in YYYYMMDD format
                                 "current_users": current["users"],
                                 "previous_users": previous.get("users", 0),
                                 "current_sessions": current["sessions"],
                                 "previous_sessions": previous.get("sessions", 0),
-                                "current_new_users": current["new_users"],
+                                "current_new_users": current_new_users,
                                 "previous_new_users": previous.get("new_users", 0),
                                 "current_conversions": current["conversions"],
                                 "previous_conversions": previous.get("conversions", 0),
@@ -4909,6 +4932,8 @@ async def query_scrunch_analytics(
     - competitor_sentiment_score (Average, 0-100) - Requires competitor dimension
     """
     try:
+        logger.info(f"[Scrunch Query API] brand_id={brand_id}, fields={fields}, start_date={start_date}, end_date={end_date}, limit={limit}")
+        
         client = ScrunchAPIClient()
         field_list = [f.strip() for f in fields.split(",")]
         
@@ -4921,9 +4946,20 @@ async def query_scrunch_analytics(
             offset=offset
         )
         
+        # Log the result structure
+        if result:
+            items_count = len(result.get("items", [])) if isinstance(result, dict) else 0
+            logger.info(f"[Scrunch Query API] Success! Returned {items_count} items for brand {brand_id}")
+            if items_count > 0:
+                logger.debug(f"[Scrunch Query API] First item: {result.get('items', [])[0]}")
+        else:
+            logger.warning(f"[Scrunch Query API] No result returned for brand {brand_id}")
+        
         return result
     except Exception as e:
         logger.error(f"Error querying Scrunch analytics for brand {brand_id}: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error querying Scrunch analytics: {str(e)}")
 
 # =====================================================

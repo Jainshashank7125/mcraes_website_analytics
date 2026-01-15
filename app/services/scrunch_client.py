@@ -241,7 +241,7 @@ class ScrunchAPIClient:
         Returns:
             Dict with query results
         """
-        logger.info(f"Querying analytics for brand {brand_id} with fields: {fields}")
+        logger.info(f"Querying analytics for brand {brand_id} with fields: {fields}, start_date: {start_date}, end_date: {end_date}")
         params = {
             "fields": ",".join(fields),
             "limit": limit,
@@ -252,5 +252,12 @@ class ScrunchAPIClient:
         if end_date:
             params["end_date"] = end_date
         
-        return await self._request("GET", f"/{brand_id}/query", params=params)
+        logger.debug(f"Scrunch Query API request params: {params}")
+        result = await self._request("GET", f"/{brand_id}/query", params=params)
+        
+        if result:
+            items_count = len(result.get("items", [])) if isinstance(result, dict) else 0
+            logger.info(f"Scrunch Query API returned {items_count} items for brand {brand_id}")
+        
+        return result
 
