@@ -14,6 +14,11 @@ export default function ChartCard({
   minHeight,
   sx = {},
   animationDelay = 0,
+  // Chart visibility control props (deprecated - checkboxes removed)
+  chartKey,
+  showCheckbox = false,
+  isChartVisible = true,
+  onChartVisibilityToggle,
   ...props
 }) {
   const theme = useTheme()
@@ -62,18 +67,20 @@ export default function ChartCard({
                 gap: { xs: 1, sm: 0 },
               }}
             >
-              {title && (
-                <Typography
-                  variant="h6"
-                  fontWeight={600}
-                  sx={{
-                    fontSize: { xs: '0.95rem', sm: '1rem', md: '1.125rem' },
-                    letterSpacing: '-0.01em',
-                  }}
-                >
-                  {title}
-                </Typography>
-              )}
+              <Box display="flex" alignItems="center" gap={1} flex={1}>
+                {title && (
+                  <Typography
+                    variant="h6"
+                    fontWeight={600}
+                    sx={{
+                      fontSize: { xs: '0.95rem', sm: '1rem', md: '1.125rem' },
+                      letterSpacing: '-0.01em',
+                    }}
+                  >
+                    {title}
+                  </Typography>
+                )}
+              </Box>
               {badge && (
                 <Chip
                   label={badge}

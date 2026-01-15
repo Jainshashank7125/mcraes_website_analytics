@@ -146,6 +146,7 @@ function ReportingDashboard({
   // Dashboard links should persist when only dates change, but be cleared when client changes
   const prevClientIdRef = useRef(null);
   const prevBrandIdRef = useRef(null);
+  const chartsInitializedRef = useRef(false); // Track if charts have been initialized
   const [clients, setClients] = useState([]);
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [clientSearchTerm, setClientSearchTerm] = useState("");
@@ -439,7 +440,16 @@ function ReportingDashboard({
         }
         
         if (kpiSelection.selected_charts && Array.isArray(kpiSelection.selected_charts)) {
-          setPublicSelectedCharts(new Set(kpiSelection.selected_charts));
+          // Migrate old "ga4_daily_comparison" key to individual chart keys
+          const migratedCharts = new Set(kpiSelection.selected_charts);
+          if (migratedCharts.has("ga4_daily_comparison")) {
+            // Remove old key and add individual keys
+            migratedCharts.delete("ga4_daily_comparison");
+            migratedCharts.add("ga4_daily_comparison_users");
+            migratedCharts.add("ga4_daily_comparison_sessions");
+            migratedCharts.add("ga4_daily_comparison_new_users");
+          }
+          setPublicSelectedCharts(migratedCharts);
         }
 
         // Load show_change_period flags
@@ -511,7 +521,7 @@ function ReportingDashboard({
 
   // Initialize selectedCharts with all available charts on initial load (admin view only)
   useEffect(() => {
-    if (isPublic || selectedCharts.size > 0) return; // Don't override if already set or in public view
+    if (isPublic || chartsInitializedRef.current) return; // Don't override if already initialized or in public view
     
     // Initialize with all available charts from all sections
     const allCharts = new Set();
@@ -524,6 +534,7 @@ function ReportingDashboard({
     if (allCharts.size > 0) {
       setSelectedCharts(allCharts);
       setTempSelectedCharts(allCharts);
+      chartsInitializedRef.current = true; // Mark as initialized
       debugLog("Initialized selectedCharts with all available charts", { 
         chartCount: allCharts.size,
         charts: Array.from(allCharts),
@@ -712,6 +723,7 @@ function ReportingDashboard({
         });
         setSelectedCharts(allCharts);
         setTempSelectedCharts(new Set(allCharts));
+        chartsInitializedRef.current = true; // Mark as initialized
         debugLog("Reset selectedCharts on client change", {
           chartCount: allCharts.size,
           charts: Array.from(allCharts),
@@ -1885,6 +1897,28 @@ function ReportingDashboard({
     setTempSelectedKPIs(newSelected);
   };
 
+  // Handler to toggle chart visibility directly from dashboard (for checkboxes on chart cards)
+  const handleChartVisibilityToggle = (chartKey, checked) => {
+    const newSelected = new Set(selectedCharts);
+    if (checked) {
+      newSelected.add(chartKey);
+    } else {
+      newSelected.delete(chartKey);
+    }
+    setSelectedCharts(newSelected);
+    chartsInitializedRef.current = true; // Mark as initialized when user interacts with checkboxes
+    // Also update tempSelectedCharts if dialog is open
+    if (showKPISelector) {
+      const newTempSelected = new Set(tempSelectedCharts);
+      if (checked) {
+        newTempSelected.add(chartKey);
+      } else {
+        newTempSelected.delete(chartKey);
+      }
+      setTempSelectedCharts(newTempSelected);
+    }
+  };
+
   // Helper function to get KPIs for a section (for Performance Metrics)
   const getSectionKPIs = (sectionKey) => {
     switch (sectionKey) {
@@ -1957,10 +1991,21 @@ function ReportingDashboard({
           //   label: "Traffic Overview",
           //   description: "Overall traffic metrics",
           // },
+          // Individual daily comparison charts - each controlled independently
           {
-            key: "ga4_daily_comparison",
-            label: "Daily Comparison",
-            description: "Daily users, sessions, and conversions",
+            key: "ga4_daily_comparison_users",
+            label: "Total Users",
+            description: "Daily users comparison chart",
+          },
+          {
+            key: "ga4_daily_comparison_sessions",
+            label: "Sessions",
+            description: "Daily sessions comparison chart",
+          },
+          {
+            key: "ga4_daily_comparison_new_users",
+            label: "New Users",
+            description: "Daily new users comparison chart",
           },
           {
             key: "ga4_channel_performance",
@@ -2322,6 +2367,7 @@ function ReportingDashboard({
     });
     setSelectedCharts(allCharts);
     setTempSelectedCharts(new Set(allCharts));
+    chartsInitializedRef.current = true; // Mark as initialized
 
     // Reset change period flags to all true
     const defaultShowChangePeriod = {
@@ -2433,7 +2479,17 @@ function ReportingDashboard({
         link.kpi_selection.selected_charts &&
         Array.isArray(link.kpi_selection.selected_charts)
       ) {
-        setSelectedCharts(new Set(link.kpi_selection.selected_charts));
+        // Migrate old "ga4_daily_comparison" key to individual chart keys
+        const migratedCharts = new Set(link.kpi_selection.selected_charts);
+        if (migratedCharts.has("ga4_daily_comparison")) {
+          // Remove old key and add individual keys
+          migratedCharts.delete("ga4_daily_comparison");
+          migratedCharts.add("ga4_daily_comparison_users");
+          migratedCharts.add("ga4_daily_comparison_sessions");
+          migratedCharts.add("ga4_daily_comparison_new_users");
+        }
+        setSelectedCharts(migratedCharts);
+        chartsInitializedRef.current = true; // Mark as initialized when loading from link
       }
 
       // Load show_change_period flags if available
@@ -2720,12 +2776,25 @@ function ReportingDashboard({
 
   // Helper function to check if a chart should be visible in public view
   const isChartVisible = (chartKey) => {
+    // Backward compatibility: if old "ga4_daily_comparison" key is selected, show all individual charts
+    const isDailyComparisonChart = 
+      chartKey === "ga4_daily_comparison_users" ||
+      chartKey === "ga4_daily_comparison_sessions" ||
+      chartKey === "ga4_daily_comparison_new_users";
+    
     if (!isPublic) {
       // In authenticated mode, check selectedCharts state
-      // If selectedCharts is empty, show all charts by default (initial state)
-      if (selectedCharts.size === 0) {
-        return true; // Show all charts when no selection has been made yet
+      // If charts haven't been initialized yet, show all charts by default
+      if (!chartsInitializedRef.current && selectedCharts.size === 0) {
+        return true; // Show all charts when not yet initialized
       }
+      
+      // Backward compatibility: if old key is selected, show all daily comparison charts
+      if (isDailyComparisonChart && selectedCharts.has("ga4_daily_comparison")) {
+        return true;
+      }
+      
+      // Once initialized, respect the selection (even if empty = show none)
       return selectedCharts.has(chartKey);
     }
     // In public mode, check publicSelectedCharts from dashboard link
@@ -2734,6 +2803,10 @@ function ReportingDashboard({
     }
     if (publicSelectedCharts.size === 0) {
       return false; // Empty Set means admin explicitly deselected all charts
+    }
+    // Backward compatibility: if old key is selected, show all daily comparison charts
+    if (isDailyComparisonChart && publicSelectedCharts.has("ga4_daily_comparison")) {
+      return true;
     }
     return publicSelectedCharts.has(chartKey); // Check if this specific chart is selected
   };
@@ -2807,29 +2880,19 @@ function ReportingDashboard({
   };
 
   const handleSectionChange = (sectionKey, checked) => {
+    // Only toggle section visibility - do NOT affect individual KPI or chart selections
+    // Each KPI and chart should be independently controllable
     const newSections = new Set(tempVisibleSections);
-    const newSelectedKPIs = new Set(tempSelectedKPIs);
-    const newSelectedCharts = new Set(tempSelectedCharts);
-
-    // Get all KPIs and charts for this section
-    const sectionKPIs = getDashboardSectionKPIs(sectionKey);
-    const sectionCharts = getDashboardSectionCharts(sectionKey);
-
+    
     if (checked) {
-      // Enable section and all its children (KPIs + charts)
       newSections.add(sectionKey);
-      sectionKPIs.forEach((kpi) => newSelectedKPIs.add(kpi));
-      sectionCharts.forEach((chart) => newSelectedCharts.add(chart.key));
     } else {
-      // Disable section and all its children (KPIs + charts)
       newSections.delete(sectionKey);
-      sectionKPIs.forEach((kpi) => newSelectedKPIs.delete(kpi));
-      sectionCharts.forEach((chart) => newSelectedCharts.delete(chart.key));
     }
 
     setTempVisibleSections(newSections);
-    setTempSelectedKPIs(newSelectedKPIs);
-    setTempSelectedCharts(newSelectedCharts);
+    // Note: We intentionally do NOT modify tempSelectedKPIs or tempSelectedCharts here
+    // This ensures each KPI and chart can be controlled independently
   };
 
   const handleSelectAllSections = () => {
@@ -2862,9 +2925,11 @@ function ReportingDashboard({
   };
 
   const handleDeselectAllSections = () => {
+    // Deselect all sections, but keep individual KPI and chart selections
+    // This allows users to hide sections while keeping their KPI/chart preferences
     setTempVisibleSections(new Set());
-    setTempSelectedKPIs(new Set());
-    setTempSelectedCharts(new Set());
+    // Note: We intentionally do NOT clear tempSelectedKPIs or tempSelectedCharts
+    // This preserves individual selections when sections are deselected
   };
 
   // Get KPIs in the correct order, filtered by selection
@@ -3525,13 +3590,8 @@ function ReportingDashboard({
           {(!isPublic || activeTab === 1) && (
         <>
           {/* Google Analytics 4 Section */}
-          {isSectionVisible("ga4") &&
-            // Show section if it has KPIs (and KPIs are selected in public view) OR charts (and charts are selected in public view)
-            ((shouldShowSectionKPIs("ga4") &&
-                  (dashboardData?.kpis?.users ||
-                    dashboardData?.kpis?.sessions)) ||
-              (shouldShowSectionCharts("ga4") &&
-                    dashboardData?.chart_data?.ga4_daily_comparison)) && (
+          {/* Show section if it's visible - individual KPIs and charts are controlled independently */}
+          {isSectionVisible("ga4") && (
               <SectionContainer
                 title={
                       isPublic ? "Website Analytics " : "Google Analytics 4"
@@ -5010,12 +5070,11 @@ function ReportingDashboard({
                     )}
 
                   {/* GA4 Performance Charts - Prominent Line Graphs */}
-                      {dashboardData.chart_data?.ga4_daily_comparison?.length >
-                        0 &&
-                    isChartVisible("ga4_daily_comparison") && (
+                      {dashboardData.chart_data?.ga4_daily_comparison?.length > 0 && (
                       <Box sx={{ mt: 4, mb: 4 }}>
                         <Grid container spacing={3}>
                           {/* Total Users Chart - Full Width (Primary Chart) */}
+                          {isChartVisible("ga4_daily_comparison_users") && (
                           <Grid item xs={12}>
                             <ChartCard
                               title="Total Users"
@@ -5023,6 +5082,10 @@ function ReportingDashboard({
                               badgeColor={CHART_COLORS.ga4.primary}
                               height={500}
                               animationDelay={0.3}
+                              chartKey="ga4_daily_comparison_users"
+                              showCheckbox={false}
+                              isChartVisible={isChartVisible("ga4_daily_comparison_users")}
+                              onChartVisibilityToggle={handleChartVisibilityToggle}
                             >
                               <LineChartEnhanced
                                 data={
@@ -5065,8 +5128,10 @@ function ReportingDashboard({
                               />
                             </ChartCard>
                           </Grid>
+                          )}
 
                           {/* Sessions Comparison Chart */}
+                          {isChartVisible("ga4_daily_comparison_sessions") && (
                           <Grid item xs={12} md={6}>
                             <ChartCard
                               title="Sessions"
@@ -5074,6 +5139,10 @@ function ReportingDashboard({
                               badgeColor={CHART_COLORS.ga4.primary}
                               height={400}
                               animationDelay={0.35}
+                              chartKey="ga4_daily_comparison_sessions"
+                              showCheckbox={false}
+                              isChartVisible={isChartVisible("ga4_daily_comparison_sessions")}
+                              onChartVisibilityToggle={handleChartVisibilityToggle}
                             >
                               <LineChartEnhanced
                                 data={
@@ -5116,8 +5185,10 @@ function ReportingDashboard({
                               />
                             </ChartCard>
                           </Grid>
+                          )}
 
                           {/* New Users Comparison Chart */}
+                          {isChartVisible("ga4_daily_comparison_new_users") && (
                           <Grid item xs={12} md={6}>
                             <ChartCard
                               title="New Users"
@@ -5125,6 +5196,10 @@ function ReportingDashboard({
                               badgeColor={CHART_COLORS.ga4.primary}
                               height={400}
                               animationDelay={0.4}
+                              chartKey="ga4_daily_comparison_new_users"
+                              showCheckbox={false}
+                              isChartVisible={isChartVisible("ga4_daily_comparison_new_users")}
+                              onChartVisibilityToggle={handleChartVisibilityToggle}
                             >
                               <LineChartEnhanced
                                 data={
@@ -5167,6 +5242,7 @@ function ReportingDashboard({
                               />
                             </ChartCard>
                           </Grid>
+                          )}
 
                           {/* Conversions Comparison Chart */}
                           {/* {dashboardData.chart_data.ga4_daily_comparison.some(
@@ -5247,6 +5323,10 @@ function ReportingDashboard({
                           badgeColor={CHART_COLORS.ga4.primary}
                           height={500}
                           animationDelay={0.9}
+                          chartKey="ga4_top_pages"
+                          showCheckbox={false}
+                          isChartVisible={isChartVisible("ga4_top_pages")}
+                          onChartVisibilityToggle={handleChartVisibilityToggle}
                         >
                         <BarChartEnhanced
                               data={dashboardData.chart_data.top_pages.slice(
@@ -5299,17 +5379,18 @@ function ReportingDashboard({
                               }}
                             >
                               <CardContent sx={{ p: 3 }}>
-                                <Typography
-                                  variant="h6"
-                                  mb={2}
-                                  fontWeight={600}
-                                  sx={{
-                                    fontSize: "1.125rem",
-                                    letterSpacing: "-0.01em",
-                                  }}
-                                >
-                                  Total Users by Channel
-                                </Typography>
+                                <Box display="flex" alignItems="center" gap={1} mb={2}>
+                                  <Typography
+                                    variant="h6"
+                                    fontWeight={600}
+                                    sx={{
+                                      fontSize: "1.125rem",
+                                      letterSpacing: "-0.01em",
+                                    }}
+                                  >
+                                    Total Users by Channel
+                                  </Typography>
+                                </Box>
                                 <Box
                                   sx={{
                                     width: "100%",
@@ -5417,17 +5498,18 @@ function ReportingDashboard({
                               }}
                             >
                               <CardContent sx={{ p: 3 }}>
-                                <Typography
-                                  variant="h6"
-                                  mb={2}
-                                  fontWeight={600}
-                                  sx={{
-                                    fontSize: "1.125rem",
-                                    letterSpacing: "-0.01em",
-                                  }}
-                                >
-                                  Sessions by Channel
-                                </Typography>
+                                <Box display="flex" alignItems="center" gap={1} mb={2}>
+                                  <Typography
+                                    variant="h6"
+                                    fontWeight={600}
+                                    sx={{
+                                      fontSize: "1.125rem",
+                                      letterSpacing: "-0.01em",
+                                    }}
+                                  >
+                                    Sessions by Channel
+                                  </Typography>
+                                </Box>
                                     <ResponsiveContainer
                                       width="100%"
                                       height={300}
@@ -5490,7 +5572,6 @@ function ReportingDashboard({
                             </Card>
                           </motion.div>
                         </Grid>
-                        )}
                       </Grid>
                     )}
 
@@ -5511,17 +5592,18 @@ function ReportingDashboard({
                           }}
                         >
                           <CardContent sx={{ p: 3 }}>
-                            <Typography
-                              variant="h6"
-                              mb={2}
-                              fontWeight={600}
-                              sx={{
-                                fontSize: "1.125rem",
-                                letterSpacing: "-0.01em",
-                              }}
-                            >
-                              Sessions vs Users by Channel
-                            </Typography>
+                            <Box display="flex" alignItems="center" gap={1} mb={2}>
+                              <Typography
+                                variant="h6"
+                                fontWeight={600}
+                                sx={{
+                                  fontSize: "1.125rem",
+                                  letterSpacing: "-0.01em",
+                                }}
+                              >
+                                Sessions vs Users by Channel
+                              </Typography>
+                            </Box>
                             <ResponsiveContainer width="100%" height={350}>
                               <BarChart
                                 data={deduplicateTrafficSources(dashboardData.chart_data.traffic_sources)
@@ -5602,6 +5684,10 @@ function ReportingDashboard({
                             badgeColor={CHART_COLORS.ga4.primary}
                             height="100%"
                             animationDelay={1.2}
+                            chartKey="ga4_geographic_distribution"
+                            showCheckbox={false}
+                            isChartVisible={isChartVisible("ga4_geographic_distribution")}
+                            onChartVisibilityToggle={handleChartVisibilityToggle}
                           >
                             <BarChartEnhanced
                               data={dashboardData.chart_data.geographic_breakdown.slice(
@@ -5642,6 +5728,10 @@ function ReportingDashboard({
                             badgeColor={CHART_COLORS.ga4.primary}
                             height={450}
                             animationDelay={1.25}
+                            chartKey="ga4_top_countries"
+                            showCheckbox={false}
+                            isChartVisible={isChartVisible("ga4_top_countries")}
+                            onChartVisibilityToggle={handleChartVisibilityToggle}
                           >
                             <PieChartEnhanced
                               data={dashboardData.chart_data.geographic_breakdown
@@ -5680,6 +5770,10 @@ function ReportingDashboard({
                               height="100%"
                               animationDelay={1.3}
                               sx={{ textAlign: "center" }}
+                              chartKey="bounce_rate_donut"
+                              showCheckbox={false}
+                              isChartVisible={isChartVisible("bounce_rate_donut")}
+                              onChartVisibilityToggle={handleChartVisibilityToggle}
                             >
                               <Box>
                                 <PieChartEnhanced
@@ -5824,6 +5918,10 @@ function ReportingDashboard({
                         height="100%"
                         animationDelay={1.4}
                         sx={{ textAlign: "center" }}
+                        chartKey="brand_presence_rate_donut"
+                        showCheckbox={false}
+                        isChartVisible={isChartVisible("brand_presence_rate_donut")}
+                        onChartVisibilityToggle={handleChartVisibilityToggle}
                       >
                         <Box>
                           <PieChartEnhanced
@@ -5930,17 +6028,14 @@ function ReportingDashboard({
                       0 ||
                 dashboardData?.chart_data?.scrunch_ai_insights?.length > 0;
 
-              // Check if section has selected KPIs or charts
-              const hasSelectedKPIs = shouldShowSectionKPIs("scrunch_ai");
-                  const hasSelectedCharts =
-                    shouldShowSectionCharts("scrunch_ai");
-
+              // Show section if it's visible - individual KPIs and charts are controlled independently
+              // No dependency on KPI/chart selections - each is controlled independently
               const shouldShow =
+                sectionVisible &&
                 (loadingScrunch ||
                   hasScrunchData ||
                   hasScrunchChartData ||
-                  hasScrunchFromMain) &&
-                (hasSelectedKPIs || hasSelectedCharts);
+                  hasScrunchFromMain);
 
               // Debug logging
               debugLog("Scrunch section data check:", {
@@ -5950,8 +6045,7 @@ function ReportingDashboard({
                 scrunchKPIsFromMain: scrunchKPIsFromMain.length,
                 scrunchKPIsFromMainKeys: scrunchKPIsFromMain,
                 hasScrunchFromMain,
-                hasSelectedKPIs,
-                hasSelectedCharts,
+                sectionVisible,
                 shouldShow,
                 dashboardDataKeys: dashboardData?.kpis
                   ? Object.keys(dashboardData.kpis)
@@ -6113,6 +6207,10 @@ function ReportingDashboard({
                                     height="100%"
                                     animationDelay={0.1}
                                     sx={{ textAlign: "center" }}
+                                    chartKey="brand_presence_rate_donut"
+                                    showCheckbox={false}
+                                    isChartVisible={isChartVisible("brand_presence_rate_donut")}
+                                    onChartVisibilityToggle={handleChartVisibilityToggle}
                                   >
                                     <Box>
                                       <PieChartEnhanced
@@ -6694,9 +6792,8 @@ function ReportingDashboard({
                       })()}
 
                       {/* Prompts Analytics Table - Scrunch-like interface */}
-                      {/* Show if chart is visible or section has selected KPIs */}
-                      {(isChartVisible("top_performing_prompts") ||
-                        shouldShowSectionKPIs("scrunch_ai")) && (
+                      {/* Show if chart is visible - independent control */}
+                      {isChartVisible("top_performing_prompts") && (
                         <PromptsAnalyticsTable
                           clientId={promptsClientId}
                           slug={!promptsClientId ? publicSlug : null}
@@ -7328,10 +7425,9 @@ function ReportingDashboard({
             )}
 
             {/* Agency Analytics / Keywords Section */}
+            {/* Show section if it's visible - individual KPIs and charts are controlled independently */}
             {isSectionVisible("agency_analytics") &&
-              selectedClientId &&
-              (shouldShowSectionKPIs("agency_analytics") ||
-                shouldShowSectionCharts("agency_analytics")) && (
+              selectedClientId && (
                 <SectionContainer
                   title={
                         isPublic ? "Organic Visibility" : "Agency Analytics"
@@ -7357,6 +7453,10 @@ function ReportingDashboard({
                           badgeColor={CHART_COLORS.agencyAnalytics.primary}
                           height={500}
                           animationDelay={0.2}
+                          chartKey="all_keywords_ranking"
+                          showCheckbox={false}
+                          isChartVisible={isChartVisible("all_keywords_ranking")}
+                          onChartVisibilityToggle={handleChartVisibilityToggle}
                         >
                           <BarChartEnhanced
                             data={dashboardData.chart_data.all_keywords_ranking.map(
