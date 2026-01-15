@@ -107,26 +107,23 @@ class GA4APIClient:
             
             client = self._get_data_client()
             
-            request = RunReportRequest(
+            # FIRST: Get accurate totalUsers WITHOUT dimensions (as per GA4 documentation)
+            # This gives us the correct unique user count for the period
+            totals_request = RunReportRequest(
                 property=f"properties/{property_id}",
                 date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
-                dimensions=[
-                    Dimension(name="date"),
-                ],
+                # NO dimensions - this is crucial for accurate totalUsers
                 metrics=[
-                    Metric(name="activeUsers"),  # Used for daily breakdown and as fallback
+                    Metric(name="totalUsers"),  # Correct unique user count (not summed daily activeUsers)
                     Metric(name="sessions"),
                     Metric(name="newUsers"),
-                    Metric(name="bounceRate"),
-                    Metric(name="averageSessionDuration"),
                     Metric(name="engagedSessions"),
-                    Metric(name="engagementRate"),
                 ],
             )
             
-            response = client.run_report(request)
+            totals_response = client.run_report(totals_request)
             
-            # Aggregate totals
+            # Get totals from the response (will be exactly 1 row since no dimensions)
             totals = {
                 "users": 0,
                 "sessions": 0,
@@ -137,35 +134,72 @@ class GA4APIClient:
                 "engagementRate": 0,
             }
             
-            count = 0
-            for row in response.rows:
+            if totals_response.rows:
+                row = totals_response.rows[0]
+                totals["users"] = int(row.metric_values[0].value)  # totalUsers
+                totals["sessions"] = int(row.metric_values[1].value)  # sessions
+                totals["newUsers"] = int(row.metric_values[2].value)  # newUsers
+                totals["engagedSessions"] = int(row.metric_values[3].value)  # engagedSessions
+                logger.info(f"[GA4 CLIENT] Total users (totalUsers metric): {totals['users']}")
+            
+            # SECOND: Get daily breakdown WITH date dimension (for charts and weighted averages)
+            daily_request = RunReportRequest(
+                property=f"properties/{property_id}",
+                date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
+                dimensions=[
+                    Dimension(name="date"),
+                ],
+                metrics=[
+                    Metric(name="activeUsers"),  # Used for daily breakdown in charts only
+                    Metric(name="sessions"),
+                    Metric(name="newUsers"),  # Add newUsers for daily breakdown
+                    Metric(name="bounceRate"),
+                    Metric(name="averageSessionDuration"),
+                    Metric(name="engagementRate"),
+                ],
+            )
+            
+            daily_response = client.run_report(daily_request)
+            
+            # Track weighted sums for rates (weighted by sessions)
+            weighted_duration = 0
+            weighted_bounce = 0
+            weighted_engagement = 0
+            
+            for row in daily_response.rows:
+                daily_sessions = 0
+                daily_bounce_rate = 0
+                daily_avg_duration = 0
+                daily_engagement_rate = 0
+                
                 for i, metric_value in enumerate(row.metric_values):
-                    metric_name = request.metrics[i].name
+                    metric_name = daily_request.metrics[i].name
                     value = float(metric_value.value)
-                    if metric_name == "activeUsers":
-                        totals["users"] += int(value)  # Sum activeUsers across dates (this is the total users)
-                    elif metric_name == "sessions":
-                        totals["sessions"] += int(value)
-                    elif metric_name == "newUsers":
-                        totals["newUsers"] += int(value)
+                    if metric_name == "sessions":
+                        daily_sessions = int(value)
                     elif metric_name == "bounceRate":
-                        totals["bounceRate"] += value
+                        daily_bounce_rate = value
                     elif metric_name == "averageSessionDuration":
-                        totals["averageSessionDuration"] += value
-                    elif metric_name == "engagedSessions":
-                        totals["engagedSessions"] += int(value)
+                        daily_avg_duration = value
                     elif metric_name == "engagementRate":
-                        totals["engagementRate"] += value
-                count += 1
+                        daily_engagement_rate = value
+                
+                # Calculate weighted sums (weight by session count for this day)
+                weighted_duration += daily_avg_duration * daily_sessions
+                weighted_bounce += daily_bounce_rate * daily_sessions
+                weighted_engagement += daily_engagement_rate * daily_sessions
             
-            if count > 0:
-                totals["bounceRate"] = totals["bounceRate"] / count
-                totals["averageSessionDuration"] = totals["averageSessionDuration"] / count
-                totals["engagementRate"] = totals["engagementRate"] / count
+            # Calculate weighted averages (weighted by session count - consistent with GA4 reporting)
+            if totals["sessions"] > 0:
+                totals["averageSessionDuration"] = weighted_duration / totals["sessions"]
+                totals["bounceRate"] = weighted_bounce / totals["sessions"]
+                totals["engagementRate"] = weighted_engagement / totals["sessions"]
+                logger.info(f"[GA4 CLIENT] Weighted averages calculated - avgDuration: {totals['averageSessionDuration']:.1f}s, bounceRate: {totals['bounceRate']:.4f}, engagementRate: {totals['engagementRate']:.4f}")
             
-            # Store daily breakdown for later use
+            # Store daily breakdown for later use (from daily_response)
             daily_data = []
-            for row in response.rows:
+            logger.info(f"[GA4 CLIENT DEBUG] Processing {len(daily_response.rows)} rows from daily_response")
+            for row in daily_response.rows:
                 date_str = row.dimension_values[0].value  # First dimension is date
                 daily_record = {
                     "date": date_str,
@@ -178,22 +212,23 @@ class GA4APIClient:
                     "engagementRate": 0,
                 }
                 for i, metric_value in enumerate(row.metric_values):
-                    metric_name = request.metrics[i].name
+                    metric_name = daily_request.metrics[i].name
                     value = float(metric_value.value)
+                    logger.info(f"[GA4 CLIENT DEBUG] date={date_str}, metric={metric_name}, value={value}")
                     if metric_name == "activeUsers":
                         daily_record["users"] = int(value)
                     elif metric_name == "sessions":
                         daily_record["sessions"] = int(value)
                     elif metric_name == "newUsers":
                         daily_record["newUsers"] = int(value)
+                        logger.info(f"[GA4 CLIENT DEBUG] Set newUsers to {int(value)} for date {date_str}")
                     elif metric_name == "bounceRate":
                         daily_record["bounceRate"] = value
                     elif metric_name == "averageSessionDuration":
                         daily_record["averageSessionDuration"] = value
-                    elif metric_name == "engagedSessions":
-                        daily_record["engagedSessions"] = int(value)
                     elif metric_name == "engagementRate":
                         daily_record["engagementRate"] = value
+                logger.info(f"[GA4 CLIENT DEBUG] Final daily_record for {date_str}: {daily_record}")
                 daily_data.append(daily_record)
             
             # Add daily_data to totals for storage
@@ -216,44 +251,79 @@ class GA4APIClient:
             try:
                 logger.info(f"[GA4 CLIENT] Making API call to Google Analytics Data API for previous period")
                 logger.info(f"[GA4 CLIENT] API Request: RunReportRequest with property={property_id}, date_range={prev_start} to {prev_end}")
-                prev_request = RunReportRequest(
+                
+                # Get previous period totals WITHOUT dimensions (for accurate totalUsers)
+                prev_totals_request = RunReportRequest(
                     property=f"properties/{property_id}",
                     date_ranges=[DateRange(start_date=prev_start, end_date=prev_end)],
-                    dimensions=[Dimension(name="date")],
+                    # NO dimensions - for accurate totalUsers
                     metrics=[
+                        Metric(name="totalUsers"),  # Correct unique user count
                         Metric(name="sessions"),
                         Metric(name="engagedSessions"),
-                        Metric(name="averageSessionDuration"),
-                        Metric(name="engagementRate"),
                     ],
                 )
-                prev_response = client.run_report(prev_request)
-                logger.info(f"[GA4 CLIENT] Previous period API response received")
+                prev_totals_response = client.run_report(prev_totals_request)
                 
                 prev_totals = {
+                    "users": 0,
                     "sessions": 0,
                     "engagedSessions": 0,
                     "averageSessionDuration": 0,
                     "engagementRate": 0,
                 }
-                prev_count = 0
+                
+                if prev_totals_response.rows:
+                    row = prev_totals_response.rows[0]
+                    prev_totals["users"] = int(row.metric_values[0].value)  # totalUsers
+                    prev_totals["sessions"] = int(row.metric_values[1].value)  # sessions
+                    prev_totals["engagedSessions"] = int(row.metric_values[2].value)  # engagedSessions
+                    logger.info(f"[GA4 CLIENT] Previous period total users (totalUsers metric): {prev_totals['users']}")
+                
+                # Get previous period daily breakdown for weighted averages
+                prev_daily_request = RunReportRequest(
+                    property=f"properties/{property_id}",
+                    date_ranges=[DateRange(start_date=prev_start, end_date=prev_end)],
+                    dimensions=[Dimension(name="date")],
+                    metrics=[
+                        Metric(name="sessions"),
+                        Metric(name="averageSessionDuration"),
+                        Metric(name="engagementRate"),
+                    ],
+                )
+                prev_response = client.run_report(prev_daily_request)
+                logger.info(f"[GA4 CLIENT] Previous period API response received")
+                
+                # Track weighted sums for previous period rates
+                prev_weighted_duration = 0
+                prev_weighted_engagement = 0
+                
                 for row in prev_response.rows:
+                    daily_sessions = 0
+                    daily_avg_duration = 0
+                    daily_engagement_rate = 0
+                    
                     for i, metric_value in enumerate(row.metric_values):
-                        metric_name = prev_request.metrics[i].name
+                        metric_name = prev_daily_request.metrics[i].name
                         value = float(metric_value.value)
                         if metric_name == "sessions":
                             prev_totals["sessions"] += int(value)
+                            daily_sessions = int(value)
                         elif metric_name == "engagedSessions":
                             prev_totals["engagedSessions"] += int(value)
                         elif metric_name == "averageSessionDuration":
-                            prev_totals["averageSessionDuration"] += value
+                            daily_avg_duration = value
                         elif metric_name == "engagementRate":
-                            prev_totals["engagementRate"] += value
-                    prev_count += 1
+                            daily_engagement_rate = value
+                    
+                    # Calculate weighted sums
+                    prev_weighted_duration += daily_avg_duration * daily_sessions
+                    prev_weighted_engagement += daily_engagement_rate * daily_sessions
                 
-                if prev_count > 0:
-                    prev_totals["averageSessionDuration"] = prev_totals["averageSessionDuration"] / prev_count
-                    prev_totals["engagementRate"] = prev_totals["engagementRate"] / prev_count
+                # Calculate weighted averages for previous period
+                if prev_totals["sessions"] > 0:
+                    prev_totals["averageSessionDuration"] = prev_weighted_duration / prev_totals["sessions"]
+                    prev_totals["engagementRate"] = prev_weighted_engagement / prev_totals["sessions"]
                 
                 # Calculate percentage changes
                 logger.info(f"[GA4 CLIENT] Previous period values - sessions: {prev_totals.get('sessions')}, engagedSessions: {prev_totals.get('engagedSessions')}")
