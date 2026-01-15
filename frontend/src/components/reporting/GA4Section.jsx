@@ -732,7 +732,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                     boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
                                     backgroundColor: '#FFFFFF'
                                   }}
-                                  formatter={(value) => [value.toLocaleString(), 'Sessions']}
+                                  formatter={(value) => [Math.round(value).toLocaleString(), 'Users']}
                                 />
                                 <Legend 
                                   wrapperStyle={{ paddingTop: '20px' }}
@@ -2284,7 +2284,7 @@ export default function GA4Section({ dashboardData, formatValue, getSourceColor,
                                   boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
                                   backgroundColor: '#FFFFFF'
                                 }}
-                                formatter={(value) => [value.toLocaleString(), 'Sessions']}
+                                formatter={(value) => [Math.round(value).toLocaleString(), 'Users']}
                               />
                               <Legend 
                                 wrapperStyle={{ paddingTop: '20px' }}
