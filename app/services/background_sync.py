@@ -601,6 +601,7 @@ async def sync_ga4_background(
                         logger.warning(f"Could not fetch daily conversions/revenue breakdown: {str(e)}")
                     
                     # Store each daily record for ALL clients sharing this property_id
+                    first_record_logged = False
                     for daily_record in daily_records:
                         date_str = daily_record.get("date")
                         if date_str:
@@ -608,6 +609,11 @@ async def sync_ga4_background(
                             daily_record_with_extras = daily_record.copy()
                             daily_record_with_extras["conversions"] = daily_conversions_data.get(date_str, 0)
                             daily_record_with_extras["revenue"] = daily_revenue_data.get(date_str, 0)
+                            
+                            # Log first record to verify newUsers is present
+                            if not first_record_logged:
+                                logger.info(f"[Job {job_id}] Sample daily record: date={date_str}, users={daily_record_with_extras.get('users')}, sessions={daily_record_with_extras.get('sessions')}, newUsers={daily_record_with_extras.get('newUsers')}")
+                                first_record_logged = True
                             
                             # Store for all clients sharing this property_id
                             for client in clients_with_property:
@@ -686,19 +692,24 @@ async def sync_ga4_background(
                     if sync_job_service.is_cancelled(job_id):
                         logger.info(f"[Job {job_id}] Job cancelled before fetching geographic data for {client_name}")
                         return
-                    geographic = await ga4_client.get_geographic_breakdown(property_id, period_start_date, period_end_date, limit=50)
+                    # Fetch daily geographic breakdown (includes date dimension)
+                    # Use limit=None to get all records (need daily data for all countries)
+                    geographic_daily = await ga4_client.get_geographic_breakdown(property_id, period_start_date, period_end_date, limit=None, include_daily_breakdown=True)
                     if sync_job_service.is_cancelled(job_id):
                         logger.info(f"[Job {job_id}] Job cancelled after fetching geographic data for {client_name}")
                         return
-                    if geographic:
+                    if geographic_daily:
                         # Store for all clients sharing this property_id
+                        # The geographic data now includes 'date' field, so upsert will handle multiple dates
                         total_count = 0
                         for client in clients_with_property:
                             client_id_for_storage = client.get("id")
                             brand_id_for_storage = client.get("scrunch_brand_id")
-                            count = supabase.upsert_ga4_geographic(property_id, period_end_date, geographic, client_id=client_id_for_storage, brand_id=brand_id_for_storage)
+                            # Pass empty string for date since data includes date field
+                            count = supabase.upsert_ga4_geographic(property_id, "", geographic_daily, client_id=client_id_for_storage, brand_id=brand_id_for_storage)
                             total_count += count
                         total_synced["geographic"] += total_count
+                        logger.info(f"[Job {job_id}] Stored {total_count} daily geographic records for property {property_id}")
                     
                     # Device breakdown
                     if sync_job_service.is_cancelled(job_id):

@@ -40,7 +40,8 @@ fi
 if [ -f "/app/${SCRIPT_NAME}" ]; then
     if ! echo "$CRON_JOBS" | grep -q "${SCRIPT_NAME}"; then
         echo "[AUTO-SETUP] Setting up daily sync cron job..."
-        SYNC_CRON_JOB="${CRON_SCHEDULE} cd /app && ${PYTHON_PATH} ${SCRIPT_NAME} >> ${LOG_FILE} 2>&1"
+        # Export required environment variables for cron job
+        SYNC_CRON_JOB="${CRON_SCHEDULE} cd /app && export AGENCY_ANALYTICS_API_KEY='${AGENCY_ANALYTICS_API_KEY}' && export SCRUNCH_API_TOKEN='${SCRUNCH_API_TOKEN}' && export OPENAI_API_KEY='${OPENAI_API_KEY}' && export SUPABASE_DB_HOST='${SUPABASE_DB_HOST}' && export SUPABASE_DB_PORT='${SUPABASE_DB_PORT}' && export SUPABASE_DB_NAME='${SUPABASE_DB_NAME}' && export SUPABASE_DB_USER='${SUPABASE_DB_USER}' && export SUPABASE_DB_PASSWORD='${SUPABASE_DB_PASSWORD}' && export JWT_SECRET_KEY='${JWT_SECRET_KEY}' && export GA4_CREDENTIALS_PATH='${GA4_CREDENTIALS_PATH}' && ${PYTHON_PATH} ${SCRIPT_NAME} >> ${LOG_FILE} 2>&1"
         if [ -z "$CRON_JOBS" ]; then
             echo "$SYNC_CRON_JOB" | crontab -
         else

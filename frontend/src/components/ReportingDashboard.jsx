@@ -153,6 +153,7 @@ function ReportingDashboard({
   const [loadingClients, setLoadingClients] = useState(false);
   const [clientSearchTimeout, setClientSearchTimeout] = useState(null);
   const [selectedBrandId, setSelectedBrandId] = useState(null); // For backward compatibility with existing data loading
+  const [manualLoadTrigger, setManualLoadTrigger] = useState(0); // Trigger for manual data load
   const [dashboardData, setDashboardData] = useState(null);
   const [scrunchData, setScrunchData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -317,6 +318,16 @@ function ReportingDashboard({
     const range = applyMonthSelection(monthSelection);
     if (!range) return;
     await loadAllData(range);
+  };
+
+  // Handle manual load button click
+  const handleManualLoad = () => {
+    if (!selectedClientId && !selectedBrandId) {
+      setError("Please select a client first");
+      return;
+    }
+    // Increment trigger to force reload
+    setManualLoadTrigger(prev => prev + 1);
   };
 
   // Handle refresh button click - reloads all data and regenerates overview
@@ -665,11 +676,24 @@ function ReportingDashboard({
   useEffect(() => {
     // For public mode, we can load data with just publicSlug
     // For admin mode, we need selectedClientId (client-centric) or selectedBrandId (fallback)
+    // In admin mode, only load on manualLoadTrigger or when client changes (not dates)
     if (selectedClientId || selectedBrandId || (isPublic && publicSlug)) {
       // Check if client/brand actually changed (not just date)
       const clientChanged = 
         prevClientIdRef.current !== selectedClientId || 
         prevBrandIdRef.current !== selectedBrandId;
+      
+      // In admin mode, only load if:
+      // 1. Client changed (automatically load for new client)
+      // 2. Manual load trigger fired
+      // 3. Initial mount (manualLoadTrigger === 0)
+      // In public mode, always load (existing behavior)
+      const shouldLoad = isPublic || clientChanged || manualLoadTrigger > 0;
+      
+      if (!shouldLoad) {
+        // Don't load data yet - waiting for user to click search button
+        return;
+      }
       
       // Only clear dashboard links when client/brand changes, not when dates change
       // Dashboard links are client-specific and should persist across date changes
@@ -775,6 +799,7 @@ function ReportingDashboard({
     endDate,
     isPublic,
     publicSlug,
+    manualLoadTrigger,
   ]);
 
   // Ensure overview API is called when client changes and data is loaded (admin view only)
@@ -3164,42 +3189,6 @@ function ReportingDashboard({
               border: `1px solid ${theme.palette.divider}`,
               borderRadius: 2,
               bgcolor: "background.paper",
-            }}
-          >
-            <Box display="flex" alignItems="center" gap={1}>
-              <CalendarTodayIcon sx={{ fontSize: 18, color: "text.secondary" }} />
-              <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
-                Date Range:
-              </Typography>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                {new Date(startDate).toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                })}{" "}
-                -{" "}
-                {new Date(endDate).toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                })}
-              </Typography>
-            </Box>
-          </Paper>
-        )}
-
-        {/* Date Range Display for Public View */}
-        {isPublic && startDate && endDate && (
-          <Paper
-            elevation={0}
-            sx={{
-              p: 2,
-              display: "flex",
-              gap: 2,
-              alignItems: "center",
-              border: `1px solid ${theme.palette.divider}`,
-              borderRadius: 2,
-              bgcolor: "background.paper",
               mb: 3,
             }}
           >
@@ -3333,6 +3322,22 @@ function ReportingDashboard({
                     InputLabelProps={{ shrink: true }}
                     sx={{ minWidth: 150 }}
                   />
+                  
+                  {/* Load Data Button */}
+                  <Button
+                    variant="contained"
+                    size="medium"
+                    startIcon={<SearchIcon />}
+                    onClick={handleManualLoad}
+                    disabled={!selectedClientId && !selectedBrandId}
+                    sx={{
+                      minWidth: 120,
+                      textTransform: 'none',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Load Data
+                  </Button>
                 </Box>
                 
                 {/* Dashboard Links Section */}
@@ -5458,8 +5463,8 @@ function ReportingDashboard({
                                           backgroundColor: "#FFFFFF",
                                         }}
                                         formatter={(value) => [
-                                          value.toLocaleString(),
-                                          "Sessions",
+                                          Math.round(value).toLocaleString(),
+                                          "Users",
                                         ]}
                                       />
                                       <Legend
@@ -7478,7 +7483,7 @@ function ReportingDashboard({
                             formatter={(value, name) => {
                               if (name === "avgRank")
                                 return [
-                                  `Position ${value.toFixed(1)}`,
+                                  `Position ${Math.round(value)}`,
                                   "Avg Google Ranking",
                                 ];
                               if (name === "avgVolume")

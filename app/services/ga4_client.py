@@ -481,9 +481,21 @@ class GA4APIClient:
         property_id: str,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        limit: int = 20
+        limit: int = 20,
+        include_daily_breakdown: bool = True
     ) -> List[Dict]:
-        """Get geographic breakdown by country"""
+        """Get geographic breakdown by country
+        
+        Args:
+            property_id: GA4 property ID
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            limit: Max number of countries to return (only applies when include_daily_breakdown=False)
+            include_daily_breakdown: If True, returns daily data per country. If False, returns aggregated data.
+        
+        Returns:
+            List of dicts with country data. If include_daily_breakdown=True, includes 'date' field.
+        """
         try:
             if not start_date:
                 start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -492,36 +504,68 @@ class GA4APIClient:
             
             client = self._get_data_client()
             
-            request = RunReportRequest(
-                property=f"properties/{property_id}",
-                date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
-                dimensions=[Dimension(name="country")],
-                metrics=[
-                    Metric(name="activeUsers"),
-                    Metric(name="sessions"),
-                    Metric(name="engagementRate"),  # New: Add engagement rate metric
-                ],
-                limit=limit,
-                order_bys=[
-                    OrderBy(
-                        metric=OrderBy.MetricOrderBy(metric_name="sessions"),
-                        desc=True
-                    )
-                ],
-            )
-            
-            response = client.run_report(request)
-            
-            countries = []
-            for row in response.rows:
-                countries.append({
-                    "country": row.dimension_values[0].value,
-                    "users": int(row.metric_values[0].value),
-                    "sessions": int(row.metric_values[1].value),
-                    "engagementRate": float(row.metric_values[2].value) if len(row.metric_values) > 2 else 0,  # New: Engagement rate per country
-                })
-            
-            return countries
+            if include_daily_breakdown:
+                # Return daily breakdown (one record per date per country)
+                request = RunReportRequest(
+                    property=f"properties/{property_id}",
+                    date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
+                    dimensions=[
+                        Dimension(name="date"),
+                        Dimension(name="country")
+                    ],
+                    metrics=[
+                        Metric(name="activeUsers"),
+                        Metric(name="sessions"),
+                    ],
+                    # No limit - we need all data for daily storage
+                )
+                
+                response = client.run_report(request)
+                
+                # Group by date for better organization
+                daily_data = []
+                for row in response.rows:
+                    daily_data.append({
+                        "date": row.dimension_values[0].value,
+                        "country": row.dimension_values[1].value,
+                        "users": int(row.metric_values[0].value),
+                        "sessions": int(row.metric_values[1].value),
+                    })
+                
+                logger.info(f"Fetched {len(daily_data)} daily geographic records for {property_id}")
+                return daily_data
+            else:
+                # Return aggregated breakdown (for display purposes only, not for storage)
+                request = RunReportRequest(
+                    property=f"properties/{property_id}",
+                    date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
+                    dimensions=[Dimension(name="country")],
+                    metrics=[
+                        Metric(name="activeUsers"),
+                        Metric(name="sessions"),
+                        Metric(name="engagementRate"),
+                    ],
+                    limit=limit,
+                    order_bys=[
+                        OrderBy(
+                            metric=OrderBy.MetricOrderBy(metric_name="sessions"),
+                            desc=True
+                        )
+                    ],
+                )
+                
+                response = client.run_report(request)
+                
+                countries = []
+                for row in response.rows:
+                    countries.append({
+                        "country": row.dimension_values[0].value,
+                        "users": int(row.metric_values[0].value),
+                        "sessions": int(row.metric_values[1].value),
+                        "engagementRate": float(row.metric_values[2].value) if len(row.metric_values) > 2 else 0,
+                    })
+                
+                return countries
         except Exception as e:
             logger.error(f"Error fetching geographic breakdown: {str(e)}")
             raise
@@ -887,7 +931,8 @@ class GA4APIClient:
             traffic_overview = await self.get_traffic_overview(property_id, start_date, end_date)
             top_pages = await self.get_top_pages(property_id, start_date, end_date, limit=10)
             traffic_sources = await self.get_traffic_sources(property_id, start_date, end_date)
-            geographic = await self.get_geographic_breakdown(property_id, start_date, end_date, limit=10)
+            # Use aggregated mode for comprehensive analytics display
+            geographic = await self.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False)
             devices = await self.get_device_breakdown(property_id, start_date, end_date)
             conversions = await self.get_conversions(property_id, start_date, end_date)
             realtime = await self.get_realtime_snapshot(property_id)

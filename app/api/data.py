@@ -432,9 +432,10 @@ async def get_brand_ga4_analytics(
             analytics["trafficSources"] = []
         
         try:
-            analytics["geographic"] = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10)
-            # Store geographic data
-            if analytics["geographic"]:
+            # For display purposes, use aggregated geographic breakdown (not daily)
+            analytics["geographic"] = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False)
+            # Store geographic data (only if this is a single-day query)
+            if analytics["geographic"] and start_date == end_date:
                 try:
                     supabase.upsert_ga4_geographic(property_id, end_date, analytics["geographic"], brand_id=brand_id)
                 except Exception as store_error:
@@ -587,9 +588,10 @@ async def get_client_ga4_analytics(
             analytics["trafficSources"] = []
         
         try:
-            analytics["geographic"] = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10)
-            # Store geographic data
-            if analytics["geographic"]:
+            # For display purposes, use aggregated geographic breakdown (not daily)
+            analytics["geographic"] = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False)
+            # Store geographic data (only if this is a single-day query)
+            if analytics["geographic"] and start_date == end_date:
                 try:
                     supabase.upsert_ga4_geographic(property_id, end_date, analytics["geographic"], client_id=client_id, brand_id=scrunch_brand_id)
                 except Exception as store_error:
@@ -715,9 +717,10 @@ async def get_ga4_geographic(
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     limit: int = Query(20, description="Number of countries to return")
 ):
-    """Get geographic breakdown for a GA4 property"""
+    """Get geographic breakdown for a GA4 property (aggregated for display)"""
     try:
-        data = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit)
+        # Use aggregated mode for display purposes
+        data = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit, include_daily_breakdown=False)
         return {"items": data, "count": len(data)}
     except Exception as e:
         logger.error(f"Error fetching geographic breakdown: {str(e)}")
@@ -2600,7 +2603,7 @@ async def get_reporting_dashboard(
                             
                             # Log first few entries and any entries with data for debugging
                             if len(ga4_daily_comparison) <= 3 or current["users"] > 0 or current["sessions"] > 0:
-                                logger.debug(f"[GA4 DAILY DATA] Comparison entry for {date_str} ({current['date']}): current_users={current['users']}, previous_date={prev_date_str}, previous_users={previous.get('users', 0)}")
+                                logger.debug(f"[GA4 DAILY DATA] Comparison entry for {date_str} ({current['date']}): current_users={current['users']}, current_new_users={current.get('new_users', 0)}, previous_date={prev_date_str}, previous_users={previous.get('users', 0)}, previous_new_users={previous.get('new_users', 0)}")
                         
                         chart_data["ga4_daily_comparison"] = ga4_daily_comparison
                         logger.info(f"[GA4 DAILY DATA] Created ga4_daily_comparison with {len(ga4_daily_comparison)} entries")
@@ -2609,8 +2612,9 @@ async def get_reporting_dashboard(
                         entries_with_data = [e for e in ga4_daily_comparison if e.get("current_users", 0) > 0 or e.get("current_sessions", 0) > 0]
                         total_chart_users = sum(e.get("current_users", 0) for e in ga4_daily_comparison)
                         total_chart_sessions = sum(e.get("current_sessions", 0) for e in ga4_daily_comparison)
+                        total_chart_new_users = sum(e.get("current_new_users", 0) for e in ga4_daily_comparison)
                         logger.info(f"[GA4 DAILY DATA] {len(entries_with_data)}/{len(ga4_daily_comparison)} comparison entries have non-zero data")
-                        logger.info(f"[GA4 DAILY DATA] Total users in chart: {total_chart_users}, Total sessions: {total_chart_sessions}")
+                        logger.info(f"[GA4 DAILY DATA] Total users in chart: {total_chart_users}, Total sessions: {total_chart_sessions}, Total new users: {total_chart_new_users}")
                         
                         # Keep backward compatibility - users_over_time (all days in range)
                         users_over_time = []
@@ -3551,7 +3555,7 @@ async def get_reporting_dashboard(
                             
                             # Log first few entries and any entries with data for debugging
                             if len(ga4_daily_comparison) <= 3 or current["users"] > 0 or current["sessions"] > 0:
-                                logger.debug(f"[GA4 DAILY DATA] Comparison entry for {date_str} ({current['date']}): current_users={current['users']}, previous_date={prev_date_str}, previous_users={previous.get('users', 0)}")
+                                logger.debug(f"[GA4 DAILY DATA] Comparison entry for {date_str} ({current['date']}): current_users={current['users']}, current_new_users={current.get('new_users', 0)}, previous_date={prev_date_str}, previous_users={previous.get('users', 0)}, previous_new_users={previous.get('new_users', 0)}")
                         
                         chart_data["ga4_daily_comparison"] = ga4_daily_comparison
                         logger.info(f"[GA4 DAILY DATA] Created ga4_daily_comparison with {len(ga4_daily_comparison)} entries")
@@ -3560,8 +3564,9 @@ async def get_reporting_dashboard(
                         entries_with_data = [e for e in ga4_daily_comparison if e.get("current_users", 0) > 0 or e.get("current_sessions", 0) > 0]
                         total_chart_users = sum(e.get("current_users", 0) for e in ga4_daily_comparison)
                         total_chart_sessions = sum(e.get("current_sessions", 0) for e in ga4_daily_comparison)
+                        total_chart_new_users = sum(e.get("current_new_users", 0) for e in ga4_daily_comparison)
                         logger.info(f"[GA4 DAILY DATA] {len(entries_with_data)}/{len(ga4_daily_comparison)} comparison entries have non-zero data")
-                        logger.info(f"[GA4 DAILY DATA] Total users in chart: {total_chart_users}, Total sessions: {total_chart_sessions}")
+                        logger.info(f"[GA4 DAILY DATA] Total users in chart: {total_chart_users}, Total sessions: {total_chart_sessions}, Total new users: {total_chart_new_users}")
                         
                         # Keep backward compatibility - users_over_time (all days in range)
                         users_over_time = []

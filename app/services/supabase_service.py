@@ -978,7 +978,12 @@ class SupabaseService:
             return None
     
     def upsert_ga4_traffic_overview(self, property_id: str, date: str, data: Dict, client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
-        """Upsert GA4 traffic overview data - now uses client_id (with brand_id for backward compatibility)"""
+        """Upsert GA4 traffic overview data - now uses client_id (with brand_id for backward compatibility)
+        
+        Uses delete-then-insert approach to handle the case where client_id is the primary identifier
+        but the unique constraint is on (brand_id, property_id, date). This prevents duplicate records
+        when brand_id is NULL.
+        """
         if client_id is None and brand_id is None:
             raise ValueError("Either client_id or brand_id must be provided")
         
@@ -994,9 +999,31 @@ class SupabaseService:
             entity_id = client_id if client_id is not None else brand_id
             entity_type = "client" if client_id is not None else "brand"
             
-            # Use PostgreSQL INSERT ... ON CONFLICT for upsert
-            # Unique constraint is on (brand_id, property_id, date)
-            query = text("""
+            # Delete existing record first to prevent duplicates
+            # This handles the case where brand_id might be NULL (NULL != NULL in SQL)
+            if client_id is not None:
+                delete_query = text("""
+                    DELETE FROM ga4_traffic_overview 
+                    WHERE client_id = :client_id AND property_id = :property_id AND date = :date
+                """)
+                self.db.execute(delete_query, {
+                    "client_id": client_id,
+                    "property_id": property_id,
+                    "date": date
+                })
+            elif brand_id is not None:
+                delete_query = text("""
+                    DELETE FROM ga4_traffic_overview 
+                    WHERE brand_id = :brand_id AND property_id = :property_id AND date = :date
+                """)
+                self.db.execute(delete_query, {
+                    "brand_id": brand_id,
+                    "property_id": property_id,
+                    "date": date
+                })
+            
+            # Insert the new record
+            insert_query = text("""
                 INSERT INTO ga4_traffic_overview (
                     brand_id, client_id, property_id, date,
                     users, sessions, new_users, bounce_rate,
@@ -1010,26 +1037,9 @@ class SupabaseService:
                     :sessions_change, :engaged_sessions_change, :avg_session_duration_change,
                     :engagement_rate_change, :conversions, :revenue, NOW()
                 )
-                ON CONFLICT (brand_id, property_id, date)
-                DO UPDATE SET
-                    client_id = EXCLUDED.client_id,
-                    users = EXCLUDED.users,
-                    sessions = EXCLUDED.sessions,
-                    new_users = EXCLUDED.new_users,
-                    bounce_rate = EXCLUDED.bounce_rate,
-                    average_session_duration = EXCLUDED.average_session_duration,
-                    engaged_sessions = EXCLUDED.engaged_sessions,
-                    engagement_rate = EXCLUDED.engagement_rate,
-                    sessions_change = EXCLUDED.sessions_change,
-                    engaged_sessions_change = EXCLUDED.engaged_sessions_change,
-                    avg_session_duration_change = EXCLUDED.avg_session_duration_change,
-                    engagement_rate_change = EXCLUDED.engagement_rate_change,
-                    conversions = EXCLUDED.conversions,
-                    revenue = EXCLUDED.revenue,
-                    updated_at = NOW()
             """)
             
-            self.db.execute(query, {
+            self.db.execute(insert_query, {
                 "brand_id": brand_id,
                 "client_id": client_id,
                 "property_id": property_id,
@@ -1208,7 +1218,12 @@ class SupabaseService:
             raise
     
     def upsert_ga4_geographic(self, property_id: str, date: str, geographic: List[Dict], client_id: Optional[int] = None, brand_id: Optional[int] = None) -> int:
-        """Upsert GA4 geographic data using SQLAlchemy Core (local PostgreSQL)"""
+        """Upsert GA4 geographic data using SQLAlchemy Core (local PostgreSQL)
+        
+        Supports both:
+        1. Single date: geographic data all has same date (legacy mode)
+        2. Multi-date: geographic data includes 'date' field in each record (new mode)
+        """
         if client_id is None and brand_id is None:
             raise ValueError("Either client_id or brand_id must be provided")
         if not geographic:
@@ -1217,31 +1232,62 @@ class SupabaseService:
         entity_id = client_id if client_id is not None else brand_id
         entity_type = "client" if client_id is not None else "brand"
         
-        try:
-            table = self._get_table("ga4_geographic")
-            
-            # Delete existing records for this date first
-            delete_conditions = [
-                table.c.property_id == property_id,
-                table.c.date == date
-            ]
-            if client_id is not None:
-                delete_conditions.append(table.c.client_id == client_id)
-            if brand_id is not None:
-                delete_conditions.append(table.c.brand_id == brand_id)
-            
-            delete_stmt = delete(table).where(and_(*delete_conditions))
-            self.db.execute(delete_stmt)
-            self.db.commit()
-        except Exception as delete_error:
-            self.db.rollback()
-            logger.warning(f"Error deleting existing geographic data (may not exist): {str(delete_error)}")
+        # Check if data includes date field (multi-date mode)
+        has_date_field = any(geo.get("date") for geo in geographic)
+        
+        if has_date_field:
+            # Multi-date mode: Extract unique dates and delete all of them
+            unique_dates = set(geo.get("date") for geo in geographic if geo.get("date"))
+            try:
+                table = self._get_table("ga4_geographic")
+                
+                # Delete existing records for ALL dates in this batch
+                for date_to_delete in unique_dates:
+                    delete_conditions = [
+                        table.c.property_id == property_id,
+                        table.c.date == date_to_delete
+                    ]
+                    if client_id is not None:
+                        delete_conditions.append(table.c.client_id == client_id)
+                    if brand_id is not None:
+                        delete_conditions.append(table.c.brand_id == brand_id)
+                    
+                    delete_stmt = delete(table).where(and_(*delete_conditions))
+                    self.db.execute(delete_stmt)
+                self.db.commit()
+                logger.info(f"Deleted existing geographic data for {len(unique_dates)} dates")
+            except Exception as delete_error:
+                self.db.rollback()
+                logger.warning(f"Error deleting existing geographic data (may not exist): {str(delete_error)}")
+        else:
+            # Single date mode (legacy): Use provided date parameter
+            try:
+                table = self._get_table("ga4_geographic")
+                
+                # Delete existing records for this date first
+                delete_conditions = [
+                    table.c.property_id == property_id,
+                    table.c.date == date
+                ]
+                if client_id is not None:
+                    delete_conditions.append(table.c.client_id == client_id)
+                if brand_id is not None:
+                    delete_conditions.append(table.c.brand_id == brand_id)
+                
+                delete_stmt = delete(table).where(and_(*delete_conditions))
+                self.db.execute(delete_stmt)
+                self.db.commit()
+            except Exception as delete_error:
+                self.db.rollback()
+                logger.warning(f"Error deleting existing geographic data (may not exist): {str(delete_error)}")
         
         records = []
         for geo in geographic:
+            # Use date from record if available, otherwise use parameter
+            record_date = geo.get("date", date)
             record = {
                 "property_id": property_id,
-                "date": date,
+                "date": record_date,
                 "country": geo.get("country", ""),
                 "users": geo.get("users", 0),
                 "sessions": geo.get("sessions", 0),
@@ -1255,12 +1301,20 @@ class SupabaseService:
         
         try:
             # Bulk insert using ON CONFLICT - process in batches
+            # Use appropriate unique constraint based on entity type
+            if client_id is not None:
+                # For clients, use client_id in the unique constraint
+                conflict_columns = ['client_id', 'property_id', 'date', 'country']
+            else:
+                # For brands, use brand_id in the unique constraint
+                conflict_columns = ['brand_id', 'property_id', 'date', 'country']
+            
             batch_size = 500
             for i in range(0, len(records), batch_size):
                 batch = records[i:i + batch_size]
                 insert_stmt = pg_insert(table).values(batch)
                 insert_stmt = insert_stmt.on_conflict_do_update(
-                    index_elements=['brand_id', 'property_id', 'date', 'country'],
+                    index_elements=conflict_columns,
                     set_={
                         'users': insert_stmt.excluded.users,
                         'sessions': insert_stmt.excluded.sessions,
