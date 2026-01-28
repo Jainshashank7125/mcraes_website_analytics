@@ -3220,12 +3220,13 @@ class SupabaseService:
         user_email: Optional[str] = None,
         selected_kpis: Optional[List[str]] = None,
         visible_sections: Optional[List[str]] = None,
+        visible_highlights: Optional[List[str]] = None,
         selected_charts: Optional[List[str]] = None,
         selected_performance_metrics_kpis: Optional[List[str]] = None,
         show_change_period: Optional[Dict[str, bool]] = None,
         executive_summary: Optional[Dict] = None
     ) -> Optional[Dict]:
-        """Create or update a dashboard link for a client based on date range"""
+        """Create a new dashboard link for a client (always creates new, allows multiple links for same date range)"""
         try:
             table = self._get_table("dashboard_links")
             link_slug = slug or self.generate_client_slug()
@@ -3260,26 +3261,9 @@ class SupabaseService:
                 created_at=now
             ).returning(table)
 
-            # Build update set conditionally
-            update_set = {
-                "slug": insert_stmt.excluded.slug,
-                "enabled": insert_stmt.excluded.enabled,
-                "expires_at": insert_stmt.excluded.expires_at,
-                "updated_at": insert_stmt.excluded.updated_at,
-            }
-            
-            # Only update name/description/executive_summary if columns exist
-            if has_name_column:
-                update_set["name"] = insert_stmt.excluded.name
-            if has_description_column:
-                update_set["description"] = insert_stmt.excluded.description
-            if has_executive_summary_column:
-                update_set["executive_summary"] = insert_stmt.excluded.executive_summary
-
-            insert_stmt = insert_stmt.on_conflict_do_update(
-                index_elements=['client_id', 'start_date', 'end_date'],
-                set_=update_set
-            )
+            # Always create new link - don't update existing ones
+            # This allows multiple links for the same date range with different configs
+            # No on_conflict_do_update - always insert new record
 
             result = self.db.execute(insert_stmt)
             self.db.commit()
@@ -3290,11 +3274,12 @@ class SupabaseService:
                 link_id = link_dict.get("id")
                 
                 # Save KPI selections if provided
-                if link_id and (selected_kpis is not None or visible_sections is not None or selected_charts is not None or selected_performance_metrics_kpis is not None or show_change_period is not None):
+                if link_id and (selected_kpis is not None or visible_sections is not None or visible_highlights is not None or selected_charts is not None or selected_performance_metrics_kpis is not None or show_change_period is not None):
                     kpi_selection = self.upsert_dashboard_link_kpi_selection(
                         link_id=link_id,
                         selected_kpis=selected_kpis or [],
                         visible_sections=visible_sections,
+                        visible_highlights=visible_highlights,
                         selected_charts=selected_charts or [],
                         selected_performance_metrics_kpis=selected_performance_metrics_kpis or [],
                         show_change_period=show_change_period
@@ -3503,6 +3488,7 @@ class SupabaseService:
             # Extract KPI selection fields if present (these are handled separately)
             selected_kpis = updates.pop("selected_kpis", None)
             visible_sections = updates.pop("visible_sections", None)
+            visible_highlights = updates.pop("visible_highlights", None)
             selected_charts = updates.pop("selected_charts", None)
             selected_performance_metrics_kpis = updates.pop("selected_performance_metrics_kpis", None)
             show_change_period = updates.pop("show_change_period", None)
@@ -3553,11 +3539,12 @@ class SupabaseService:
             link_dict = dict(row._mapping)
             
             # Update KPI selections if provided
-            if selected_kpis is not None or visible_sections is not None or selected_charts is not None or selected_performance_metrics_kpis is not None or show_change_period is not None:
+            if selected_kpis is not None or visible_sections is not None or visible_highlights is not None or selected_charts is not None or selected_performance_metrics_kpis is not None or show_change_period is not None:
                 kpi_selection = self.upsert_dashboard_link_kpi_selection(
                     link_id=link_id,
                     selected_kpis=selected_kpis if selected_kpis is not None else [],
                     visible_sections=visible_sections,
+                    visible_highlights=visible_highlights,
                     selected_charts=selected_charts if selected_charts is not None else [],
                     selected_performance_metrics_kpis=selected_performance_metrics_kpis if selected_performance_metrics_kpis is not None else [],
                     show_change_period=show_change_period
@@ -3605,6 +3592,29 @@ class SupabaseService:
                 # Include selected_performance_metrics_kpis if the column exists
                 if hasattr(row, 'selected_performance_metrics_kpis'):
                     result_dict["selected_performance_metrics_kpis"] = row.selected_performance_metrics_kpis or []
+                # Include visible_highlights if the column exists
+                # CRITICAL: Use getattr with default None, then check if it's in the row mapping
+                try:
+                    # Try to get from row attribute first
+                    visible_highlights_value = getattr(row, 'visible_highlights', None)
+                    # If that doesn't work, try from mapping
+                    if visible_highlights_value is None and hasattr(row, '_mapping'):
+                        visible_highlights_value = row._mapping.get('visible_highlights')
+                    
+                    if visible_highlights_value is not None:
+                        # Convert to list if it's a tuple or other iterable
+                        if isinstance(visible_highlights_value, (list, tuple)):
+                            result_dict["visible_highlights"] = list(visible_highlights_value)
+                        else:
+                            result_dict["visible_highlights"] = [visible_highlights_value] if visible_highlights_value else []
+                        logger.info(f"✅ Loaded visible_highlights for link {link_id}: {result_dict.get('visible_highlights')} (type: {type(result_dict.get('visible_highlights'))})")
+                    else:
+                        result_dict["visible_highlights"] = []
+                        logger.warning(f"⚠️ visible_highlights is None for link {link_id}, setting to empty array")
+                except AttributeError:
+                    # Column doesn't exist or can't be accessed
+                    logger.warning(f"Could not access visible_highlights column for link {link_id}")
+                    result_dict["visible_highlights"] = []
                 # Include show_change_period if the column exists
                 if hasattr(row, 'show_change_period') and row.show_change_period:
                     result_dict["show_change_period"] = row.show_change_period
@@ -3619,6 +3629,7 @@ class SupabaseService:
         link_id: int,
         selected_kpis: List[str],
         visible_sections: Optional[List[str]] = None,
+        visible_highlights: Optional[List[str]] = None,
         selected_charts: Optional[List[str]] = None,
         selected_performance_metrics_kpis: Optional[List[str]] = None,
         show_change_period: Optional[Dict[str, bool]] = None
@@ -3658,8 +3669,24 @@ class SupabaseService:
                 "updated_at": now,
             }
             
-            # Only add show_change_period if column exists
+            # Check which columns exist in the table
             table_columns = [col.name for col in table.c]
+            
+            # Only add visible_highlights if column exists
+            # CRITICAL: Empty array [] is valid and should be saved (means no highlights selected)
+            # Only skip if it's explicitly None (not provided in update)
+            if 'visible_highlights' in table_columns:
+                if visible_highlights is not None:
+                    # Ensure it's a list (not tuple or other iterable)
+                    if not isinstance(visible_highlights, list):
+                        visible_highlights = list(visible_highlights) if visible_highlights else []
+                    kpi_data["visible_highlights"] = visible_highlights
+                    logger.info(f"✅ Saving visible_highlights for link {link_id}: {visible_highlights} (type: {type(visible_highlights)}, len: {len(visible_highlights)})")
+                else:
+                    # If None, don't include it (will keep existing value on update, or be NULL on insert)
+                    logger.warning(f"⚠️ visible_highlights is None for link {link_id}, skipping (will keep existing value or be NULL)")
+            
+            # Only add show_change_period if column exists
             if 'show_change_period' in table_columns:
                 kpi_data["show_change_period"] = show_change_period
             
@@ -3675,6 +3702,11 @@ class SupabaseService:
                 "selected_performance_metrics_kpis": insert_stmt.excluded.selected_performance_metrics_kpis,
                 "updated_at": insert_stmt.excluded.updated_at,
             }
+            
+            # Only update visible_highlights if column exists AND it was provided (not None)
+            # CRITICAL: Empty array [] is valid (means no highlights), None means don't update
+            if 'visible_highlights' in table_columns and visible_highlights is not None:
+                update_set["visible_highlights"] = insert_stmt.excluded.visible_highlights
             
             # Only update show_change_period if column exists
             if 'show_change_period' in table_columns:

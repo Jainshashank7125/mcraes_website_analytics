@@ -211,9 +211,9 @@ class Client(Base):
 class DashboardLink(Base):
     """Shareable dashboard links per client"""
     __tablename__ = "dashboard_links"
-    __table_args__ = (
-        UniqueConstraint('client_id', 'start_date', 'end_date', name='uq_dashboard_links_client_dates'),
-    )
+    # Removed unique constraint to allow multiple links for same date range
+    # Links are now differentiated by creation datetime
+    __table_args__ = ()
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True)
