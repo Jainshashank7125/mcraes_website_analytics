@@ -12,6 +12,13 @@ from app.db.database import get_db
 
 logger = logging.getLogger(__name__)
 
+# North America countries (GA4 uses full names). Geographic data is only included in AI Overview when all data is from these.
+NORTH_AMERICA_COUNTRIES = {
+    "united states", "united states of america", "usa", "canada", "mexico",
+    "belize", "costa rica", "el salvador", "guatemala", "honduras", "nicaragua", "panama",
+    "greenland", "saint pierre and miquelon", "bermuda",
+}
+
 router = APIRouter()
 openai_client = OpenAIClient()
 
@@ -486,13 +493,24 @@ async def generate_overall_overview(
                     "data_points": len(main_chart_data["top_pages"]),
                     "top_pages": main_chart_data["top_pages"][:5] if isinstance(main_chart_data["top_pages"], list) else None
                 }
-            if main_chart_data.get("geographic_breakdown"):
-                structured_data["GA4"]["charts"]["geographic_breakdown"] = {
-                    "type": "map",
-                    "description": "Geographic distribution of users",
-                    "data_points": len(main_chart_data["geographic_breakdown"]),
-                    "top_countries": main_chart_data["geographic_breakdown"][:5] if isinstance(main_chart_data["geographic_breakdown"], list) else None
-                }
+            # Geographic breakdown: include ONLY if data is from North America countries; otherwise omit entirely
+            geo_raw = main_chart_data.get("geographic_breakdown") or []
+            if isinstance(geo_raw, list) and geo_raw:
+                geo_na = []
+                for g in geo_raw:
+                    country = (g.get("country") or "").strip()
+                    if not country:
+                        continue
+                    c_lower = country.lower()
+                    if c_lower in NORTH_AMERICA_COUNTRIES or c_lower.startswith("united states"):
+                        geo_na.append(g)
+                if geo_na:
+                    structured_data["GA4"]["charts"]["geographic_breakdown"] = {
+                        "type": "map",
+                        "description": "Geographic distribution of users (North America)",
+                        "data_points": len(geo_na),
+                        "top_countries": geo_na[:5]
+                    }
             
             # Agency Analytics Charts
             if main_chart_data.get("top_campaigns"):
@@ -618,27 +636,28 @@ async def generate_overall_overview(
                 metrics_by_source_text += f"\n\n{source_name} Metrics:\n"
                 metrics_by_source_text += format_metrics_for_prompt(metrics)
         
-        # New system prompt for Executive Brief
+        # New system prompt for Executive Brief — POSITIVE ONLY, NO HALLUCINATION
         system_prompt = """You are an AI reporting assistant for a B2B digital marketing agency.
-Your job is to explain performance, not list metrics.
-Prioritize clarity, honesty, and interpretation over completeness.
+Your job is to explain performance in a positive, constructive way only, using ONLY the data provided.
 
-Hard constraints:
-- Do NOT list raw metrics unless they support a clear insight
-- Do NOT mention internal tools or data sources by name
-- Do NOT speculate or invent explanations
-- Do NOT hide negative performance; contextualize it calmly
-- Do NOT exceed the defined section structure
-- Assume performance may be strong, mixed, or poor
-- If data is missing, acknowledge briefly and move on
-- Maximum length: ~450-600 words total
-- No emojis except for status indicators (✅ ⚠️ 🔴)
-- No buzzwords or marketing hype
-- No paragraphs longer than 3 lines
-- Calm, confident, executive tone"""
+STRICT — NO HALLUCINATION:
+- Only state facts directly supported by the data provided. Do NOT invent metrics, numbers, percentages, trends, or explanations.
+- Do NOT make up KPIs, chart insights, or comparisons that are not in the data.
+- If data for a section is missing or not in the input, write "Not available" or one short line and move on; do NOT invent content.
+- Every bullet and sentence must be grounded in the metrics/charts text you were given. No speculation.
 
-        # User prompt requesting structured JSON output
-        user_prompt = f"""Generate an Executive / Monthly Performance Brief for the following client and metrics.
+Positive-only constraints:
+- Show only positive outcomes, improvements, wins, and opportunities. No declines, risks, or negative framing.
+- Do NOT mention internal tools or data sources by name.
+- You MUST include the "what_to_watch" section: 2-3 bullets of positive opportunities or focus areas (no negative concerns).
+- Overall status: only "✅ Positive momentum" or "✅ On track".
+- Geographic/location: mention ONLY if North America data is in the input; otherwise omit.
+- Maximum length: ~450-600 words. No emojis except ✅. No buzzwords. Calm, executive tone."""
+
+        # User prompt requesting structured JSON output — POSITIVE ONLY, NO HALLUCINATION
+        user_prompt = f"""Generate an Executive / Monthly Performance Brief using ONLY the data below. Do not invent any metrics, numbers, or facts.
+
+STRICT: (1) Positive outcomes only. (2) No hallucination — every statement must be grounded in the data provided.
 
 Client Name: {client_name}
 Program Name: {program_name}
@@ -646,34 +665,31 @@ Reporting Period: {reporting_period}
 
 {structured_data_text}
 
-NOTE: The data above is organized by sections (GA4, Agency Analytics, Scrunch) with both KPIs and chart visualizations. 
-Use the chart data to provide context about trends, patterns, and visual insights that complement the KPI metrics.
+RULES: Use only the KPIs and chart data above. If a section has no data, say "Not available" or one brief line. Do not mention geography unless North America geographic data appears above.
 
-You MUST return a valid JSON object with the following exact structure:
+You MUST return a valid JSON object with this exact structure (include "what_to_watch" — it must appear in the output):
 {{
   "header": {{
     "client_name": "{client_name}",
     "program_name": "{program_name}",
     "reporting_period": "{reporting_period}",
-    "overall_status": "✅ Positive momentum" | "⚠️ Mixed / transitional" | "🔴 Underperforming"
+    "overall_status": "✅ Positive momentum" | "✅ On track"
   }},
-  "executive_summary": "2-3 sentences describing overall performance, primary risk or limitation, and optional content/off-page progress reference",
-  "what_worked": ["bullet 1 - clear win with WHY it matters", "bullet 2", "bullet 3", "bullet 4", "bullet 5"],
-  "what_to_watch": ["bullet 1 - decline, risk, or flat area", "bullet 2", "bullet 3"],
-  "ai_visibility_snapshot": ["bullet 1 - current presence level", "bullet 2 - direction if available", "bullet 3 - competitive signals"],
-  "content_authority_snapshot": ["bullet 1 - on-site content summary", "bullet 2 - off-site/editorial or listings activity", "bullet 3 - pending items if relevant", "bullet 4 - one line tying content to SEO/AI goals"],
-  "focus_next_30_days": ["1. Specific action tied to issues above", "2. Mix of optimization, expansion, validation", "3. Action 3", "4. Action 4", "5. Action 5"],
-  "client_action_needed": "1-2 explicit actions OR 'No action needed this month.'"
+  "executive_summary": "2-3 sentences from the data: strengths and progress only. No invented metrics.",
+  "what_worked": ["bullet 1 from data", "bullet 2", "bullet 3", "bullet 4", "bullet 5"],
+  "what_to_watch": ["bullet 1 - positive opportunity or focus area from data", "bullet 2", "bullet 3"],
+  "ai_visibility_snapshot": ["bullet 1 from data", "bullet 2", "bullet 3"],
+  "content_authority_snapshot": ["bullet 1 from data", "bullet 2", "bullet 3"],
+  "focus_next_30_days": ["1. Action from data", "2. Action", "3. Action", "4. Action", "5. Action"],
+  "client_action_needed": "1-2 next steps from data OR 'No action needed this month.'"
 }}
 
 Requirements:
-- what_worked: 3-5 bullets, each explaining WHY it matters to the business
-- what_to_watch: 2-3 bullets covering declines, risks, flat areas, or tracking gaps
-- ai_visibility_snapshot: 2-3 bullets
-- content_authority_snapshot: 2-4 bullets (if unavailable, explicitly say so)
-- focus_next_30_days: 3-5 numbered actions, specific and tied to issues above
-- Total word count: ~450-600 words
-- Return ONLY valid JSON, no markdown, no code blocks"""
+- what_worked: 3-5 bullets, each tied to data above.
+- what_to_watch: MUST have 2-3 bullets (positive opportunities/focus areas only; no negative concerns). This section is required.
+- ai_visibility_snapshot, content_authority_snapshot: 2-4 bullets each, from data only; if no data, "Not available".
+- Do not invent numbers or trends. Only use what is in the data.
+- Return ONLY valid JSON, no markdown, no code blocks."""
         
         # Generate overview using OpenAI
         messages = [
@@ -794,8 +810,8 @@ def validate_executive_summary(summary: Dict) -> Optional[str]:
         if field not in header:
             return f"Missing required header field: {field}"
     
-    # Validate status value
-    valid_statuses = ["✅ Positive momentum", "⚠️ Mixed / transitional", "🔴 Underperforming"]
+    # Validate status value (positive only)
+    valid_statuses = ["✅ Positive momentum", "✅ On track"]
     if header.get("overall_status") not in valid_statuses:
         return f"Invalid overall_status. Must be one of: {', '.join(valid_statuses)}"
     

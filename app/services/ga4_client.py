@@ -153,6 +153,7 @@ class GA4APIClient:
                     Metric(name="activeUsers"),  # Used for daily breakdown in charts only
                     Metric(name="sessions"),
                     Metric(name="newUsers"),  # Add newUsers for daily breakdown
+                    Metric(name="engagedSessions"),  # Add engagedSessions for daily breakdown
                     Metric(name="bounceRate"),
                     Metric(name="averageSessionDuration"),
                     Metric(name="engagementRate"),
@@ -222,6 +223,8 @@ class GA4APIClient:
                     elif metric_name == "newUsers":
                         daily_record["newUsers"] = int(value)
                         logger.info(f"[GA4 CLIENT DEBUG] Set newUsers to {int(value)} for date {date_str}")
+                    elif metric_name == "engagedSessions":
+                        daily_record["engagedSessions"] = int(value)
                     elif metric_name == "bounceRate":
                         daily_record["bounceRate"] = value
                     elif metric_name == "averageSessionDuration":
@@ -525,14 +528,17 @@ class GA4APIClient:
                 # Group by date for better organization
                 daily_data = []
                 for row in response.rows:
-                    daily_data.append({
-                        "date": row.dimension_values[0].value,
-                        "country": row.dimension_values[1].value,
-                        "users": int(row.metric_values[0].value),
-                        "sessions": int(row.metric_values[1].value),
-                    })
+                    country = row.dimension_values[1].value
+                    # Filter out blank, null, or "(not set)" country values
+                    if country and country.strip() and country.strip().lower() not in ['(not set)', 'not set', '']:
+                        daily_data.append({
+                            "date": row.dimension_values[0].value,
+                            "country": country,
+                            "users": int(row.metric_values[0].value),
+                            "sessions": int(row.metric_values[1].value),
+                        })
                 
-                logger.info(f"Fetched {len(daily_data)} daily geographic records for {property_id}")
+                logger.info(f"Fetched {len(daily_data)} daily geographic records for {property_id} (filtered out blank countries)")
                 return daily_data
             else:
                 # Return aggregated breakdown (for display purposes only, not for storage)
@@ -558,13 +564,17 @@ class GA4APIClient:
                 
                 countries = []
                 for row in response.rows:
-                    countries.append({
-                        "country": row.dimension_values[0].value,
-                        "users": int(row.metric_values[0].value),
-                        "sessions": int(row.metric_values[1].value),
-                        "engagementRate": float(row.metric_values[2].value) if len(row.metric_values) > 2 else 0,
-                    })
+                    country = row.dimension_values[0].value
+                    # Filter out blank, null, or "(not set)" country values
+                    if country and country.strip() and country.strip().lower() not in ['(not set)', 'not set', '']:
+                        countries.append({
+                            "country": country,
+                            "users": int(row.metric_values[0].value),
+                            "sessions": int(row.metric_values[1].value),
+                            "engagementRate": float(row.metric_values[2].value) if len(row.metric_values) > 2 else 0,
+                        })
                 
+                logger.info(f"Fetched {len(countries)} geographic countries for {property_id} (filtered out blank countries)")
                 return countries
         except Exception as e:
             logger.error(f"Error fetching geographic breakdown: {str(e)}")

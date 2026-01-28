@@ -15,7 +15,7 @@ from app.api.auth_v2 import get_current_user_v2
 from app.core.config import settings
 from app.db.database import get_db
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func, and_, or_, update
+from sqlalchemy import select, func, and_, or_, update, case
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ class DashboardLinkRequest(BaseModel):
     description: Optional[str] = None
     selected_kpis: Optional[List[str]] = None
     visible_sections: Optional[List[str]] = None
+    visible_highlights: Optional[List[str]] = None
     selected_charts: Optional[List[str]] = None
     selected_performance_metrics_kpis: Optional[List[str]] = None
     show_change_period: Optional[Dict[str, bool]] = Field(None, description="Per-section flags for showing change period indicators")
@@ -49,6 +50,7 @@ class DashboardLinkUpdateRequest(BaseModel):
     slug: Optional[str] = None
     selected_kpis: Optional[List[str]] = None
     visible_sections: Optional[List[str]] = None
+    visible_highlights: Optional[List[str]] = None
     selected_charts: Optional[List[str]] = None
     selected_performance_metrics_kpis: Optional[List[str]] = None
     show_change_period: Optional[Dict[str, bool]] = Field(None, description="Per-section flags for showing change period indicators")
@@ -433,7 +435,9 @@ async def get_brand_ga4_analytics(
         
         try:
             # For display purposes, use aggregated geographic breakdown (not daily)
-            analytics["geographic"] = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False)
+            geographic_raw = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False)
+            # Filter out blank or "(not set)" country names
+            analytics["geographic"] = [g for g in (geographic_raw or []) if g.get("country") and g.get("country").strip() and g.get("country").strip().lower() not in ['(not set)', 'not set', '']]
             # Store geographic data (only if this is a single-day query)
             if analytics["geographic"] and start_date == end_date:
                 try:
@@ -720,7 +724,9 @@ async def get_ga4_geographic(
     """Get geographic breakdown for a GA4 property (aggregated for display)"""
     try:
         # Use aggregated mode for display purposes
-        data = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit, include_daily_breakdown=False)
+        data_raw = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit, include_daily_breakdown=False)
+        # Filter out blank or "(not set)" country names
+        data = [g for g in (data_raw or []) if g.get("country") and g.get("country").strip() and g.get("country").strip().lower() not in ['(not set)', 'not set', '']]
         return {"items": data, "count": len(data)}
     except Exception as e:
         logger.error(f"Error fetching geographic breakdown: {str(e)}")
@@ -2039,21 +2045,24 @@ async def get_reporting_dashboard(
             try:
                 property_id = chart_ga4_property_id
                 
-                # Get all chart data from stored database records (NO live API calls)
-                logger.info(f"[GA4 STORED DATA] Fetching chart data from stored records for date range: {start_date} to {end_date}")
-                # Use client_id for all queries - brand_id is only used as fallback for Scrunch
-                query_brand_id = scrunch_brand_id if client_id else brand_id
-                top_pages = supabase.get_ga4_top_pages_by_date_range(query_brand_id, property_id, start_date, end_date, limit=10, client_id=client_id)
-                traffic_sources = supabase.get_ga4_traffic_sources_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
-                geographic = supabase.get_ga4_geographic_by_date_range(query_brand_id, property_id, start_date, end_date, limit=10, client_id=client_id)
-                devices = supabase.get_ga4_devices_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
+                # FIX: Use GA4 API directly for accurate totals (avoids double-counting from daily aggregation)
+                # This ensures chart data matches table data and GA4 dashboard
+                logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
+                
+                # Use GA4 API directly to avoid aggregation issues
+                top_pages = await ga4_client.get_top_pages(property_id, start_date, end_date, limit=10)
+                traffic_sources = await ga4_client.get_traffic_sources(property_id, start_date, end_date)
+                geographic = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False)
+                devices = await ga4_client.get_device_breakdown(property_id, start_date, end_date)
                 
                 chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
                 chart_data["top_pages"] = top_pages if top_pages else []
-                chart_data["geographic_breakdown"] = geographic if geographic else []
+                # Filter out blank or "(not set)" country names
+                geographic_filtered = [g for g in (geographic or []) if g.get("country") and g.get("country").strip() and g.get("country").strip().lower() not in ['(not set)', 'not set', '']]
+                chart_data["geographic_breakdown"] = geographic_filtered
                 chart_data["device_breakdown"] = devices if devices else []
                 
-                logger.info(f"[GA4 STORED DATA] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic)}, devices: {len(devices)}")
+                logger.info(f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} (filtered from {len(geographic or [])}), devices: {len(devices)}")
                 
                 # Get GA4 traffic overview for detailed metrics from stored data
                 query_brand_id = scrunch_brand_id if client_id else brand_id
@@ -3002,21 +3011,24 @@ async def get_reporting_dashboard(
             try:
                 property_id = chart_ga4_property_id
                 
-                # Get all chart data from stored database records (NO live API calls)
-                logger.info(f"[GA4 STORED DATA] Fetching chart data from stored records for date range: {start_date} to {end_date}")
-                # Use client_id for all queries - brand_id is only used as fallback for Scrunch
-                query_brand_id = scrunch_brand_id if client_id else brand_id
-                top_pages = supabase.get_ga4_top_pages_by_date_range(query_brand_id, property_id, start_date, end_date, limit=10, client_id=client_id)
-                traffic_sources = supabase.get_ga4_traffic_sources_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
-                geographic = supabase.get_ga4_geographic_by_date_range(query_brand_id, property_id, start_date, end_date, limit=10, client_id=client_id)
-                devices = supabase.get_ga4_devices_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
+                # FIX: Use GA4 API directly for accurate totals (avoids double-counting from daily aggregation)
+                # This ensures chart data matches table data and GA4 dashboard
+                logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
+                
+                # Use GA4 API directly to avoid aggregation issues
+                top_pages = await ga4_client.get_top_pages(property_id, start_date, end_date, limit=10)
+                traffic_sources = await ga4_client.get_traffic_sources(property_id, start_date, end_date)
+                geographic = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False)
+                devices = await ga4_client.get_device_breakdown(property_id, start_date, end_date)
                 
                 chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
                 chart_data["top_pages"] = top_pages if top_pages else []
-                chart_data["geographic_breakdown"] = geographic if geographic else []
+                # Filter out blank or "(not set)" country names
+                geographic_filtered = [g for g in (geographic or []) if g.get("country") and g.get("country").strip() and g.get("country").strip().lower() not in ['(not set)', 'not set', '']]
+                chart_data["geographic_breakdown"] = geographic_filtered
                 chart_data["device_breakdown"] = devices if devices else []
                 
-                logger.info(f"[GA4 STORED DATA] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic)}, devices: {len(devices)}")
+                logger.info(f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} (filtered from {len(geographic or [])}), devices: {len(devices)}")
                 
                 # Get GA4 traffic overview for detailed metrics from stored data
                 query_brand_id = scrunch_brand_id if client_id else brand_id
@@ -3719,7 +3731,7 @@ async def get_reporting_dashboard(
                     chart_total_search_volume += avg_volume or 0
                     chart_all_keywords_rankings.append({
                         "keyword": phrase,
-                        "average_ranking": float(avg_rank),
+                        "average_ranking": int(round(float(avg_rank))) if avg_rank is not None else 0,
                         "average_search_volume": float(avg_volume) if avg_volume is not None else 0,
                         "keyword_id": keyword_id,
                     })
@@ -4378,6 +4390,7 @@ async def get_scrunch_dashboard_data(
                 Response.platform,
                 Response.brand_present,
                 Response.brand_sentiment,
+                Response.brand_position,  # Added for position calculation
                 Response.competitors_present,
                 Response.citations
             ).where(
@@ -4400,6 +4413,7 @@ async def get_scrunch_dashboard_data(
                 Response.platform,
                 Response.brand_present,
                 Response.brand_sentiment,
+                Response.brand_position,  # Added for position calculation
                 Response.competitors_present,
                 Response.citations
             ).where(
@@ -4415,47 +4429,61 @@ async def get_scrunch_dashboard_data(
             logger.info(f"Found {len(prev_responses)} Scrunch responses for brand {actual_brand_id} in previous period {prev_start} to {prev_end}")
             
             # Get prompts for this brand using SQLAlchemy
-            prompts_query = select(
-                Prompt.id,
-                Prompt.text,
-                Prompt.stage,
-                Prompt.topics,
-                Prompt.brand_id
-            ).where(
-                and_(
-                    Prompt.brand_id == actual_brand_id,
-                    Prompt.created_at >= start_ts,
-                    Prompt.created_at <= end_ts
-                )
-            )
-            prompts_result = db.execute(prompts_query)
-            prompts = [dict(row._mapping) for row in prompts_result]
+            # CORRECT FIX: Show prompts that have responses in the date range
+            # This is the correct behavior - show prompts that were active/used in the selected period
+            # First, get prompt_ids from responses in the date range
+            prompt_ids_from_responses = set()
+            for response in responses:
+                prompt_id = response.get("prompt_id")
+                if prompt_id:
+                    prompt_ids_from_responses.add(prompt_id)
             
-            logger.info(f"Found {len(prompts)} Scrunch prompts for brand {brand_id}")
+            logger.info(f"Found {len(prompt_ids_from_responses)} unique prompt_ids from {len(responses)} responses in date range")
             
-            # Check if brand has any Scrunch data using SQLAlchemy
-            has_any_scrunch_data = len(responses) > 0 or len(prompts) > 0
-            if not has_any_scrunch_data:
-                any_responses_query = select(Response.id).where(
+            # Get prompts that either:
+            # 1. Were created in the date range, OR
+            # 2. Have responses in the date range (correct behavior - show active prompts)
+            if prompt_ids_from_responses:
+                prompts_query = select(
+                    Prompt.id,
+                    Prompt.text,
+                    Prompt.stage,
+                    Prompt.topics,
+                    Prompt.brand_id
+                ).where(
                     and_(
-                        Response.brand_id == brand_id,
-                        Response.created_at >= start_ts,
-                        Response.created_at <= end_ts
+                        Prompt.brand_id == actual_brand_id,
+                        or_(
+                            and_(
+                                Prompt.created_at >= start_ts,
+                                Prompt.created_at <= end_ts
+                            ),
+                            Prompt.id.in_(list(prompt_ids_from_responses))
+                        )
                     )
-                ).limit(1)
-                any_responses_result = db.execute(any_responses_query)
-                any_responses = [dict(row._mapping) for row in any_responses_result]
-                any_prompts_query = select(Prompt.id).where(
+                )
+            else:
+                # No responses, so only get prompts created in date range
+                prompts_query = select(
+                    Prompt.id,
+                    Prompt.text,
+                    Prompt.stage,
+                    Prompt.topics,
+                    Prompt.brand_id
+                ).where(
                     and_(
-                        Prompt.brand_id == brand_id,
+                        Prompt.brand_id == actual_brand_id,
                         Prompt.created_at >= start_ts,
                         Prompt.created_at <= end_ts
                     )
-                ).limit(1)
-                any_prompts_result = db.execute(any_prompts_query)
-                any_prompts = [dict(row._mapping) for row in any_prompts_result]
-                if len(any_responses) > 0 or len(any_prompts) > 0:
-                    has_any_scrunch_data = True
+                )
+            prompts_result = db.execute(prompts_query)
+            prompts = [dict(row._mapping) for row in prompts_result]
+            
+            logger.info(f"Found {len(prompts)} prompts for brand {actual_brand_id} (created in range or have responses in range {start_date} to {end_date})")
+            
+            # Check if brand has any Scrunch data using SQLAlchemy
+            has_any_scrunch_data = len(responses) > 0 or len(prompts) > 0
             
             # Import the calculate_scrunch_metrics function logic
             # (We'll use the same logic from the main endpoint)
@@ -4469,6 +4497,8 @@ async def get_scrunch_dashboard_data(
                         "sentiment_score": 0,
                         "prompt_search_volume": 0,
                         "top10_prompt_percentage": 0,
+                        "brand_position_percentage": 0,
+                        "brand_position_distribution": {"top": 0, "middle": 0, "bottom": 0},
                         "competitive_benchmarking": {
                             "brand_visibility_percent": 0,
                             "competitor_avg_visibility_percent": 0
@@ -4482,7 +4512,7 @@ async def get_scrunch_dashboard_data(
                     }
                 
                 # Initialize all tracking variables
-                total_citations = 0
+                total_citations = 0  # Research analysis: Only count citations when brand is present
                 brand_present_count = 0
                 sentiment_scores = {"positive": 0, "neutral": 0, "negative": 0}
                 prompt_counts = {}
@@ -4493,6 +4523,7 @@ async def get_scrunch_dashboard_data(
                 total_responses_with_competitors = 0
                 citations_by_prompt = {}
                 valid_responses_count = 0
+                brand_position_counts = {"top": 0, "middle": 0, "bottom": 0}  # Initialize brand position tracking
                 
                 # Single pass through responses - calculate everything at once
                 # Optimized: Pre-compile regex and use faster string operations
@@ -4530,32 +4561,33 @@ async def get_scrunch_dashboard_data(
                         if brand_present:
                             unique_prompts_with_brand.add(prompt_id)
                     
-                    # Count citations (highly optimized - avoid JSON parsing when possible)
-                    citations = r.get("citations")
-                    citation_count = 0
-                    if citations:
-                        if isinstance(citations, list):
-                            citation_count = len(citations)
-                        elif isinstance(citations, str):
-                            # Check cache first
-                            if citations in json_cache:
-                                citation_count = json_cache[citations]
-                            else:
-                                try:
-                                    parsed = json.loads(citations)
-                                    if isinstance(parsed, list):
-                                        citation_count = len(parsed)
-                                        json_cache[citations] = citation_count  # Cache result
-                                except:
-                                    pass
-                    
-                    total_citations += citation_count
-                    if prompt_id:
-                        citations_by_prompt[prompt_id] = citations_by_prompt.get(prompt_id, 0) + citation_count
-                    
-                    # Track brand presence
+                    # Track brand presence first (needed for research analysis)
                     if brand_present:
                         brand_present_count += 1
+                        
+                        # Research Analysis: Only count citations when brand is present
+                        # This matches Scrunch's methodology - research analysis analyzes where your brand appears
+                        citations = r.get("citations")
+                        citation_count = 0
+                        if citations:
+                            if isinstance(citations, list):
+                                citation_count = len(citations)
+                            elif isinstance(citations, str):
+                                # Check cache first
+                                if citations in json_cache:
+                                    citation_count = json_cache[citations]
+                                else:
+                                    try:
+                                        parsed = json.loads(citations)
+                                        if isinstance(parsed, list):
+                                            citation_count = len(parsed)
+                                            json_cache[citations] = citation_count  # Cache result
+                                    except:
+                                        pass
+                        
+                        total_citations += citation_count
+                        if prompt_id:
+                            citations_by_prompt[prompt_id] = citations_by_prompt.get(prompt_id, 0) + citation_count
                     
                     # Track competitors (optimized - use list comprehension for speed)
                     competitors_present = r.get("competitors_present")
@@ -4575,6 +4607,21 @@ async def get_scrunch_dashboard_data(
                             sentiment_scores["negative"] += 1
                         else:
                             sentiment_scores["neutral"] += 1
+                    
+                    # Track brand position (only when brand is present)
+                    if brand_present:
+                        brand_position = r.get("brand_position")
+                        if brand_position:
+                            position_lower = str(brand_position).lower()
+                            if "top" in position_lower:
+                                brand_position_counts["top"] += 1
+                            elif "middle" in position_lower or "mid" in position_lower:
+                                brand_position_counts["middle"] += 1
+                            elif "bottom" in position_lower:
+                                brand_position_counts["bottom"] += 1
+                        # Debug: Log when brand_position is None
+                        elif valid_responses_count <= 5:  # Only log first few to avoid spam
+                            logger.debug(f"[DEBUG] Response {r.get('id')} has brand_present=True but brand_position is None or empty")
                 
                 # Calculate Top 10 Prompt Percentage (optimized - use sorted once)
                 sorted_prompts = sorted(prompt_counts.items(), key=lambda x: x[1], reverse=True)[:10]
@@ -4609,6 +4656,25 @@ async def get_scrunch_dashboard_data(
                     "display": f"Tracked prompts: {len(unique_prompts_tracked)}; brand appeared in {len(unique_prompts_with_brand)} of them"
                 }
                 
+                # Calculate Brand Position Percentage (% of total responses where brand is in "top" position)
+                # This matches Scrunch's methodology: Position (% of total) = (Top position responses / Total responses) × 100
+                # "of total" means all responses, not just those with brand present
+                total_position_responses = sum(brand_position_counts.values())
+                brand_position_percentage = 0
+                if valid_responses_count > 0:
+                    # Calculate percentage of ALL responses where brand is in "top" position
+                    # This is the correct calculation: top responses / total responses × 100
+                    brand_position_percentage = (brand_position_counts["top"] / valid_responses_count * 100)
+                elif total_position_responses > 0:
+                    # Fallback: if we have position data but no valid responses count, use position responses as denominator
+                    brand_position_percentage = (brand_position_counts["top"] / total_position_responses * 100)
+                else:
+                    # If we have brand present but no position data, default to 0
+                    brand_position_percentage = 0
+                
+                # Debug logging for position calculation
+                logger.info(f"[DEBUG] Brand position calculation: top={brand_position_counts['top']}, middle={brand_position_counts['middle']}, bottom={brand_position_counts['bottom']}, total_responses={valid_responses_count}, total_position_responses={total_position_responses}, percentage={brand_position_percentage}")
+                
                 return {
                     "total_citations": total_citations,
                     "brand_present_count": brand_present_count,
@@ -4616,6 +4682,8 @@ async def get_scrunch_dashboard_data(
                     "sentiment_score": sentiment_score,
                     "prompt_search_volume": valid_responses_count,
                     "top10_prompt_percentage": top10_prompt_percentage,
+                    "brand_position_percentage": brand_position_percentage,
+                    "brand_position_distribution": brand_position_counts,
                     "competitive_benchmarking": {
                         "brand_visibility_percent": brand_visibility_percent,
                         "competitor_avg_visibility_percent": competitor_avg_visibility_percent
@@ -4624,12 +4692,20 @@ async def get_scrunch_dashboard_data(
                     "citations_by_prompt": citations_by_prompt,
                 }
             
+            print(f"[CRITICAL START] has_any_scrunch_data: {has_any_scrunch_data}, responses: {len(responses)}, prompts: {len(prompts)}")
             if has_any_scrunch_data:
                 # Calculate current period metrics (will be zero if no responses)
+                print(f"[CRITICAL] About to calculate current_metrics with {len(responses)} responses")
+                logger.info(f"[DEBUG] About to calculate current_metrics with {len(responses)} responses")
                 current_metrics = calculate_scrunch_metrics(responses, prompts, brand_id)
+                print(f"[CRITICAL] After calculate_scrunch_metrics, brand_position_percentage: {current_metrics.get('brand_position_percentage', 'NOT_FOUND')}")
+                logger.info(f"[DEBUG] current_metrics keys: {list(current_metrics.keys())}")
+                logger.info(f"[DEBUG] current_metrics.brand_position_percentage: {current_metrics.get('brand_position_percentage', 'NOT_FOUND')}")
+                logger.info(f"[DEBUG] current_metrics.brand_position_distribution: {current_metrics.get('brand_position_distribution', 'NOT_FOUND')}")
                 
                 # Calculate previous period metrics (will be zero if no responses)
                 prev_metrics = calculate_scrunch_metrics(prev_responses, prompts, brand_id)
+                logger.info(f"[DEBUG] prev_metrics.brand_position_percentage: {prev_metrics.get('brand_position_percentage', 'NOT_FOUND')}")
                 
                 # Extract citations_by_prompt from current_metrics (already calculated)
                 citations_by_prompt = current_metrics.get("citations_by_prompt", {})
@@ -4650,6 +4726,10 @@ async def get_scrunch_dashboard_data(
                 sentiment_score_change = calculate_change(current_metrics["sentiment_score"], prev_metrics["sentiment_score"])
                 top10_prompt_change = calculate_change(current_metrics["top10_prompt_percentage"], prev_metrics["top10_prompt_percentage"])
                 prompt_search_volume_change = calculate_change(current_metrics["prompt_search_volume"], prev_metrics["prompt_search_volume"])
+                brand_position_percentage_change = calculate_change(
+                    current_metrics.get("brand_position_percentage", 0),
+                    prev_metrics.get("brand_position_percentage", 0)
+                )
                 
                 competitive_current = current_metrics.get("competitive_benchmarking", {})
                 competitive_prev = prev_metrics.get("competitive_benchmarking", {})
@@ -4661,6 +4741,10 @@ async def get_scrunch_dashboard_data(
                     competitive_current.get("competitor_avg_visibility_percent", 0),
                     competitive_prev.get("competitor_avg_visibility_percent", 0)
                 )
+                
+                # Debug: Log brand_position_percentage value
+                logger.info(f"[DEBUG] brand_position_percentage from current_metrics: {current_metrics.get('brand_position_percentage', 'NOT_FOUND')}")
+                logger.info(f"[DEBUG] brand_position_counts from current_metrics: {current_metrics.get('brand_position_distribution', 'NOT_FOUND')}")
                 
                 scrunch_kpis = {
                     "total_citations": {
@@ -4703,6 +4787,14 @@ async def get_scrunch_dashboard_data(
                         "icon": "TrendingUp",
                         "format": "number"
                     },
+                    "brand_position_percentage": {
+                        "value": round(current_metrics.get("brand_position_percentage", 0), 1),
+                        "change": round(brand_position_percentage_change, 2),
+                        "source": "Scrunch",
+                        "label": "Position (% of total)",
+                        "icon": "TrendingUp",
+                        "format": "percentage"
+                    },
                     "competitive_benchmarking": {
                         "value": {
                             "brand_visibility_percent": round(competitive_current.get("brand_visibility_percent", 0), 1),
@@ -4726,6 +4818,22 @@ async def get_scrunch_dashboard_data(
                         "format": "custom"
                     }
                 }
+                
+                # CRITICAL: Print immediately after scrunch_kpis assignment
+                print(f"[CRITICAL] scrunch_kpis assigned with {len(scrunch_kpis)} items")
+                print(f"[CRITICAL] Keys: {list(scrunch_kpis.keys())}")
+                print(f"[CRITICAL] brand_position_percentage in dict: {'brand_position_percentage' in scrunch_kpis}")
+                
+                # Debug: Log after adding to scrunch_kpis - USE PRINT FOR IMMEDIATE VISIBILITY
+                print(f"[CRITICAL DEBUG] scrunch_kpis keys: {list(scrunch_kpis.keys())}")
+                print(f"[CRITICAL DEBUG] brand_position_percentage in scrunch_kpis: {'brand_position_percentage' in scrunch_kpis}")
+                if 'brand_position_percentage' in scrunch_kpis:
+                    print(f"[CRITICAL DEBUG] brand_position_percentage value: {scrunch_kpis['brand_position_percentage']}")
+                else:
+                    print(f"[CRITICAL DEBUG] ERROR: brand_position_percentage NOT in scrunch_kpis!")
+                    print(f"[CRITICAL DEBUG] scrunch_kpis: {scrunch_kpis}")
+                logger.info(f"[DEBUG] scrunch_kpis keys after adding brand_position_percentage: {list(scrunch_kpis.keys())}")
+                logger.info(f"[DEBUG] brand_position_percentage in scrunch_kpis: {'brand_position_percentage' in scrunch_kpis}")
                 
                 # Get top performing prompts (optimized - use data already calculated in metrics)
                 top_prompts_start = time.time()
@@ -4864,11 +4972,20 @@ async def get_scrunch_dashboard_data(
             import traceback
             error_trace = traceback.format_exc()
             logger.error(f"Error fetching Scrunch AI KPIs for brand {brand_id}: {str(e)}\n{error_trace}")
+            # Debug: Log what scrunch_kpis contains when exception occurs
+            logger.error(f"[DEBUG] scrunch_kpis at exception time: {scrunch_kpis}")
+            logger.error(f"[DEBUG] scrunch_kpis keys: {list(scrunch_kpis.keys()) if scrunch_kpis else 'None'}")
+        
+        # Final debug: Log what's being returned
+        logger.info(f"[DEBUG] FINAL: Returning scrunch_kpis with {len(scrunch_kpis)} KPIs")
+        logger.info(f"[DEBUG] FINAL: scrunch_kpis keys: {list(scrunch_kpis.keys())}")
+        logger.info(f"[DEBUG] FINAL: brand_position_percentage in return: {'brand_position_percentage' in scrunch_kpis}")
         
         return {
             "brand_id": brand_id,
             "kpis": scrunch_kpis,
             "chart_data": scrunch_chart_data,
+            "prompts": prompts,  # Include prompts in response
             "available": bool(scrunch_kpis)
         }
         
@@ -4883,13 +5000,14 @@ async def get_scrunch_dashboard_data(
 async def query_scrunch_analytics(
     brand_id: int,
     fields: str = Query(..., description="Comma-separated list of fields (dimensions and metrics)"),
-    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD), last 90 days only"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     limit: int = Query(50000, description="Maximum number of results"),
-    offset: int = Query(0, description="Pagination offset")
+    offset: int = Query(0, description="Pagination offset"),
+    db: Session = Depends(get_db)
 ):
     """
-    Query Scrunch analytics using the Query API
+    Query Scrunch analytics from local database (not external API)
     
     Available dimensions:
     - prompt_id, prompt
@@ -4914,21 +5032,125 @@ async def query_scrunch_analytics(
     - competitor_sentiment_score (Average, 0-100) - Requires competitor dimension
     """
     try:
-        client = ScrunchAPIClient()
+        from app.db.models import Response
+        from sqlalchemy import select, func, and_, case, extract, cast, String
+        from datetime import datetime, timedelta
+        
         field_list = [f.strip() for f in fields.split(",")]
         
-        result = await client.query_analytics(
-            brand_id=brand_id,
-            fields=field_list,
-            start_date=start_date,
-            end_date=end_date,
-            limit=limit,
-            offset=offset
-        )
+        # Parse date range
+        if start_date:
+            start_ts = datetime.strptime(start_date, "%Y-%m-%d")
+        else:
+            start_ts = datetime.now() - timedelta(days=90)
+            
+        if end_date:
+            end_ts = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1) - timedelta(seconds=1)
+        else:
+            end_ts = datetime.now()
         
-        return result
+        # Build base query
+        base_conditions = [
+            Response.brand_id == brand_id,
+            Response.created_at >= start_ts,
+            Response.created_at <= end_ts
+        ]
+        
+        # Handle different field combinations
+        items = []
+        
+        # Platform distribution: ai_platform, responses
+        if "ai_platform" in field_list and "responses" in field_list:
+            platform_query = select(
+                Response.platform.label("ai_platform"),
+                func.count(Response.id).label("responses")
+            ).where(
+                and_(*base_conditions)
+            ).group_by(Response.platform)
+            
+            platform_result = db.execute(platform_query).all()
+            items.extend([{"ai_platform": r.ai_platform or "Unknown", "responses": r.responses} for r in platform_result])
+        
+        # Sentiment distribution: brand_sentiment_score, responses
+        elif "brand_sentiment_score" in field_list and "responses" in field_list:
+            # Map brand_sentiment to numeric score (Positive=80, Mixed=50, Negative=20, None=0)
+            sentiment_score_case = case(
+                (Response.brand_sentiment == "positive", 80),
+                (Response.brand_sentiment == "mixed", 50),
+                (Response.brand_sentiment == "negative", 20),
+                else_=0
+            )
+            
+            sentiment_query = select(
+                sentiment_score_case.label("brand_sentiment_score"),
+                func.count(Response.id).label("responses")
+            ).where(
+                and_(*base_conditions)
+            ).group_by(Response.brand_sentiment)
+            
+            sentiment_result = db.execute(sentiment_query).all()
+            items.extend([{"brand_sentiment_score": r.brand_sentiment_score, "responses": r.responses} for r in sentiment_result])
+        
+        # Position score: brand_position_score
+        elif "brand_position_score" in field_list:
+            # Map brand_position to numeric score (top=100, middle=50, bottom=0)
+            position_score_case = case(
+                (Response.brand_position == "top", 100),
+                (Response.brand_position == "middle", 50),
+                (Response.brand_position == "bottom", 0),
+                else_=0
+            )
+            
+            position_query = select(
+                func.avg(position_score_case).label("brand_position_score")
+            ).where(
+                and_(*base_conditions, Response.brand_present == True)
+            )
+            
+            position_result = db.scalar(position_query)
+            if position_result is not None:
+                items.append({"brand_position_score": round(position_result, 2)})
+            else:
+                items.append({"brand_position_score": 0})
+        
+        # Time series: date_week, brand_presence_percentage, responses
+        elif "date_week" in field_list and "brand_presence_percentage" in field_list and "responses" in field_list:
+            # Extract week start date (Monday)
+            week_start = func.date_trunc('week', Response.created_at).label("date_week")
+            
+            time_series_query = select(
+                week_start,
+                func.avg(case((Response.brand_present == True, 100), else_=0)).label("brand_presence_percentage"),
+                func.count(Response.id).label("responses")
+            ).where(
+                and_(*base_conditions)
+            ).group_by(week_start).order_by(week_start)
+            
+            time_series_result = db.execute(time_series_query).all()
+            items.extend([{
+                "date_week": r.date_week.strftime("%Y-%m-%d") if r.date_week else None,
+                "brand_presence_percentage": round(r.brand_presence_percentage or 0, 2),
+                "responses": r.responses
+            } for r in time_series_result])
+        
+        # Competitor presence: competitor_name, competitor_presence_percentage, responses
+        elif "competitor_name" in field_list and "competitor_presence_percentage" in field_list and "responses" in field_list:
+            # This requires unnesting competitors_present array - simplified version
+            # For now, return empty as this is complex
+            items = []
+        
+        # Apply limit and offset
+        if limit and limit > 0:
+            items = items[offset:offset + limit]
+        
+        logger.info(f"Query API: Found {len(items)} items for brand {brand_id} with fields {field_list}")
+        
+        return {"items": items}
+        
     except Exception as e:
         logger.error(f"Error querying Scrunch analytics for brand {brand_id}: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error querying Scrunch analytics: {str(e)}")
 
 # =====================================================
@@ -6161,7 +6383,7 @@ async def upsert_dashboard_link_for_client(
     current_user: dict = Depends(get_current_user_v2),
     db: Session = Depends(get_db)
 ):
-    """Create or update a dashboard link for a client based on date range"""
+    """Create a new dashboard link for a client (always creates new, even for same date range)"""
     supabase = SupabaseService(db=db)
     client = supabase.get_client_by_id(client_id)
     if not client:
@@ -6179,6 +6401,7 @@ async def upsert_dashboard_link_for_client(
         user_email=current_user.get("email"),
         selected_kpis=request.selected_kpis,
         visible_sections=request.visible_sections,
+        visible_highlights=request.visible_highlights,  # Can be [] (empty array) or ['what_worked'] etc.
         selected_charts=request.selected_charts,
         selected_performance_metrics_kpis=request.selected_performance_metrics_kpis,
         show_change_period=request.show_change_period,
@@ -6280,6 +6503,8 @@ async def update_dashboard_link(
         update_data["selected_kpis"] = request.selected_kpis
     if request.visible_sections is not None:
         update_data["visible_sections"] = request.visible_sections
+    if request.visible_highlights is not None:
+        update_data["visible_highlights"] = request.visible_highlights
     if request.selected_charts is not None:
         update_data["selected_charts"] = request.selected_charts
     if request.selected_performance_metrics_kpis is not None:
@@ -8259,11 +8484,46 @@ async def get_prompts_analytics(
         # Get prompts and responses using SQLAlchemy
         from app.db.models import Prompt, Response
         
-        prompts_conditions = [Prompt.brand_id == brand_id]
+        # CORRECT FIX: Get responses first to find which prompts have responses in the date range
+        # Then include prompts that either were created in range OR have responses in range
+        responses_conditions = [Response.brand_id == brand_id]
         if start_date:
-            prompts_conditions.append(Prompt.created_at >= datetime.fromisoformat(f"{start_date}T00:00:00+00:00"))
+            responses_conditions.append(Response.created_at >= datetime.fromisoformat(f"{start_date}T00:00:00+00:00"))
         if end_date:
-            prompts_conditions.append(Prompt.created_at <= datetime.fromisoformat(f"{end_date}T23:59:59+00:00"))
+            responses_conditions.append(Response.created_at <= datetime.fromisoformat(f"{end_date}T23:59:59+00:00"))
+        
+        # Get prompt_ids from responses in the date range
+        responses_query_temp = select(Response.prompt_id).where(and_(*responses_conditions)).distinct()
+        responses_temp_result = db.scalars(responses_query_temp).all()
+        prompt_ids_from_responses = set([pid for pid in responses_temp_result if pid is not None])
+        logger.debug(f"Found {len(prompt_ids_from_responses)} unique prompt_ids from responses in date range")
+        
+        # Get prompts that either:
+        # 1. Were created in the date range, OR
+        # 2. Have responses in the date range (correct behavior - show active prompts)
+        prompts_conditions = [Prompt.brand_id == brand_id]
+        if prompt_ids_from_responses:
+            date_conditions = []
+            if start_date:
+                date_conditions.append(Prompt.created_at >= datetime.fromisoformat(f"{start_date}T00:00:00+00:00"))
+            if end_date:
+                date_conditions.append(Prompt.created_at <= datetime.fromisoformat(f"{end_date}T23:59:59+00:00"))
+            
+            if date_conditions:
+                prompts_conditions.append(
+                    or_(
+                        and_(*date_conditions),
+                        Prompt.id.in_(list(prompt_ids_from_responses))
+                    )
+                )
+            else:
+                prompts_conditions.append(Prompt.id.in_(list(prompt_ids_from_responses)))
+        else:
+            # No responses, so only get prompts created in date range
+            if start_date:
+                prompts_conditions.append(Prompt.created_at >= datetime.fromisoformat(f"{start_date}T00:00:00+00:00"))
+            if end_date:
+                prompts_conditions.append(Prompt.created_at <= datetime.fromisoformat(f"{end_date}T23:59:59+00:00"))
         
         prompts_query = select(Prompt).where(and_(*prompts_conditions))
         prompts_result = db.scalars(prompts_query).all()
