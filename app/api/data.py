@@ -2058,9 +2058,13 @@ async def get_reporting_dashboard(
                 property_id = chart_ga4_property_id
                 
                 # FIX: Use GA4 API directly for accurate totals (avoids double-counting from daily aggregation)
-                # This ensures chart data matches table data and GA4 dashboard
+                # This ensures chart data matches table data and GA4 dashboard.
+                # IMPORTANT: Live GA4 API failures (e.g. 429 Too Many Requests) should NOT prevent
+                # us from building charts from stored daily data. We therefore wrap the live
+                # API calls in an inner try/except and always continue to the stored-data logic.
                 logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
                 
+                try:
                     # Use GA4 API directly to avoid aggregation issues
                     top_pages = await ga4_client.get_top_pages(property_id, start_date, end_date, limit=10)
                     traffic_sources = await ga4_client.get_traffic_sources(property_id, start_date, end_date)
@@ -2070,11 +2074,24 @@ async def get_reporting_dashboard(
                     chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
                     chart_data["top_pages"] = top_pages if top_pages else []
                     # Filter out blank or "(not set)" country names
-                geographic_filtered = [g for g in (geographic or []) if g.get("country") and g.get("country").strip() and g.get("country").strip().lower() not in ['(not set)', 'not set', '']]
+                    geographic_filtered = [
+                        g
+                        for g in (geographic or [])
+                        if g.get("country")
+                        and g.get("country").strip()
+                        and g.get("country").strip().lower() not in ["(not set)", "not set", ""]
+                    ]
                     chart_data["geographic_breakdown"] = geographic_filtered
                     chart_data["device_breakdown"] = devices if devices else []
                     
-                logger.info(f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} (filtered from {len(geographic or [])}), devices: {len(devices)}")
+                    logger.info(
+                        f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, "
+                        f"traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} "
+                        f"(filtered from {len(geographic or [])}), devices: {len(devices)}"
+                    )
+                except Exception as e:
+                    # Log but DO NOT raise — we still want to build charts from stored data
+                    logger.warning(f"[GA4 API DIRECT] Error fetching live GA4 chart breakdowns, falling back to stored data only: {str(e)}")
                 
                 # Get GA4 traffic overview for detailed metrics from stored data
                 query_brand_id = scrunch_brand_id if client_id else brand_id
