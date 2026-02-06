@@ -5074,8 +5074,10 @@ function ReportingDashboard({
                       </Grid>
                     )}
 
-                  {/* GA4 Performance Charts - Prominent Line Graphs */}
-                      {dashboardData.chart_data?.ga4_daily_comparison?.length > 0 && (
+                  {/* User Metrics Section - Separate provision for Total Users and New Users */}
+                      {dashboardData.chart_data?.ga4_daily_comparison?.length >
+                        0 &&
+                    (shouldShowKPI("users") || shouldShowKPI("new_users")) && (
                       <Box sx={{ mt: 4, mb: 4 }}>
                         <Grid container spacing={3}>
                           {/* Total Users Chart - Full Width (Primary Chart) */}
