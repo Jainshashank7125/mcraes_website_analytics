@@ -872,57 +872,33 @@ export const keywordsAPI = {
 // Reporting Dashboard API endpoints
 export const reportingAPI = {
   // Get consolidated reporting dashboard KPIs
-  getReportingDashboard: async (brandId, startDate = null, endDate = null, globalFilters = null) => {
+  getReportingDashboard: async (brandId, startDate = null, endDate = null) => {
     const params = new URLSearchParams()
     if (startDate) params.append('start_date', startDate)
     if (endDate) params.append('end_date', endDate)
     
-    // Use POST if globalFilters are provided, otherwise use GET
-    if (globalFilters && Object.keys(globalFilters).length > 0) {
-      const response = await api.post(`/api/v1/data/reporting-dashboard/${brandId}?${params.toString()}`, {
-        global_filters: globalFilters
-      })
-      return response.data
-    } else {
-      const response = await api.get(`/api/v1/data/reporting-dashboard/${brandId}?${params.toString()}`)
-      return response.data
-    }
+    const response = await api.get(`/api/v1/data/reporting-dashboard/${brandId}?${params.toString()}`)
+    return response.data
   },
   
   // Get consolidated reporting dashboard KPIs by client ID (client-centric)
-  getReportingDashboardByClient: async (clientId, startDate = null, endDate = null, globalFilters = null) => {
+  getReportingDashboardByClient: async (clientId, startDate = null, endDate = null) => {
     const params = new URLSearchParams()
     if (startDate) params.append('start_date', startDate)
     if (endDate) params.append('end_date', endDate)
     
-    // Use POST if globalFilters are provided, otherwise use GET
-    if (globalFilters && Object.keys(globalFilters).length > 0) {
-      const response = await api.post(`/api/v1/data/reporting-dashboard/client/${clientId}?${params.toString()}`, {
-        global_filters: globalFilters
-      })
-      return response.data
-    } else {
-      const response = await api.get(`/api/v1/data/reporting-dashboard/client/${clientId}?${params.toString()}`)
-      return response.data
-    }
+    const response = await api.get(`/api/v1/data/reporting-dashboard/client/${clientId}?${params.toString()}`)
+    return response.data
   },
   
   // Get consolidated reporting dashboard KPIs by slug (public access)
-  getReportingDashboardBySlug: async (slug, startDate = null, endDate = null, globalFilters = null) => {
+  getReportingDashboardBySlug: async (slug, startDate = null, endDate = null) => {
     const params = new URLSearchParams()
     if (startDate) params.append('start_date', startDate)
     if (endDate) params.append('end_date', endDate)
     
-    // Use POST if globalFilters are provided, otherwise use GET
-    if (globalFilters && Object.keys(globalFilters).length > 0) {
-      const response = await api.post(`/api/v1/data/reporting-dashboard/slug/${slug}?${params.toString()}`, {
-        global_filters: globalFilters
-      })
-      return response.data
-    } else {
-      const response = await api.get(`/api/v1/data/reporting-dashboard/slug/${slug}?${params.toString()}`)
-      return response.data
-    }
+    const response = await api.get(`/api/v1/data/reporting-dashboard/slug/${slug}?${params.toString()}`)
+    return response.data
   },
   
   // Get brand by slug (public access)
