@@ -120,9 +120,7 @@ class AgencyAnalyticsClient:
                     "enforce_google_cid",
                     "timezone",
                     "type",
-                    "campaign_group_id",
-                    "company_id",
-                    "account_id"
+                    "campaign_group_id"
                 ],
                 "sort": {"id": "desc"},
                 "offset": offset,
@@ -206,9 +204,7 @@ class AgencyAnalyticsClient:
                     "enforce_google_cid",
                     "timezone",
                     "type",
-                    "campaign_group_id",
-                    "company_id",
-                    "account_id"
+                    "campaign_group_id"
                 ],
                 "filters": [
                     {

@@ -1059,7 +1059,12 @@ class SupabaseService:
                 "revenue": data.get("revenue", 0)
             })
             self.db.commit()
-            logger.info(f"Upserted GA4 traffic overview for {entity_type} {entity_id}, property {property_id}, date {date}")
+            # Log new_users value being stored for debugging
+            new_users_stored = data.get("newUsers", 0)
+            if new_users_stored > 0:
+                logger.debug(f"Upserted GA4 traffic overview with new_users={new_users_stored} for {entity_type} {entity_id}, property {property_id}, date {date}")
+            else:
+                logger.info(f"Upserted GA4 traffic overview for {entity_type} {entity_id}, property {property_id}, date {date} (new_users={new_users_stored})")
             return 1
         except Exception as e:
             self.db.rollback()
