@@ -2061,19 +2061,19 @@ async def get_reporting_dashboard(
                 # This ensures chart data matches table data and GA4 dashboard
                 logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
                 
-                # Use GA4 API directly to avoid aggregation issues
-                top_pages = await ga4_client.get_top_pages(property_id, start_date, end_date, limit=10)
-                traffic_sources = await ga4_client.get_traffic_sources(property_id, start_date, end_date)
-                geographic = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False)
-                devices = await ga4_client.get_device_breakdown(property_id, start_date, end_date)
-                
-                chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
-                chart_data["top_pages"] = top_pages if top_pages else []
-                # Filter out blank or "(not set)" country names
+                    # Use GA4 API directly to avoid aggregation issues
+                    top_pages = await ga4_client.get_top_pages(property_id, start_date, end_date, limit=10)
+                    traffic_sources = await ga4_client.get_traffic_sources(property_id, start_date, end_date)
+                    geographic = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False)
+                    devices = await ga4_client.get_device_breakdown(property_id, start_date, end_date)
+                    
+                    chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
+                    chart_data["top_pages"] = top_pages if top_pages else []
+                    # Filter out blank or "(not set)" country names
                 geographic_filtered = [g for g in (geographic or []) if g.get("country") and g.get("country").strip() and g.get("country").strip().lower() not in ['(not set)', 'not set', '']]
-                chart_data["geographic_breakdown"] = geographic_filtered
-                chart_data["device_breakdown"] = devices if devices else []
-                
+                    chart_data["geographic_breakdown"] = geographic_filtered
+                    chart_data["device_breakdown"] = devices if devices else []
+                    
                 logger.info(f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} (filtered from {len(geographic or [])}), devices: {len(devices)}")
                 
                 # Get GA4 traffic overview for detailed metrics from stored data
@@ -8531,7 +8531,7 @@ async def get_prompts_analytics(
         # Get prompts and responses using SQLAlchemy
         from app.db.models import Prompt, Response
         
-        # CORRECT FIX: Get responses first to find which prompts have responses in the date range
+          # CORRECT FIX: Get responses first to find which prompts have responses in the date range
         # Then include prompts that either were created in range OR have responses in range
         responses_conditions = [Response.brand_id == brand_id]
         if start_date:
