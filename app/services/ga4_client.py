@@ -51,6 +51,16 @@ class GA4APIClient:
         self._admin_client = None
         self._use_token = True  # Prefer stored tokens over service account
     
+    def _apply_filters_to_request(self, request_params: Dict, global_filters: Optional[Dict[str, List[str]]], exclude_dimensions: Optional[List[str]] = None) -> Dict:
+        """Helper method to apply global filters to a GA4 request"""
+        from app.services.ga4_filter_builder import GA4FilterBuilder
+        
+        dimension_filter = GA4FilterBuilder.build_dimension_filter(global_filters, exclude_dimensions)
+        if dimension_filter:
+            request_params["dimension_filter"] = dimension_filter
+        
+        return request_params
+    
     def _get_credentials(self):
         """Get Google Analytics credentials - prefer stored tokens"""
         # First, try to use stored access token
@@ -96,9 +106,11 @@ class GA4APIClient:
         self,
         property_id: str,
         start_date: Optional[str] = None,
-        end_date: Optional[str] = None
+        end_date: Optional[str] = None,
+        global_filters: Optional[Dict[str, List[str]]] = None
     ) -> Dict:
-        """Get high-level visitor metrics"""
+        """Get high-level visitor metrics with optional global filters"""
+        from app.services.ga4_filter_builder import GA4FilterBuilder
         try:
             if not start_date:
                 start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -109,17 +121,25 @@ class GA4APIClient:
             
             # FIRST: Get accurate totalUsers WITHOUT dimensions (as per GA4 documentation)
             # This gives us the correct unique user count for the period
-            totals_request = RunReportRequest(
-                property=f"properties/{property_id}",
-                date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
+            totals_request_params = {
+                "property": f"properties/{property_id}",
+                "date_ranges": [DateRange(start_date=start_date, end_date=end_date)],
                 # NO dimensions - this is crucial for accurate totalUsers
-                metrics=[
+                "metrics": [
                     Metric(name="totalUsers"),  # Correct unique user count (not summed daily activeUsers)
                     Metric(name="sessions"),
                     Metric(name="newUsers"),
                     Metric(name="engagedSessions"),
                 ],
-            )
+            }
+            
+            # Apply global filters if provided
+            dimension_filter = GA4FilterBuilder.build_dimension_filter(global_filters)
+            if dimension_filter:
+                totals_request_params["dimension_filter"] = dimension_filter
+                logger.info(f"[GA4 FILTER] Applying filters to get_traffic_overview (totals): {GA4FilterBuilder.get_filter_summary(global_filters)}")
+            
+            totals_request = RunReportRequest(**totals_request_params)
             
             totals_response = client.run_report(totals_request)
             
@@ -143,13 +163,13 @@ class GA4APIClient:
                 logger.info(f"[GA4 CLIENT] Total users (totalUsers metric): {totals['users']}")
             
             # SECOND: Get daily breakdown WITH date dimension (for charts and weighted averages)
-            daily_request = RunReportRequest(
-                property=f"properties/{property_id}",
-                date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
-                dimensions=[
+            daily_request_params = {
+                "property": f"properties/{property_id}",
+                "date_ranges": [DateRange(start_date=start_date, end_date=end_date)],
+                "dimensions": [
                     Dimension(name="date"),
                 ],
-                metrics=[
+                "metrics": [
                     Metric(name="activeUsers"),  # Used for daily breakdown in charts only
                     Metric(name="sessions"),
                     Metric(name="newUsers"),  # Add newUsers for daily breakdown
@@ -158,7 +178,13 @@ class GA4APIClient:
                     Metric(name="averageSessionDuration"),
                     Metric(name="engagementRate"),
                 ],
-            )
+            }
+            
+            # Apply global filters if provided
+            if dimension_filter:
+                daily_request_params["dimension_filter"] = dimension_filter
+            
+            daily_request = RunReportRequest(**daily_request_params)
             
             daily_response = client.run_report(daily_request)
             
@@ -374,9 +400,10 @@ class GA4APIClient:
         property_id: str,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        limit: int = 10
+        limit: int = 10,
+        global_filters: Optional[Dict[str, List[str]]] = None
     ) -> List[Dict]:
-        """Get top performing pages"""
+        """Get top performing pages with optional global filters"""
         try:
             if not start_date:
                 start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -385,23 +412,27 @@ class GA4APIClient:
             
             client = self._get_data_client()
             
-            request = RunReportRequest(
-                property=f"properties/{property_id}",
-                date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
-                dimensions=[Dimension(name="pagePath")],
-                metrics=[
+            request_params = {
+                "property": f"properties/{property_id}",
+                "date_ranges": [DateRange(start_date=start_date, end_date=end_date)],
+                "dimensions": [Dimension(name="pagePath")],
+                "metrics": [
                     Metric(name="screenPageViews"),
                     Metric(name="activeUsers"),
                     Metric(name="averageSessionDuration"),
                 ],
-                limit=limit,
-                order_bys=[
+                "limit": limit,
+                "order_bys": [
                     OrderBy(
                         metric=OrderBy.MetricOrderBy(metric_name="screenPageViews"),
                         desc=True
                     )
                 ],
-            )
+            }
+            
+            # Apply global filters
+            request_params = self._apply_filters_to_request(request_params, global_filters)
+            request = RunReportRequest(**request_params)
             
             response = client.run_report(request)
             
@@ -424,9 +455,11 @@ class GA4APIClient:
         self,
         property_id: str,
         start_date: Optional[str] = None,
-        end_date: Optional[str] = None
+        end_date: Optional[str] = None,
+        global_filters: Optional[Dict[str, List[str]]] = None
     ) -> List[Dict]:
-        """Get traffic sources breakdown"""
+        """Get traffic sources breakdown with optional global filters"""
+        from app.services.ga4_filter_builder import GA4FilterBuilder
         try:
             if not start_date:
                 start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -435,23 +468,27 @@ class GA4APIClient:
             
             client = self._get_data_client()
             
-            request = RunReportRequest(
-                property=f"properties/{property_id}",
-                date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
-                dimensions=[Dimension(name="sessionDefaultChannelGroup")],  # Use channel dimension instead of source/medium
-                metrics=[
+            request_params = {
+                "property": f"properties/{property_id}",
+                "date_ranges": [DateRange(start_date=start_date, end_date=end_date)],
+                "dimensions": [Dimension(name="sessionDefaultChannelGroup")],  # Use channel dimension instead of source/medium
+                "metrics": [
                     Metric(name="sessions"),
                     Metric(name="activeUsers"),
                     Metric(name="bounceRate"),
                     Metric(name="conversions"),  # New: Add conversions metric
                 ],
-                order_bys=[
+                "order_bys": [
                     OrderBy(
                         metric=OrderBy.MetricOrderBy(metric_name="sessions"),
                         desc=True
                     )
                 ],
-            )
+            }
+            
+            # Apply global filters
+            request_params = self._apply_filters_to_request(request_params, global_filters)
+            request = RunReportRequest(**request_params)
             
             response = client.run_report(request)
             
@@ -485,9 +522,10 @@ class GA4APIClient:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         limit: int = 20,
-        include_daily_breakdown: bool = True
+        include_daily_breakdown: bool = True,
+        global_filters: Optional[Dict[str, List[str]]] = None
     ) -> List[Dict]:
-        """Get geographic breakdown by country
+        """Get geographic breakdown by country with optional global filters
         
         Args:
             property_id: GA4 property ID
@@ -499,6 +537,7 @@ class GA4APIClient:
         Returns:
             List of dicts with country data. If include_daily_breakdown=True, includes 'date' field.
         """
+        from app.services.ga4_filter_builder import GA4FilterBuilder
         try:
             if not start_date:
                 start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -507,22 +546,31 @@ class GA4APIClient:
             
             client = self._get_data_client()
             
+            # Build dimension filter (exclude 'countries' dimension to display selected countries)
+            dimension_filter = GA4FilterBuilder.build_dimension_filter(global_filters, exclude_dimensions=['countries'])
+            if dimension_filter and global_filters:
+                logger.info(f"[GA4 FILTER] Applying filters to get_geographic_breakdown: {GA4FilterBuilder.get_filter_summary(global_filters)}")
+            
             if include_daily_breakdown:
                 # Return daily breakdown (one record per date per country)
-                request = RunReportRequest(
-                    property=f"properties/{property_id}",
-                    date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
-                    dimensions=[
+                request_params = {
+                    "property": f"properties/{property_id}",
+                    "date_ranges": [DateRange(start_date=start_date, end_date=end_date)],
+                    "dimensions": [
                         Dimension(name="date"),
                         Dimension(name="country")
                     ],
-                    metrics=[
+                    "metrics": [
                         Metric(name="activeUsers"),
                         Metric(name="sessions"),
                     ],
                     # No limit - we need all data for daily storage
-                )
+                }
                 
+                if dimension_filter:
+                    request_params["dimension_filter"] = dimension_filter
+                
+                request = RunReportRequest(**request_params)
                 response = client.run_report(request)
                 
                 # Group by date for better organization
@@ -542,24 +590,28 @@ class GA4APIClient:
                 return daily_data
             else:
                 # Return aggregated breakdown (for display purposes only, not for storage)
-                request = RunReportRequest(
-                    property=f"properties/{property_id}",
-                    date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
-                    dimensions=[Dimension(name="country")],
-                    metrics=[
+                request_params = {
+                    "property": f"properties/{property_id}",
+                    "date_ranges": [DateRange(start_date=start_date, end_date=end_date)],
+                    "dimensions": [Dimension(name="country")],
+                    "metrics": [
                         Metric(name="activeUsers"),
                         Metric(name="sessions"),
                         Metric(name="engagementRate"),
                     ],
-                    limit=limit,
-                    order_bys=[
+                    "limit": limit,
+                    "order_bys": [
                         OrderBy(
                             metric=OrderBy.MetricOrderBy(metric_name="sessions"),
                             desc=True
                         )
                     ],
-                )
+                }
                 
+                if dimension_filter:
+                    request_params["dimension_filter"] = dimension_filter
+                
+                request = RunReportRequest(**request_params)
                 response = client.run_report(request)
                 
                 countries = []
@@ -585,9 +637,11 @@ class GA4APIClient:
         self,
         property_id: str,
         start_date: Optional[str] = None,
-        end_date: Optional[str] = None
+        end_date: Optional[str] = None,
+        global_filters: Optional[Dict[str, List[str]]] = None
     ) -> List[Dict]:
-        """Get device and platform breakdown"""
+        """Get device and platform breakdown with optional global filters"""
+        from app.services.ga4_filter_builder import GA4FilterBuilder
         try:
             if not start_date:
                 start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")

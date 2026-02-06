@@ -39,6 +39,7 @@ class DashboardLinkRequest(BaseModel):
     selected_charts: Optional[List[str]] = None
     selected_performance_metrics_kpis: Optional[List[str]] = None
     show_change_period: Optional[Dict[str, bool]] = Field(None, description="Per-section flags for showing change period indicators")
+    global_filters: Optional[Dict[str, List[str]]] = Field(None, description="Global filters to apply across all data queries")
 
 class DashboardLinkUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -55,6 +56,11 @@ class DashboardLinkUpdateRequest(BaseModel):
     selected_performance_metrics_kpis: Optional[List[str]] = None
     show_change_period: Optional[Dict[str, bool]] = Field(None, description="Per-section flags for showing change period indicators")
     executive_summary: Optional[Dict[str, Any]] = Field(None, description="Executive summary data (structured JSON)")
+    global_filters: Optional[Dict[str, List[str]]] = Field(None, description="Global filters to apply across all data queries")
+
+class ReportingDashboardPostRequest(BaseModel):
+    """Request model for POST endpoints that accept global_filters dynamically"""
+    global_filters: Optional[Dict[str, List[str]]] = Field(None, description="Global filters to apply across all data queries")
 
 @router.get("/data/brands")
 @handle_api_errors(context="fetching brands")
@@ -1278,12 +1284,18 @@ async def get_reporting_dashboard(
     from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
     to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
     client_id: Optional[int] = None,
+    global_filters: Optional[Dict[str, List[str]]] = None,
     db: Session = Depends(get_db)
 ):
-    """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard"""
+    """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard with optional global filters"""
+    from app.services.ga4_filter_builder import GA4FilterBuilder
     import time
     total_start = time.time()
     section_times = {}
+    
+    # Log filter application
+    if global_filters:
+        logger.info(f"[GLOBAL FILTERS] Applying filters to dashboard: {GA4FilterBuilder.get_filter_summary(global_filters)}")
     
     try:
         init_start = time.time()
@@ -3974,6 +3986,41 @@ async def get_reporting_dashboard_by_client(
         error_trace = traceback.format_exc()
         logger.error(f"Error fetching reporting dashboard for client {client_id}: {str(e)}\n{error_trace}")
         raise HTTPException(status_code=500, detail=f"Error fetching reporting dashboard: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching reporting dashboard: {str(e)}")
+
+@router.post("/data/reporting-dashboard/client/{client_id}")
+async def post_reporting_dashboard_by_client(
+    client_id: int,
+    request_body: ReportingDashboardPostRequest,
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
+    db: Session = Depends(get_db)
+):
+    """POST version - Get consolidated KPIs with global_filters in request body"""
+    try:
+        supabase = SupabaseService(db=db)
+        client = supabase.get_client_by_id(client_id)
+        
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        scrunch_brand_id = client.get("scrunch_brand_id")
+        brand_id = scrunch_brand_id if scrunch_brand_id else 0
+        
+        start_date = start_date or from_date
+        end_date = end_date or to_date
+        
+        # Extract global_filters from request body
+        global_filters = request_body.global_filters
+        
+        return await get_reporting_dashboard(brand_id, start_date, end_date, client_id=client_id, global_filters=global_filters, db=db)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching reporting dashboard for client {client_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching reporting dashboard: {str(e)}")
 
 @router.get("/data/reporting-dashboard/slug/{slug}")
