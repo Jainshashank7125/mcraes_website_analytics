@@ -4,15 +4,15 @@ import { CHART_CONFIG } from '../constants'
 
 /**
  * Stacked Bar Chart Component for Keyword Rankings Distribution
- * 
+ * "Not Found" (keywords with no ranking) is hidden; chart shows only ranking positions.
+ *
  * Color scheme:
  * - Dark Green: Position 1-3
  * - Light Green: Position 4-10
  * - Yellow: Position 11-20
  * - Orange: Position 21-50
  * - Red: Position 51+
- * - Gray: Not Found
- * 
+ *
  * @param {Object} props
  * @param {Array} props.data - Array of data objects with date and position buckets
  * @param {string} props.engine - 'google' or 'bing' or 'both'
@@ -40,7 +40,6 @@ export default function StackedBarChart({
     position_11_20: '#ffc107',      // Yellow
     position_21_50: '#ff9800',      // Orange
     position_51_plus: '#f44336',    // Red
-    not_found: '#9e9e9e',          // Gray
   }
   
   const positionLabels = {
@@ -49,7 +48,6 @@ export default function StackedBarChart({
     position_11_20: '11-20',
     position_21_50: '21-50',
     position_51_plus: '51+',
-    not_found: 'Not Found',
   }
   
   // Prepare data for chart
@@ -109,12 +107,11 @@ export default function StackedBarChart({
     )
   }
   
-  // Build bars configuration
+  // Build bars configuration (Not Found hidden; only ranking positions shown)
   // Reversed order so green (good rankings) appears on top and red (bad rankings) appears at bottom
   const bars = []
   if (engine === 'google' || engine === 'both') {
     bars.push(
-      { dataKey: 'google_not_found', name: 'Not Found', fill: positionColors.not_found, stackId: 'google' },
       { dataKey: 'google_51_plus', name: '51+', fill: positionColors.position_51_plus, stackId: 'google' },
       { dataKey: 'google_21_50', name: '21-50', fill: positionColors.position_21_50, stackId: 'google' },
       { dataKey: 'google_11_20', name: '11-20', fill: positionColors.position_11_20, stackId: 'google' },
@@ -124,7 +121,6 @@ export default function StackedBarChart({
   }
   if (engine === 'bing' || engine === 'both') {
     bars.push(
-      { dataKey: 'bing_not_found', name: 'Not Found', fill: positionColors.not_found, stackId: 'bing' },
       { dataKey: 'bing_51_plus', name: '51+', fill: positionColors.position_51_plus, stackId: 'bing' },
       { dataKey: 'bing_21_50', name: '21-50', fill: positionColors.position_21_50, stackId: 'bing' },
       { dataKey: 'bing_11_20', name: '11-20', fill: positionColors.position_11_20, stackId: 'bing' },
@@ -198,7 +194,7 @@ export default function StackedBarChart({
             // Top bar (green/good rankings) - round top corners
             radius = [4, 4, 0, 0]
           } else if (index === 0) {
-            // Bottom bar (not found/bad rankings) - round bottom corners
+            // Bottom bar (51+ / worst rankings) - round bottom corners
             radius = [0, 0, 4, 4]
           }
           return (

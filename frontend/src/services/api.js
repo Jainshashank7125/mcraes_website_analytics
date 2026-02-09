@@ -805,37 +805,67 @@ export const clientAPI = {
   },
 }
 
+// Normalize date to YYYY-MM-DD for API (backend expects this format; avoids 400)
+function toYYYYMMDD(value) {
+  if (value == null || value === '') return null
+  const s = String(value).trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return null
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 // Keywords API endpoints
 export const keywordsAPI = {
   // Get keywords for a client with filtering, sorting, and pagination
   getClientKeywords: async (clientId, filters = {}) => {
     const params = new URLSearchParams()
-    
-    // Add all filter parameters
+    const id = clientId != null ? Number(clientId) : NaN
+    if (Number.isNaN(id) || id < 1) {
+      throw new Error('Valid client is required to load keywords')
+    }
+
+    // Add all filter parameters (only valid values to avoid 400)
     if (filters.campaign_id) params.append('campaign_id', filters.campaign_id)
     if (filters.location_country) params.append('location_country', filters.location_country)
     if (filters.location_region) params.append('location_region', filters.location_region)
     if (filters.location_city) params.append('location_city', filters.location_city)
-    if (filters.volume_min !== undefined) params.append('volume_min', filters.volume_min)
-    if (filters.volume_max !== undefined) params.append('volume_max', filters.volume_max)
-    if (filters.google_ranking_min !== undefined) params.append('google_ranking_min', filters.google_ranking_min)
-    if (filters.google_ranking_max !== undefined) params.append('google_ranking_max', filters.google_ranking_max)
-    if (filters.bing_ranking_min !== undefined) params.append('bing_ranking_min', filters.bing_ranking_min)
-    if (filters.bing_ranking_max !== undefined) params.append('bing_ranking_max', filters.bing_ranking_max)
-    if (filters.competition_min !== undefined) params.append('competition_min', filters.competition_min)
-    if (filters.competition_max !== undefined) params.append('competition_max', filters.competition_max)
+    const vMin = filters.volume_min != null ? Number(filters.volume_min) : NaN
+    if (!Number.isNaN(vMin)) params.append('volume_min', vMin)
+    const vMax = filters.volume_max != null ? Number(filters.volume_max) : NaN
+    if (!Number.isNaN(vMax)) params.append('volume_max', vMax)
+    const grMin = filters.google_ranking_min != null ? Number(filters.google_ranking_min) : NaN
+    if (!Number.isNaN(grMin)) params.append('google_ranking_min', grMin)
+    const grMax = filters.google_ranking_max != null ? Number(filters.google_ranking_max) : NaN
+    if (!Number.isNaN(grMax)) params.append('google_ranking_max', grMax)
+    const brMin = filters.bing_ranking_min != null ? Number(filters.bing_ranking_min) : NaN
+    if (!Number.isNaN(brMin)) params.append('bing_ranking_min', brMin)
+    const brMax = filters.bing_ranking_max != null ? Number(filters.bing_ranking_max) : NaN
+    if (!Number.isNaN(brMax)) params.append('bing_ranking_max', brMax)
+    const cMin = filters.competition_min != null ? Number(filters.competition_min) : NaN
+    if (!Number.isNaN(cMin)) params.append('competition_min', cMin)
+    const cMax = filters.competition_max != null ? Number(filters.competition_max) : NaN
+    if (!Number.isNaN(cMax)) params.append('competition_max', cMax)
     if (filters.primary_only !== undefined) params.append('primary_only', filters.primary_only)
     if (filters.tags) params.append('tags', filters.tags)
     if (filters.language) params.append('language', filters.language)
     if (filters.search) params.append('search', filters.search)
-    if (filters.start_date) params.append('start_date', filters.start_date)
-    if (filters.end_date) params.append('end_date', filters.end_date)
+    const start = toYYYYMMDD(filters.start_date)
+    if (start) params.append('start_date', start)
+    const end = toYYYYMMDD(filters.end_date)
+    if (end) params.append('end_date', end)
     if (filters.sort_by) params.append('sort_by', filters.sort_by)
     if (filters.sort_order) params.append('sort_order', filters.sort_order)
-    if (filters.page) params.append('page', filters.page)
-    if (filters.page_size) params.append('page_size', filters.page_size)
-    
-    const response = await api.get(`/api/v1/data/clients/${clientId}/keywords?${params.toString()}`)
+    const page = filters.page != null ? Number(filters.page) : NaN
+    if (!Number.isNaN(page) && page >= 1) params.append('page', page)
+    const pageSize = filters.page_size != null ? Number(filters.page_size) : NaN
+    if (!Number.isNaN(pageSize) && pageSize >= 1) params.append('page_size', pageSize)
+    if (filters.include_zero_volume === true) params.append('include_zero_volume', 'true')
+
+    const response = await api.get(`/api/v1/data/clients/${id}/keywords?${params.toString()}`)
     return response.data
   },
 

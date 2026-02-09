@@ -39,7 +39,6 @@ class DashboardLinkRequest(BaseModel):
     selected_charts: Optional[List[str]] = None
     selected_performance_metrics_kpis: Optional[List[str]] = None
     show_change_period: Optional[Dict[str, bool]] = Field(None, description="Per-section flags for showing change period indicators")
-    global_filters: Optional[Dict[str, List[str]]] = Field(None, description="Global filters to apply across all data queries")
 
 class DashboardLinkUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -56,11 +55,6 @@ class DashboardLinkUpdateRequest(BaseModel):
     selected_performance_metrics_kpis: Optional[List[str]] = None
     show_change_period: Optional[Dict[str, bool]] = Field(None, description="Per-section flags for showing change period indicators")
     executive_summary: Optional[Dict[str, Any]] = Field(None, description="Executive summary data (structured JSON)")
-    global_filters: Optional[Dict[str, List[str]]] = Field(None, description="Global filters to apply across all data queries")
-
-class ReportingDashboardPostRequest(BaseModel):
-    """Request model for POST endpoints that accept global_filters dynamically"""
-    global_filters: Optional[Dict[str, List[str]]] = Field(None, description="Global filters to apply across all data queries")
 
 @router.get("/data/brands")
 @handle_api_errors(context="fetching brands")
@@ -1284,18 +1278,12 @@ async def get_reporting_dashboard(
     from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
     to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
     client_id: Optional[int] = None,
-    global_filters: Optional[Dict[str, List[str]]] = None,
     db: Session = Depends(get_db)
 ):
-    """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard with optional global filters"""
-    from app.services.ga4_filter_builder import GA4FilterBuilder
+    """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard"""
     import time
     total_start = time.time()
     section_times = {}
-    
-    # Log filter application
-    if global_filters:
-        logger.info(f"[GLOBAL FILTERS] Applying filters to dashboard: {GA4FilterBuilder.get_filter_summary(global_filters)}")
     
     try:
         init_start = time.time()
@@ -2058,40 +2046,23 @@ async def get_reporting_dashboard(
                 property_id = chart_ga4_property_id
                 
                 # FIX: Use GA4 API directly for accurate totals (avoids double-counting from daily aggregation)
-                # This ensures chart data matches table data and GA4 dashboard.
-                # IMPORTANT: Live GA4 API failures (e.g. 429 Too Many Requests) should NOT prevent
-                # us from building charts from stored daily data. We therefore wrap the live
-                # API calls in an inner try/except and always continue to the stored-data logic.
+                # This ensures chart data matches table data and GA4 dashboard
                 logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
                 
-                try:
-                    # Use GA4 API directly to avoid aggregation issues
-                    top_pages = await ga4_client.get_top_pages(property_id, start_date, end_date, limit=10)
-                    traffic_sources = await ga4_client.get_traffic_sources(property_id, start_date, end_date)
-                    geographic = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False)
-                    devices = await ga4_client.get_device_breakdown(property_id, start_date, end_date)
-                    
-                    chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
-                    chart_data["top_pages"] = top_pages if top_pages else []
-                    # Filter out blank or "(not set)" country names
-                    geographic_filtered = [
-                        g
-                        for g in (geographic or [])
-                        if g.get("country")
-                        and g.get("country").strip()
-                        and g.get("country").strip().lower() not in ["(not set)", "not set", ""]
-                    ]
-                    chart_data["geographic_breakdown"] = geographic_filtered
-                    chart_data["device_breakdown"] = devices if devices else []
-                    
-                    logger.info(
-                        f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, "
-                        f"traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} "
-                        f"(filtered from {len(geographic or [])}), devices: {len(devices)}"
-                    )
-                except Exception as e:
-                    # Log but DO NOT raise — we still want to build charts from stored data
-                    logger.warning(f"[GA4 API DIRECT] Error fetching live GA4 chart breakdowns, falling back to stored data only: {str(e)}")
+                # Use GA4 API directly to avoid aggregation issues
+                top_pages = await ga4_client.get_top_pages(property_id, start_date, end_date, limit=10)
+                traffic_sources = await ga4_client.get_traffic_sources(property_id, start_date, end_date)
+                geographic = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False)
+                devices = await ga4_client.get_device_breakdown(property_id, start_date, end_date)
+                
+                chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
+                chart_data["top_pages"] = top_pages if top_pages else []
+                # Filter out blank or "(not set)" country names
+                geographic_filtered = [g for g in (geographic or []) if g.get("country") and g.get("country").strip() and g.get("country").strip().lower() not in ['(not set)', 'not set', '']]
+                chart_data["geographic_breakdown"] = geographic_filtered
+                chart_data["device_breakdown"] = devices if devices else []
+                
+                logger.info(f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} (filtered from {len(geographic or [])}), devices: {len(devices)}")
                 
                 # Get GA4 traffic overview for detailed metrics from stored data
                 query_brand_id = scrunch_brand_id if client_id else brand_id
@@ -3721,9 +3692,7 @@ async def get_reporting_dashboard(
                 # Only consider rows with valid google_ranking > 0 to avoid zeros/nulls skewing averages
                 ranking_conditions.append(rankings_table.c.google_ranking != None)
                 ranking_conditions.append(rankings_table.c.google_ranking > 0)
-                # Require volume > 0 to align with keyword listing filters
-                ranking_conditions.append(rankings_table.c.volume != None)
-                ranking_conditions.append(rankings_table.c.volume > 0)
+                # Include zero-volume keywords in agency analytics report chart
                 if campaign_ids:
                     ranking_conditions.append(rankings_table.c.campaign_id.in_(campaign_ids))
 
@@ -4003,41 +3972,6 @@ async def get_reporting_dashboard_by_client(
         error_trace = traceback.format_exc()
         logger.error(f"Error fetching reporting dashboard for client {client_id}: {str(e)}\n{error_trace}")
         raise HTTPException(status_code=500, detail=f"Error fetching reporting dashboard: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching reporting dashboard: {str(e)}")
-
-@router.post("/data/reporting-dashboard/client/{client_id}")
-async def post_reporting_dashboard_by_client(
-    client_id: int,
-    request_body: ReportingDashboardPostRequest,
-    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
-    from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
-    to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
-    db: Session = Depends(get_db)
-):
-    """POST version - Get consolidated KPIs with global_filters in request body"""
-    try:
-        supabase = SupabaseService(db=db)
-        client = supabase.get_client_by_id(client_id)
-        
-        if not client:
-            raise HTTPException(status_code=404, detail="Client not found")
-        
-        scrunch_brand_id = client.get("scrunch_brand_id")
-        brand_id = scrunch_brand_id if scrunch_brand_id else 0
-        
-        start_date = start_date or from_date
-        end_date = end_date or to_date
-        
-        # Extract global_filters from request body
-        global_filters = request_body.global_filters
-        
-        return await get_reporting_dashboard(brand_id, start_date, end_date, client_id=client_id, global_filters=global_filters, db=db)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching reporting dashboard for client {client_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching reporting dashboard: {str(e)}")
 
 @router.get("/data/reporting-dashboard/slug/{slug}")
@@ -7492,6 +7426,7 @@ async def get_client_keywords(
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     page: Optional[int] = Query(1, description="Page number (1-indexed)"),
     page_size: Optional[int] = Query(50, description="Items per page"),
+    include_zero_volume: Optional[bool] = Query(False, description="Include keywords with zero search volume (e.g. for agency analytics report)"),
     db: Session = Depends(get_db)
 ):
     """Get keywords for a client with filtering, sorting, and pagination (public access)"""
@@ -7638,8 +7573,8 @@ async def get_client_keywords(
             
             # Apply summary-based filters
             volume = summary.get("volume", 0) or 0
-            # Require volume > 0 and not null
-            if volume <= 0:
+            # Require volume > 0 and not null unless include_zero_volume (e.g. for report view)
+            if not include_zero_volume and volume <= 0:
                 continue
             google_ranking = summary.get("google_ranking")
             bing_ranking = summary.get("bing_ranking")
@@ -8548,7 +8483,7 @@ async def get_prompts_analytics(
         # Get prompts and responses using SQLAlchemy
         from app.db.models import Prompt, Response
         
-          # CORRECT FIX: Get responses first to find which prompts have responses in the date range
+        # CORRECT FIX: Get responses first to find which prompts have responses in the date range
         # Then include prompts that either were created in range OR have responses in range
         responses_conditions = [Response.brand_id == brand_id]
         if start_date:

@@ -47,7 +47,7 @@ import StackedBarChart from "./reporting/charts/StackedBarChart";
 import ChartCard from "./reporting/ChartCard";
 import { formatDateForAxis } from "./reporting/hooks/useChartData";
 
-export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: propStartDate, endDate: propEndDate, isChartVisible }) {
+export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: propStartDate, endDate: propEndDate, isChartVisible, hideVolumeColumn = true, includeZeroVolume = false }) {
   const theme = useTheme();
   const selectedKPISet = selectedKPIs instanceof Set ? selectedKPIs : new Set(selectedKPIs || []);
   const showKPI = (key) => {
@@ -132,6 +132,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
     sort_order: "asc",
     page: 1,
     page_size: 10000,
+    include_zero_volume: includeZeroVolume || undefined,
   };
   
   // Fetch keywords data
@@ -225,10 +226,10 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
     setFavoriteKeywords(newFavorites);
   };
   
-  // Format ranking display
+  // Format ranking display (when rank is not found, show "Not found" not "used")
   const formatRanking = (ranking) => {
-    if (ranking === null || ranking === undefined) {
-      return "not found";
+    if (ranking === null || ranking === undefined || ranking <= 0) {
+      return "Not found";
     }
     return ranking.toString();
   };
@@ -286,9 +287,16 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
   
   const keywords = keywordsData?.keywords || [];
   const locationFilteredKeywords = useMemo(() => {
-    const ranked = keywords.filter(
-      (k) => k.google_ranking !== null && k.google_ranking !== undefined && k.google_ranking > 0
+    // Not-found keywords (no Google ranking) are never shown in the table
+    const withRanking = keywords.filter(
+      (k) =>
+        k.google_ranking != null &&
+        k.google_ranking !== "" &&
+        Number(k.google_ranking) > 0
     );
+    const ranked = includeZeroVolume
+      ? withRanking
+      : withRanking.filter((k) => (k.search_volume || 0) > 0);
     if (!locationCountry) return ranked;
     const loc = locationCountry.toLowerCase();
     return ranked.filter((k) => {
@@ -301,7 +309,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
         .map((x) => x.toLowerCase());
       return locs.includes(loc);
     });
-  }, [keywords, locationCountry]);
+  }, [keywords, locationCountry, includeZeroVolume]);
 
   const sortedKeywords = useMemo(() => {
     const arr = [...locationFilteredKeywords];
@@ -619,11 +627,11 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
         <FormControl sx={{ minWidth: 150 }}>
           <InputLabel>Sort By</InputLabel>
           <Select
-            value={sortBy}
+            value={hideVolumeColumn && sortBy === "volume" ? "google_ranking" : sortBy}
             label="Sort By"
             onChange={(e) => setSortBy(e.target.value)}
           >
-            <MenuItem value="volume">Volume</MenuItem>
+            {!hideVolumeColumn && <MenuItem value="volume">Volume</MenuItem>}
             <MenuItem value="google_ranking">Google Ranking</MenuItem>
             {/* <MenuItem value="bing_ranking">Bing Ranking</MenuItem> */}
             <MenuItem value="keyword_phrase">Keyword</MenuItem>
@@ -643,14 +651,42 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
             <Alert severity="error">Error loading keywords: {keywordsError.message}</Alert>
           ) : (
             <>
+              {!keywordsLoading && sortedKeywords.length === 0 && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  {keywords.length === 0
+                    ? "No Agency Analytics keyword data for this client in the selected date range. Select a client with linked Agency Analytics campaigns or adjust the date range above."
+                    : "No keywords with a Google ranking in the selected date range. Rankings appear here once keywords are tracking positions."}
+                </Alert>
+              )}
               <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
               <Typography variant="body2" color="text.secondary">
                 Showing {Math.min(pageSize, pagination.total - (page - 1) * pageSize)} of {pagination.total} Rows
               </Typography>
               </Box>
               
-              <TableContainer>
-                <Table>
+              <TableContainer
+                sx={{
+                  maxHeight: 480,
+                  overflow: "auto",
+                  position: "relative",
+                }}
+              >
+                <Table
+                  stickyHeader
+                  size="small"
+                  sx={{
+                    "& .MuiTableHead-root": {
+                      position: "sticky",
+                      top: 0,
+                      zIndex: 11,
+                      backgroundColor: theme.palette.background.paper,
+                      boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
+                    },
+                    "& .MuiTableHead-root th": {
+                      backgroundColor: theme.palette.background.paper,
+                    },
+                  }}
+                >
                   <TableHead>
                     <TableRow>
                       <TableCell padding="checkbox">
@@ -688,15 +724,17 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
                           {sortBy === "bing_ranking" && (sortOrder === "asc" ? " ↑" : " ↓")}
                         </Button>
                       </TableCell> */}
-                      <TableCell>
-                        <Button
-                          onClick={() => handleSort("volume")}
-                          sx={{ textTransform: "none", fontWeight: 600 }}
-                        >
-                          VOLUME
-                          {sortBy === "volume" && (sortOrder === "asc" ? " ↑" : " ↓")}
-                        </Button>
-                      </TableCell>
+                      {!hideVolumeColumn && (
+                        <TableCell>
+                          <Button
+                            onClick={() => handleSort("volume")}
+                            sx={{ textTransform: "none", fontWeight: 600 }}
+                          >
+                            VOLUME
+                            {sortBy === "volume" && (sortOrder === "asc" ? " ↑" : " ↓")}
+                          </Button>
+                        </TableCell>
+                      )}
                       <TableCell>LOCATION</TableCell>
                     </TableRow>
                   </TableHead>
@@ -735,7 +773,7 @@ export default function KeywordsDashboard({ clientId, selectedKPIs, startDate: p
                           />
                         </TableCell>
                         <TableCell>{formatRanking(keyword.bing_ranking)}</TableCell> */}
-                        <TableCell>{keyword.search_volume || 0}</TableCell>
+                        {!hideVolumeColumn && <TableCell>{keyword.search_volume || 0}</TableCell>}
                         <TableCell>{keyword.search_location_formatted_name || ""}</TableCell>
                       </TableRow>
                     ))}

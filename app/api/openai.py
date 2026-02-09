@@ -19,6 +19,21 @@ NORTH_AMERICA_COUNTRIES = {
     "greenland", "saint pierre and miquelon", "bermuda",
 }
 
+# Standard North American display names for AI Overview (so only these names appear in the overview).
+def _normalize_country_for_overview(country: str) -> str:
+    if not country:
+        return country
+    c = country.strip().lower()
+    if c in ("usa", "united states of america") or c.startswith("united states"):
+        return "United States"
+    if c == "canada":
+        return "Canada"
+    if c == "mexico":
+        return "Mexico"
+    if c in ("belize", "costa rica", "el salvador", "guatemala", "honduras", "nicaragua", "panama"):
+        return country.strip().title()
+    return country.strip()
+
 router = APIRouter()
 openai_client = OpenAIClient()
 
@@ -503,7 +518,7 @@ async def generate_overall_overview(
                         continue
                     c_lower = country.lower()
                     if c_lower in NORTH_AMERICA_COUNTRIES or c_lower.startswith("united states"):
-                        geo_na.append(g)
+                        geo_na.append({**g, "country": _normalize_country_for_overview(country)})
                 if geo_na:
                     structured_data["GA4"]["charts"]["geographic_breakdown"] = {
                         "type": "map",
@@ -651,7 +666,7 @@ Positive-only constraints:
 - Do NOT mention internal tools or data sources by name.
 - You MUST include the "what_to_watch" section: 2-3 bullets of positive opportunities or focus areas (no negative concerns).
 - Overall status: only "✅ Positive momentum" or "✅ On track".
-- Geographic/location: mention ONLY if North America data is in the input; otherwise omit.
+- Geographic/location: mention ONLY if North America data is in the input; use ONLY standard North American country names (e.g. United States, Canada, Mexico). Do not mention or infer non-North American regions.
 - Maximum length: ~450-600 words. No emojis except ✅. No buzzwords. Calm, executive tone."""
 
         # User prompt requesting structured JSON output — POSITIVE ONLY, NO HALLUCINATION
@@ -665,7 +680,7 @@ Reporting Period: {reporting_period}
 
 {structured_data_text}
 
-RULES: Use only the KPIs and chart data above. If a section has no data, say "Not available" or one brief line. Do not mention geography unless North America geographic data appears above.
+RULES: Use only the KPIs and chart data above. The data reflects the selected reporting period and client—base the summary strictly on this selection only. If a section has no data, say "Not available" or one brief line. Do not mention geography unless North America geographic data appears above; when mentioning countries use only North American names (United States, Canada, Mexico).
 
 You MUST return a valid JSON object with this exact structure (include "what_to_watch" — it must appear in the output):
 {{
