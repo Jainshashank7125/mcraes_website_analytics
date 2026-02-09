@@ -204,7 +204,7 @@ const HighlightCard = ({ highlight, theme, isMobile }) => {
   )
 }
 
-export default function ExecutiveSummary({ summary, theme, dashboardData }) {
+export default function ExecutiveSummary({ summary, theme, dashboardData, visibleHighlights }) {
   const [highlightIndex, setHighlightIndex] = useState(0)
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
   const isTablet = useMediaQuery(theme.breakpoints.down('md'))
@@ -247,8 +247,8 @@ export default function ExecutiveSummary({ summary, theme, dashboardData }) {
       tag: 'analytics',
       tagColor: '#ff6b6b',
       requiresAttention: summary.executive_summary.toLowerCase().includes('drop') || 
-                        summary.executive_summary.toLowerCase().includes('decline') ||
-                        summary.executive_summary.toLowerCase().includes('decrease')
+                       summary.executive_summary.toLowerCase().includes('decline') ||
+                       summary.executive_summary.toLowerCase().includes('decrease')
     })
   }
 
@@ -272,15 +272,36 @@ export default function ExecutiveSummary({ summary, theme, dashboardData }) {
     })
   }
 
+  // Apply visibility filter for AI Overview highlight cards.
+  // - visibleHighlights is a Set of keys like "executive_summary", "what_worked", "what_to_watch"
+  // - If not provided, default to showing all available highlights
+  const normalizedVisibleHighlights = (() => {
+    if (!visibleHighlights) return null
+    // Support both Set and Array just in case
+    if (visibleHighlights instanceof Set) return visibleHighlights
+    if (Array.isArray(visibleHighlights)) return new Set(visibleHighlights)
+    return null
+  })()
+
+  const filteredHighlights =
+    normalizedVisibleHighlights === null
+      ? highlights
+      : highlights.filter(h => normalizedVisibleHighlights.has(h.type))
+
+  // If no highlights are visible after filtering, skip the carousel entirely
+  const hasHighlights = filteredHighlights.length > 0
+
   const handleNextHighlight = () => {
-    setHighlightIndex((prev) => (prev + 1) % highlights.length)
+    if (!hasHighlights) return
+    setHighlightIndex((prev) => (prev + 1) % filteredHighlights.length)
   }
 
   const handlePrevHighlight = () => {
-    setHighlightIndex((prev) => (prev - 1 + highlights.length) % highlights.length)
+    if (!hasHighlights) return
+    setHighlightIndex((prev) => (prev - 1 + filteredHighlights.length) % filteredHighlights.length)
   }
 
-  const currentHighlight = highlights[highlightIndex]
+  const currentHighlight = hasHighlights ? filteredHighlights[highlightIndex] : null
 
   // Extract key metrics for "At a Glance" section
   const getKeyMetrics = () => {
@@ -411,7 +432,7 @@ export default function ExecutiveSummary({ summary, theme, dashboardData }) {
       </Paper>
 
       {/* Highlights Section with Carousel */}
-      {highlights.length > 0 && (
+      {hasHighlights && (
         <Box sx={{ mb: { xs: 4, sm: 5 } }}>
           <Box sx={{ 
             display: 'flex', 
@@ -429,11 +450,11 @@ export default function ExecutiveSummary({ summary, theme, dashboardData }) {
             >
               Highlights
             </Typography>
-            {highlights.length > 1 && (
+            {filteredHighlights.length > 1 && (
               <Box sx={{ display: 'flex', gap: 1 }}>
                 <IconButton
                   onClick={handlePrevHighlight}
-                  disabled={highlights.length <= 1}
+                  disabled={filteredHighlights.length <= 1}
                   sx={{
                     color: 'text.secondary',
                     '&:hover': { color: 'primary.main', bgcolor: alpha(theme.palette.primary.main, 0.08) },
@@ -445,7 +466,7 @@ export default function ExecutiveSummary({ summary, theme, dashboardData }) {
                 </IconButton>
                 <IconButton
                   onClick={handleNextHighlight}
-                  disabled={highlights.length <= 1}
+                  disabled={filteredHighlights.length <= 1}
                   sx={{
                     color: 'text.secondary',
                     '&:hover': { color: 'primary.main', bgcolor: alpha(theme.palette.primary.main, 0.08) },
@@ -480,9 +501,9 @@ export default function ExecutiveSummary({ summary, theme, dashboardData }) {
           </Box>
 
           {/* Carousel Indicators */}
-          {highlights.length > 1 && (
+          {filteredHighlights.length > 1 && (
             <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1, mt: 2 }}>
-              {highlights.map((_, index) => (
+              {filteredHighlights.map((_, index) => (
                 <Box
                   key={index}
                   onClick={() => setHighlightIndex(index)}
