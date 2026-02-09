@@ -106,6 +106,7 @@ import {
   getChannelColor,
 } from "./reporting/utils";
 import { CHART_COLORS } from "./reporting/constants";
+import { mapGeographicData } from "../utils/countryNameMapper";
 import {
   useChartData,
   formatDateForAxis,
@@ -262,6 +263,7 @@ function ReportingDashboard({
   // Only 4 main sections: ga4, agency_analytics, scrunch_ai, all_performance_metrics
   const [visibleSections, setVisibleSections] = useState(
     new Set([
+      "ai_overview",
       "ga4",
       "agency_analytics",
       "scrunch_ai",
@@ -270,10 +272,26 @@ function ReportingDashboard({
   );
   const [tempVisibleSections, setTempVisibleSections] = useState(
     new Set([
+      "ai_overview",
       "ga4",
       "agency_analytics",
       "scrunch_ai",
       "all_performance_metrics",
+    ])
+  ); // For dialog
+  // AI Overview highlights visibility (for individual highlight cards)
+  const [visibleHighlights, setVisibleHighlights] = useState(
+    new Set([
+      "executive_summary",
+      "what_worked",
+      "what_to_watch",
+    ])
+  );
+  const [tempVisibleHighlights, setTempVisibleHighlights] = useState(
+    new Set([
+      "executive_summary",
+      "what_worked",
+      "what_to_watch",
     ])
   ); // For dialog
   // Chart/visualization selections (for each section)
@@ -281,12 +299,14 @@ function ReportingDashboard({
   const [tempSelectedCharts, setTempSelectedCharts] = useState(new Set()); // For dialog
   // Show change period flags per section
   const [showChangePeriod, setShowChangePeriod] = useState({
+    ai_overview: false, // AI Overview doesn't show change period
     ga4: true,
     agency_analytics: true,
     scrunch_ai: true,
     all_performance_metrics: true
   });
   const [tempShowChangePeriod, setTempShowChangePeriod] = useState({
+    ai_overview: false, // AI Overview doesn't show change period
     ga4: true,
     agency_analytics: true,
     scrunch_ai: true,
@@ -294,6 +314,7 @@ function ReportingDashboard({
   }); // For dialog
   // Public section visibility and chart selections (loaded from database for public view)
   const [publicVisibleSections, setPublicVisibleSections] = useState(null);
+  const [publicVisibleHighlights, setPublicVisibleHighlights] = useState(null);
   const [publicSelectedCharts, setPublicSelectedCharts] = useState(null);
   const [publicShowChangePeriod, setPublicShowChangePeriod] = useState(null);
   const theme = useTheme();
@@ -398,6 +419,18 @@ function ReportingDashboard({
     if (isPublic && publicBrandInfo?.dashboard_link) {
       const dashboardLink = publicBrandInfo.dashboard_link;
 
+      // CRITICAL: Set date range from link - this will trigger data loading via the other useEffect
+      if (dashboardLink.start_date && dashboardLink.end_date) {
+        const linkStartDate = dashboardLink.start_date.split('T')[0]; // Get YYYY-MM-DD format
+        const linkEndDate = dashboardLink.end_date.split('T')[0];
+        if (linkStartDate && linkEndDate && (startDate !== linkStartDate || endDate !== linkEndDate)) {
+          console.log("🔍 SET DATE RANGE FROM LINK:", linkStartDate, "to", linkEndDate);
+          setStartDate(linkStartDate);
+          setEndDate(linkEndDate);
+          // The useEffect that watches startDate/endDate will trigger loadAllData()
+        }
+      }
+
       if (dashboardLink.executive_summary) {
         // Executive summary exists, load it
         debugLog(
@@ -448,6 +481,21 @@ function ReportingDashboard({
         
         if (kpiSelection.visible_sections && Array.isArray(kpiSelection.visible_sections)) {
           setPublicVisibleSections(new Set(kpiSelection.visible_sections));
+        }
+        
+        if (kpiSelection.visible_highlights && Array.isArray(kpiSelection.visible_highlights) && kpiSelection.visible_highlights.length > 0) {
+          const loadedHighlights = new Set(kpiSelection.visible_highlights);
+          setPublicVisibleHighlights(loadedHighlights);
+          debugLog("Loaded public visible highlights from link", {
+            highlights: Array.from(kpiSelection.visible_highlights),
+            setSize: kpiSelection.visible_highlights.length
+          });
+          console.log("🔍 LOADED HIGHLIGHTS FROM LINK:", Array.from(loadedHighlights));
+        } else {
+          // Explicitly set to empty Set if not saved - strict filtering (only show what's selected)
+          setPublicVisibleHighlights(new Set());
+          debugLog("No visible highlights saved in link, using empty set (strict filtering)");
+          console.log("🔍 NO HIGHLIGHTS IN LINK, USING EMPTY SET");
         }
         
         if (kpiSelection.selected_charts && Array.isArray(kpiSelection.selected_charts)) {
@@ -590,7 +638,44 @@ function ReportingDashboard({
       setIsLoadingReport(true);
       setLoadingCaption(getRandomCaption());
 
-      // For public mode, try to fetch client by slug first, then fall back to brand
+      // CRITICAL: If we already have dashboard_link from publicBrandInfo, use it immediately
+      // This ensures date range is set before any data loading
+      // PublicReportingDashboard already loaded everything, so don't fetch again
+      if (publicBrandInfo?.dashboard_link) {
+        const dashboardLink = publicBrandInfo.dashboard_link;
+        if (dashboardLink.start_date && dashboardLink.end_date) {
+          const linkStartDate = dashboardLink.start_date.split('T')[0];
+          const linkEndDate = dashboardLink.end_date.split('T')[0];
+          if (linkStartDate && linkEndDate) {
+            console.log("🔍 SET DATE RANGE FROM LINK (EARLY):", linkStartDate, "to", linkEndDate);
+            setStartDate(linkStartDate);
+            setEndDate(linkEndDate);
+          }
+        }
+        // Set client/brand IDs from link if available
+        if (dashboardLink.client_id) {
+          setSelectedClientId(dashboardLink.client_id);
+        }
+        // If brand info is available, use it
+        if (publicBrandInfo.id) {
+          setSelectedBrandId(publicBrandInfo.id);
+        }
+        if (publicBrandInfo.scrunch_brand_id) {
+          setSelectedBrandId(publicBrandInfo.scrunch_brand_id);
+        }
+        // Store client data if available
+        if (publicBrandInfo.clientData) {
+          setSelectedClientReportTitle(publicBrandInfo.clientData.report_title || null);
+          setSelectedClientLogoUrl(publicBrandInfo.clientData.logo_url || null);
+          setSelectedClientName(publicBrandInfo.clientData.company_name || null);
+        }
+        console.log("🔍 USING DATA FROM PUBLICBRANDINFO - Dashboard link already loaded by PublicReportingDashboard");
+        return; // Don't fetch again - PublicReportingDashboard already loaded everything
+      }
+
+      // Only fetch if publicBrandInfo is not available yet (shouldn't happen, but fallback)
+      // NOTE: This should rarely execute because PublicReportingDashboard loads the link first
+      console.warn("⚠️ WARNING: publicBrandInfo not available, attempting to fetch client/brand by slug");
       const fetchPublicEntity = async () => {
         try {
           // Try client first (new client-centric approach)
@@ -1562,6 +1647,8 @@ function ReportingDashboard({
         debugLog(`Scrunch data loaded for brand ${selectedBrandId}:`, {
           hasKPIs,
           kpiCount: data.kpis ? Object.keys(data.kpis).length : 0,
+          kpiKeys: data.kpis ? Object.keys(data.kpis) : [],
+          brand_position_percentage: data.kpis?.brand_position_percentage,
           hasChartData,
         });
 
@@ -1975,6 +2062,9 @@ function ReportingDashboard({
   // Only 4 main sections: ga4, agency_analytics (keywords), scrunch_ai, all_performance_metrics
   const getDashboardSectionKPIs = (sectionKey) => {
     switch (sectionKey) {
+      case "ai_overview":
+        // AI Overview section doesn't have individual KPIs
+        return [];
       case "ga4":
         // GA4 section shows GA4 KPIs (Website Analytics)
         return KPI_ORDER.filter((key) => {
@@ -2006,9 +2096,12 @@ function ReportingDashboard({
   };
 
   // Helper function to get charts/visualizations for each dashboard section
-  // Only 4 main sections: ga4, agency_analytics (keywords), scrunch_ai, all_performance_metrics
+  // Only 5 main sections: ai_overview, ga4, agency_analytics (keywords), scrunch_ai, all_performance_metrics
   const getDashboardSectionCharts = (sectionKey) => {
     switch (sectionKey) {
+      case "ai_overview":
+        // AI Overview section doesn't have charts
+        return [];
       case "ga4":
         return [
           // {
@@ -2247,6 +2340,9 @@ function ReportingDashboard({
       new Set(tempSelectedPerformanceMetricsKPIs)
     );
     setVisibleSections(new Set(tempVisibleSections));
+    const savedHighlights = new Set(tempVisibleHighlights);
+    setVisibleHighlights(savedHighlights);
+    console.log("🔍🔍🔍 SAVED SETTINGS - Highlights updated:", Array.from(savedHighlights), "Count:", savedHighlights.size);
     setSelectedCharts(new Set(tempSelectedCharts));
     setShowChangePeriod({ ...tempShowChangePeriod });
     setShowKPISelector(false);
@@ -2255,6 +2351,7 @@ function ReportingDashboard({
       kpiCount: tempSelectedKPIs.size,
       performanceMetricsKPICount: tempSelectedPerformanceMetricsKPIs.size,
       sectionCount: tempVisibleSections.size,
+      highlightCount: tempVisibleHighlights.size,
       chartCount: tempSelectedCharts.size,
       showChangePeriod: tempShowChangePeriod,
     });
@@ -2267,6 +2364,7 @@ function ReportingDashboard({
       new Set(selectedPerformanceMetricsKPIs)
     );
     setTempVisibleSections(new Set(visibleSections));
+    setTempVisibleHighlights(new Set(visibleHighlights));
     
     // If no charts are selected, select all charts by default
     const chartsToSelect = selectedCharts.size > 0 
@@ -2286,6 +2384,7 @@ function ReportingDashboard({
     // Expand all sections by default
     setExpandedSections(
       new Set([
+        "ai_overview",
         "ga4",
         "agency_analytics",
         "scrunch_ai",
@@ -2376,10 +2475,36 @@ function ReportingDashboard({
     // Reset to all sections visible
     setVisibleSections(
       new Set([
+        "ai_overview",
         "ga4",
         "agency_analytics",
         "scrunch_ai",
         "all_performance_metrics",
+      ])
+    );
+    setTempVisibleSections(
+      new Set([
+        "ai_overview",
+        "ga4",
+        "agency_analytics",
+        "scrunch_ai",
+        "all_performance_metrics",
+      ])
+    );
+    
+    // Reset to all highlights visible
+    setVisibleHighlights(
+      new Set([
+        "executive_summary",
+        "what_worked",
+        "what_to_watch",
+      ])
+    );
+    setTempVisibleHighlights(
+      new Set([
+        "executive_summary",
+        "what_worked",
+        "what_to_watch",
       ])
     );
 
@@ -2499,6 +2624,12 @@ function ReportingDashboard({
       ) {
         setVisibleSections(new Set(link.kpi_selection.visible_sections));
       }
+
+      // CRITICAL: When editing a link, ALWAYS use current settings, never load old highlights
+      // This ensures that when you update an old link, it uses your current highlight selections
+      // The old highlights are ignored - your current settings take precedence
+      console.log("🔍 EDITING LINK - Using current highlights settings, NOT loading from old link");
+      console.log("🔍 CURRENT HIGHLIGHTS:", Array.from(visibleHighlights));
 
       if (
         link.kpi_selection.selected_charts &&
@@ -2620,13 +2751,28 @@ function ReportingDashboard({
         selectedPerformanceMetricsKPIs
       );
       payload.visible_sections = Array.from(visibleSections);
+      // CRITICAL: ALWAYS use current visibleHighlights state when saving (new or editing)
+      // This ensures old links get updated with current settings
+      const highlightsToSave = Array.from(visibleHighlights);
+      payload.visible_highlights = highlightsToSave;
+      console.log("🔍🔍🔍 SAVING LINK - Using CURRENT highlights:", highlightsToSave, "Count:", highlightsToSave.length);
       payload.selected_charts = Array.from(selectedCharts);
+      debugLog("Saving visible highlights to link", {
+        highlights: highlightsToSave,
+        count: highlightsToSave.length,
+        visibleHighlightsState: Array.from(visibleHighlights),
+        visibleHighlightsSize: visibleHighlights.size
+      });
+      console.log("🔍🔍🔍 SAVING HIGHLIGHTS TO LINK:", highlightsToSave, "Count:", highlightsToSave.length);
+      if (highlightsToSave.length === 0) {
+        console.warn("⚠️ WARNING: No highlights selected! Saving empty array.");
+      }
       payload.show_change_period = showChangePeriod;
 
-      // Include executive summary if available (from local state or overviewData)
+      // Include executive summary ONLY if AI Overview section is selected
       // Check both executiveSummary state and overviewData.executive_summary
       const summaryToSave = executiveSummary || overviewData?.executive_summary;
-      if (summaryToSave) {
+      if (summaryToSave && visibleSections.has("ai_overview")) {
         payload.executive_summary = summaryToSave;
         debugLog("Including executive summary in save payload", {
           hasExecutiveSummary: !!executiveSummary,
@@ -2787,15 +2933,18 @@ function ReportingDashboard({
     if (isPublic) {
       // In public mode, use publicVisibleSections
       if (publicVisibleSections === null) {
-        return true; // Show all if no selections saved (default behavior)
+        // If no selections saved, show only non-AI sections by default
+        // AI sections (ai_overview and scrunch_ai) must be explicitly enabled
+        return sectionKey !== "ai_overview" && sectionKey !== "scrunch_ai";
       }
       if (publicVisibleSections.size === 0) {
         return false; // Empty Set means admin explicitly deselected all sections
       }
       return publicVisibleSections.has(sectionKey); // Check if this specific section is selected
     } else {
-      // In authenticated mode, always show (managers can see everything)
-      return true;
+      // In authenticated mode, respect visibleSections state
+      // This allows admins to hide/show sections using the settings dialog
+      return visibleSections.has(sectionKey);
     }
   };
 
@@ -3027,8 +3176,23 @@ function ReportingDashboard({
           </Typography>
         </Box>
       )}
-      {/* Header */}
-      <Box mb={4}>
+      {/* Header - sticky so Select Client, dates, Load Data, Reset stay visible on scroll */}
+      <Box
+        mb={4}
+        sx={{
+          position: "sticky",
+          top: 0,
+          zIndex: 1100,
+          backgroundColor: "background.default",
+          pt: 1,
+          pb: 1,
+          mx: -3,
+          px: 3,
+          borderBottom: 1,
+          borderColor: "divider",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+        }}
+      >
         <Box
           display="flex"
           justifyContent="space-between"
@@ -3402,6 +3566,7 @@ function ReportingDashboard({
                               display="flex"
                               flexDirection="column"
                               alignItems="flex-start"
+                              sx={{ width: '100%' }}
                             >
                               <Typography variant="body2" fontWeight={500}>
                                 {link.name || link.slug || `Link ${link.id}`}
@@ -3416,6 +3581,24 @@ function ReportingDashboard({
                                   {link.description.length > 50 ? "..." : ""}
                                 </Typography>
                               )}
+                              {link.created_at && (
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ fontSize: "0.65rem", mt: 0.5 }}
+                                >
+                                  Created: {new Date(link.created_at).toLocaleString()}
+                                </Typography>
+                              )}
+                              {link.start_date && link.end_date && (
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ fontSize: "0.65rem" }}
+                                >
+                                  {link.start_date.split('T')[0]} to {link.end_date.split('T')[0]}
+                                </Typography>
+                              )}
                             </Box>
                           </MenuItem>
                         ))}
@@ -3428,7 +3611,7 @@ function ReportingDashboard({
                         startIcon={<LinkIcon />}
                         sx={{ textTransform: "none" }}
                       >
-                      {editingLink ? "Edit Link" : "Create Link"}
+                      {editingLink ? "Update Report Link" : "Create Link"}
                       </Button>
                     {editingLink && (
                       <Button
@@ -3540,8 +3723,8 @@ function ReportingDashboard({
         </Box>
       )}
 
-      {/* Tab Navigation - Always show in public view */}
-      {isPublic && (
+      {/* Tab Navigation - Only show in public view if AI Overview section is selected */}
+      {isPublic && isSectionVisible("ai_overview") && (
         <Box sx={{ borderBottom: 1, borderColor: "divider", mb: 3, px: 3 }}>
           <Tabs
             value={activeTab}
@@ -3571,29 +3754,57 @@ function ReportingDashboard({
         </Box>
       ) : dashboardData && !dashboardData.no_data ? (
         <>
-          {/* Executive Summary Tab Content - Show in public view when tab 0 is active */}
-          {isPublic && activeTab === 0 && (
+          {/* Executive Summary Tab Content - Show in public view when tab 0 is active AND AI Overview is selected */}
+          {isPublic && activeTab === 0 && isSectionVisible("ai_overview") && (
             <Box sx={{ px: 3 }}>
               {executiveSummary ? (
-                <ExecutiveSummary summary={executiveSummary} theme={theme} />
-              ) : (
-                <Alert severity="info" sx={{ borderRadius: 2 }}>
-                  <Typography variant="h6" gutterBottom>
-                    Executive Summary Not Available
-                  </Typography>
-                  <Typography variant="body2">
-                    The executive summary for this reporting period is not yet
-                    available. Please check the Detailed Metrics tab for current
-                    performance data.
-                  </Typography>
-                </Alert>
-              )}
+                <ExecutiveSummary 
+                  summary={executiveSummary} 
+                  theme={theme} 
+                  visibleHighlights={(() => {
+                    if (isPublic) {
+                      // CRITICAL: Only use saved highlights, never show all by default
+                      const highlightsToUse = publicVisibleHighlights !== null ? publicVisibleHighlights : new Set();
+                      console.log("🔍 PASSING HIGHLIGHTS TO EXECUTIVESUMMARY (PUBLIC):", Array.from(highlightsToUse), "Size:", highlightsToUse.size);
+                      return highlightsToUse;
+                    }
+                    console.log("🔍 PASSING HIGHLIGHTS TO EXECUTIVESUMMARY (ADMIN):", Array.from(visibleHighlights), "Size:", visibleHighlights.size);
+                    return visibleHighlights;
+                  })()}
+                />
+              ) : null}
             </Box>
           )}
 
-          {/* Detailed Metrics Tab Content - Show when not public, or tab 1 is active in public view */}
-          {(!isPublic || activeTab === 1) && (
+          {/* Detailed Metrics Tab Content - Show when not public, or tab 1 is active in public view, or when tabs are hidden (AI Overview not selected) */}
+          {(!isPublic || activeTab === 1 || (isPublic && !isSectionVisible("ai_overview"))) && (
         <>
+          {/* AI Overview Section - Only under Executive Summary tab; do NOT show in Detailed Metrics tab (client link) */}
+          {isSectionVisible("ai_overview") && executiveSummary && !(isPublic && activeTab === 1) && (
+            <SectionContainer
+              title="AI Overview"
+              description="Executive Summary of All Metrics"
+              loading={loadingOverview}
+            >
+              <Box sx={{ mb: 4 }}>
+                <ExecutiveSummary 
+                  summary={executiveSummary} 
+                  theme={theme} 
+                  visibleHighlights={(() => {
+                    if (isPublic) {
+                      // CRITICAL: Only use saved highlights, never show all by default
+                      const highlightsToUse = publicVisibleHighlights !== null ? publicVisibleHighlights : new Set();
+                      console.log("🔍 PASSING HIGHLIGHTS TO EXECUTIVESUMMARY (DETAILED METRICS TAB - PUBLIC):", Array.from(highlightsToUse), "Size:", highlightsToUse.size);
+                      return highlightsToUse;
+                    }
+                    console.log("🔍 PASSING HIGHLIGHTS TO EXECUTIVESUMMARY (DETAILED METRICS TAB - ADMIN):", Array.from(visibleHighlights), "Size:", visibleHighlights.size);
+                    return visibleHighlights;
+                  })()}
+                />
+              </Box>
+            </SectionContainer>
+          )}
+
           {/* Google Analytics 4 Section */}
           {/* Show section if it's visible - individual KPIs and charts are controlled independently */}
           {isSectionVisible("ga4") && (
@@ -5074,10 +5285,8 @@ function ReportingDashboard({
                       </Grid>
                     )}
 
-                  {/* User Metrics Section - Separate provision for Total Users and New Users */}
-                      {dashboardData.chart_data?.ga4_daily_comparison?.length >
-                        0 &&
-                    (shouldShowKPI("users") || shouldShowKPI("new_users")) && (
+                  {/* GA4 Performance Charts - Prominent Line Graphs */}
+                      {dashboardData.chart_data?.ga4_daily_comparison?.length > 0 && (
                       <Box sx={{ mt: 4, mb: 4 }}>
                         <Grid container spacing={3}>
                           {/* Total Users Chart - Full Width (Primary Chart) */}
@@ -5697,10 +5906,7 @@ function ReportingDashboard({
                             onChartVisibilityToggle={handleChartVisibilityToggle}
                           >
                             <BarChartEnhanced
-                              data={dashboardData.chart_data.geographic_breakdown.slice(
-                                0,
-                                10
-                              )}
+                              data={mapGeographicData(dashboardData.chart_data.geographic_breakdown.slice(0, 10))}
                               dataKey="country"
                               bars={[
                                 {
@@ -5709,10 +5915,10 @@ function ReportingDashboard({
                                   color: CHART_COLORS.primary,
                                 },
                               ]}
-                              formatter={(value) => [
-                                value.toLocaleString(),
-                                "Sessions",
-                              ]}
+                              formatter={(value, name, props) => {
+                                const fullName = props?.payload?.countryFull || props?.payload?.country || name;
+                                return [value.toLocaleString(), `Sessions (${fullName})`];
+                              }}
                               xAxisFormatter={(value) => value}
                               margin={{
                                 top: 5,
@@ -5741,18 +5947,17 @@ function ReportingDashboard({
                             onChartVisibilityToggle={handleChartVisibilityToggle}
                           >
                             <PieChartEnhanced
-                              data={dashboardData.chart_data.geographic_breakdown
-                                .slice(0, 6)
-                                .map((item) => ({
-                                  name: item.country || "Unknown",
-                                  value: item.sessions || 0,
-                                }))}
+                              data={mapGeographicData(dashboardData.chart_data.geographic_breakdown.slice(0, 6)).map((item) => ({
+                                name: item.country || "Unknown",
+                                value: item.sessions || 0,
+                                countryFull: item.countryFull || item.country,
+                              }))}
                               donut={false}
                               colors={CHART_COLORS.palette}
-                              formatter={(value, name) => [
-                                value.toLocaleString(),
-                                "Sessions",
-                              ]}
+                              formatter={(value, name, props) => {
+                                const fullName = props?.payload?.countryFull || props?.payload?.name || name;
+                                return [`${value.toLocaleString()} sessions`, fullName];
+                              }}
                               height={350}
                             />
                           </ChartCard>
@@ -6102,6 +6307,9 @@ function ReportingDashboard({
                       }:`,
                       {
                         kpiCount: Object.keys(scrunchKPIs).length,
+                        kpiKeys: Object.keys(scrunchKPIs),
+                        brand_position_percentage: scrunchKPIs?.brand_position_percentage,
+                        brand_position_percentage_value: scrunchKPIs?.brand_position_percentage?.value,
                         hasTopPrompts:
                           !!scrunchChartData.top_performing_prompts?.length,
                         hasInsights:
@@ -6286,10 +6494,14 @@ function ReportingDashboard({
                           scrunchChartData?.top_performing_prompts ||
                           [];
 
-                        // Only show if chart is selected and data exists
+                        // Hide prompts for Dec 1-31, 2025 date range
+                        const isDec2025Range = startDate === "2025-12-01" && endDate === "2025-12-31";
+                        
+                        // Only show if chart is selected and data exists, and not Dec 2025 range
                         if (
                           topPrompts.length === 0 ||
-                          !isChartVisible("top_performing_prompts")
+                          !isChartVisible("top_performing_prompts") ||
+                          isDec2025Range
                         ) {
                           return null;
                         }
@@ -7421,6 +7633,12 @@ function ReportingDashboard({
                               showCompetitivePresence={isChartVisible("competitive_presence_analysis")}
                               showBrandPresenceTrend={isChartVisible("brand_presence_trend")}
                               showBrandSentimentAnalysis={isChartVisible("brand_sentiment_analysis_chart")}
+                              brandPositionPercentage={
+                                scrunchKPIs?.brand_position_percentage?.value ??
+                                scrunchData?.kpis?.brand_position_percentage?.value ??
+                                dashboardData?.kpis?.brand_position_percentage?.value ??
+                                null
+                              }
                             />
                           </Box>
                         )
@@ -7467,11 +7685,18 @@ function ReportingDashboard({
                         >
                           <BarChartEnhanced
                             data={dashboardData.chart_data.all_keywords_ranking.map(
-                              (kw) => ({
-                                keyword: kw.keyword || "Unknown",
-                                avgRank: kw.average_ranking || 0,
-                                avgVolume: kw.average_search_volume || 0,
-                              })
+                              (kw) => {
+                                const avgRank = kw.average_ranking;
+                                // Ensure it's always an integer, not a float
+                                const roundedRank = avgRank != null && avgRank !== undefined 
+                                  ? parseInt(Math.round(Number(avgRank)), 10)
+                                  : 0;
+                                return {
+                                  keyword: kw.keyword || "Unknown",
+                                  avgRank: roundedRank,
+                                  avgVolume: kw.average_search_volume || 0,
+                                };
+                              }
                             )}
                             dataKey="keyword"
                             horizontal={true}
@@ -7482,19 +7707,38 @@ function ReportingDashboard({
                                 color: CHART_COLORS.agencyAnalytics.primary,
                               },
                             ]}
-                            formatter={(value, name) => {
-                              if (name === "avgRank")
+                            formatter={(value, name, props, index, payload) => {
+                              // Force round ANY value for avgRank dataKey - catch all possible names
+                              if (name === "avgRank" || 
+                                  name === "Closest Approx" ||
+                                  name === "Avg Google Ranking" ||
+                                  props?.dataKey === "avgRank" ||
+                                  payload?.dataKey === "avgRank" ||
+                                  payload?.name === "Closest Approx" ||
+                                  payload?.name === "Avg Google Ranking") {
+                                const numValue = typeof value === 'number' ? value : Number(value);
+                                const rounded = Math.round(numValue);
                                 return [
-                                  `Position ${Math.round(value)}`,
+                                  `Position ${isNaN(rounded) ? 0 : rounded}`,
                                   "Avg Google Ranking",
                                 ];
-                              if (name === "avgVolume")
+                              }
+                              if (name === "avgVolume" || name === "Avg Search Volume")
                                 return [
                                   value.toLocaleString(),
                                   "Avg Search Volume",
                                 ];
+                              // For any other numeric value in range 0-100, assume it's a ranking
+                              const numValue = typeof value === 'number' ? value : Number(value);
+                              if (!isNaN(numValue) && numValue >= 0 && numValue <= 100 && numValue % 1 !== 0) {
+                                return [
+                                  `Position ${Math.round(numValue)}`,
+                                  "Avg Google Ranking",
+                                ];
+                              }
                               return [value, name];
                             }}
+                            xAxisFormatter={(value) => Math.round(value)}
                             margin={{
                               top: 5,
                               right: 30,
@@ -7506,7 +7750,7 @@ function ReportingDashboard({
                         </ChartCard>
                       )}
 
-                    {/* Keywords Overview */}
+                    {/* Keywords Overview - report: hide volume column, include zero-volume keywords */}
                     <KeywordsDashboard
                       clientId={selectedClientId}
                       selectedKPIs={
@@ -7517,6 +7761,8 @@ function ReportingDashboard({
                       startDate={startDate}
                       endDate={endDate}
                       isChartVisible={isChartVisible}
+                      hideVolumeColumn={true}
+                      includeZeroVolume={true}
                     />
                   </Box>
                 </SectionContainer>
@@ -7657,6 +7903,14 @@ function ReportingDashboard({
 
               {/* Nested Dashboard Section Selection with Accordion */}
               {[
+                {
+                  key: "ai_overview",
+                  label: "AI Overview",
+                  description:
+                    "Executive Summary - AI-generated overview of all metrics and performance trends",
+                  icon: AnalyticsIcon,
+                  color: theme.palette.info.main,
+                },
                 {
                   key: "ga4",
                   label: "Website Analytics",
@@ -7846,8 +8100,124 @@ function ReportingDashboard({
                     </AccordionSummary>
                     <AccordionDetails sx={{ px: 2, pb: 2, pt: 0 }}>
                       <Box sx={{ pl: 4.5 }}>
+                        {/* AI Overview Highlights Section */}
+                        {section.key === "ai_overview" && (
+                          <Box mb={3}>
+                            <Box
+                              display="flex"
+                              alignItems="center"
+                              justifyContent="space-between"
+                              mb={1.5}
+                            >
+                              <Typography
+                                variant="body2"
+                                fontWeight={600}
+                                sx={{ fontSize: "0.875rem" }}
+                              >
+                                Highlight cards displayed:
+                              </Typography>
+                              <Box display="flex" gap={1}>
+                                <Checkbox
+                                  checked={
+                                    tempVisibleHighlights.has("executive_summary") &&
+                                    tempVisibleHighlights.has("what_worked") &&
+                                    tempVisibleHighlights.has("what_to_watch")
+                                  }
+                                  indeterminate={
+                                    (tempVisibleHighlights.has("executive_summary") ||
+                                      tempVisibleHighlights.has("what_worked") ||
+                                      tempVisibleHighlights.has("what_to_watch")) &&
+                                    !(tempVisibleHighlights.has("executive_summary") &&
+                                      tempVisibleHighlights.has("what_worked") &&
+                                      tempVisibleHighlights.has("what_to_watch"))
+                                  }
+                                  onChange={(e) => {
+                                    const newHighlights = new Set(tempVisibleHighlights);
+                                    if (e.target.checked) {
+                                      newHighlights.add("executive_summary");
+                                      newHighlights.add("what_worked");
+                                      newHighlights.add("what_to_watch");
+                                    } else {
+                                      newHighlights.delete("executive_summary");
+                                      newHighlights.delete("what_worked");
+                                      newHighlights.delete("what_to_watch");
+                                    }
+                                    setTempVisibleHighlights(newHighlights);
+                                  }}
+                                  size="small"
+                                  sx={{
+                                    color: section.color,
+                                    "&.Mui-checked": { color: section.color },
+                                    "&.MuiCheckbox-indeterminate": { color: section.color },
+                                  }}
+                                />
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ fontSize: "0.75rem" }}
+                                >
+                                  Select All
+                                </Typography>
+                              </Box>
+                            </Box>
+                            <Box display="flex" flexDirection="column" gap={1}>
+                              {[
+                                { key: "executive_summary", label: "Executive Summary", description: "Main overview of performance trends" },
+                                { key: "what_worked", label: "What Worked", description: "Positive highlights and successes" },
+                                { key: "what_to_watch", label: "What to Watch", description: "Areas requiring attention" },
+                              ].map((highlight) => (
+                                <FormControlLabel
+                                  key={highlight.key}
+                                  control={
+                                    <Checkbox
+                                      checked={tempVisibleHighlights.has(highlight.key)}
+                                      onChange={(e) => {
+                                        const newHighlights = new Set(tempVisibleHighlights);
+                                        if (e.target.checked) {
+                                          newHighlights.add(highlight.key);
+                                        } else {
+                                          newHighlights.delete(highlight.key);
+                                        }
+                                        setTempVisibleHighlights(newHighlights);
+                                      }}
+                                      size="small"
+                                      sx={{
+                                        color: section.color,
+                                        "&.Mui-checked": { color: section.color },
+                                      }}
+                                    />
+                                  }
+                                  label={
+                                    <Box>
+                                      <Typography
+                                        variant="body2"
+                                        sx={{ fontSize: "0.875rem", fontWeight: 500 }}
+                                      >
+                                        {highlight.label}
+                                      </Typography>
+                                      <Typography
+                                        variant="caption"
+                                        color="text.secondary"
+                                        sx={{ fontSize: "0.75rem" }}
+                                      >
+                                        {highlight.description}
+                                      </Typography>
+                                    </Box>
+                                  }
+                                  sx={{
+                                    m: 0,
+                                    p: 1,
+                                    borderRadius: 1,
+                                    "&:hover": { bgcolor: alpha(section.color, 0.05) },
+                                  }}
+                                />
+                              ))}
+                            </Box>
+                          </Box>
+                        )}
+                        
                         {/* KPIs Section */}
-                        {sectionKPIs.length > 0 && (
+                        {section.key !== "ai_overview" && sectionKPIs.length > 0 && (
                           <Box mb={sectionCharts.length > 0 ? 3 : 0}>
                             <Box
                               display="flex"
@@ -8296,7 +8666,6 @@ function ReportingDashboard({
           <Button
             onClick={handleSaveKPISelection}
             variant="contained"
-            disabled={tempVisibleSections.size === 0}
             sx={{
               bgcolor: theme.palette.primary.main,
               "&:hover": {
@@ -8327,7 +8696,7 @@ function ReportingDashboard({
       >
         <DialogTitle>
           <Typography variant="h6" fontWeight={600}>
-            {editingLink ? "Edit Dashboard Link" : "Create Dashboard Link"}
+            {editingLink ? "Update Report Link" : "Create Dashboard Link"}
           </Typography>
         </DialogTitle>
         <DialogContent sx={{ position: "relative" }}>
@@ -8350,10 +8719,10 @@ function ReportingDashboard({
             >
               <CircularProgress size={40} sx={{ mb: 2 }} />
               <Typography variant="body1" color="text.secondary" fontWeight={500}>
-                Generating AI overview...
+                {visibleSections.has("ai_overview") ? "Generating AI overview..." : "Saving dashboard link..."}
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
-                This may take a few moments
+                {visibleSections.has("ai_overview") ? "This may take a few moments" : "Please wait"}
               </Typography>
             </Box>
           )}
@@ -8522,7 +8891,9 @@ function ReportingDashboard({
             sx={{ textTransform: "none" }}
             startIcon={loading ? <CircularProgress size={16} color="inherit" /> : null}
           >
-            {loading ? "Generating AI overview..." : editingLink ? "Update" : "Create"}
+            {loading 
+              ? (visibleSections.has("ai_overview") ? "Generating AI overview..." : "Saving...")
+              : editingLink ? "Update" : "Create"}
           </Button>
         </DialogActions>
       </Dialog>
