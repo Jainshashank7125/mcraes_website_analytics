@@ -14,6 +14,10 @@ Filter Types Supported:
 - cities: Geographic city filter
 - page_urls: Page path filter
 - device_categories: Device category filter
+
+NOTE: GA4 Data API uses FilterExpression objects, not raw dictionaries.
+This builder creates dict structures that can be converted to FilterExpression
+objects in the GA4 client.
 """
 
 from typing import Dict, List, Optional, Any
@@ -91,12 +95,31 @@ class GA4FilterBuilder:
                 logger.warning(f"Unknown filter dimension: {filter_key}, skipping")
                 continue
             
-            # Build filter expression
+            # Build filter expression matching GA4's exact structure
+            # GA4 uses: evaluationType: 1 (exact match), isCaseSensitive: true
+            # Our inListFilter provides exact match (equivalent to evaluationType: 1)
+            # GA4 URL shows: expressionList: ["United States"] -> maps to inListFilter.values
+            
+            normalized_values = filter_values
+            if filter_key == 'countries':
+                # GA4 country dimension uses exact country names as they appear in GA4
+                # From GA4 URL: expressionList: ["United States"] (case-sensitive exact match)
+                # Strip whitespace but preserve case - GA4 is case-sensitive
+                normalized_values = [v.strip() for v in filter_values if v and v.strip()]
+                logger.info(
+                    f"[GA4 FILTER] Country filter (exact match, case-sensitive): {normalized_values}"
+                )
+            else:
+                # For other dimensions, also preserve case and use exact match
+                normalized_values = [v.strip() for v in filter_values if v and v.strip()]
+            
+            # Build filter expression matching GA4's structure
+            # GA4 uses: type: 1 (dimension filter), fieldName: "country", inListFilter
             expressions.append({
                 "filter": {
                     "fieldName": ga4_dimension,
                     "inListFilter": {
-                        "values": filter_values
+                        "values": normalized_values
                     }
                 }
             })

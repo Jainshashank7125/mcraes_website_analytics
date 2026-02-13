@@ -39,6 +39,12 @@ class DashboardLinkRequest(BaseModel):
     selected_charts: Optional[List[str]] = None
     selected_performance_metrics_kpis: Optional[List[str]] = None
     show_change_period: Optional[Dict[str, bool]] = Field(None, description="Per-section flags for showing change period indicators")
+    # Global filters configuration for this dashboard link (applied to GA4 data)
+    # Example: {"user_type": ["new"], "countries": ["United States"], "traffic_channels": ["Organic Search"]}
+    global_filters: Optional[Dict[str, List[str]]] = Field(
+        None,
+        description="Global filters configuration for this dashboard link (user_type, traffic_channels, traffic_sources, countries, regions, cities, page_urls, conversion_types, conversion_by)",
+    )
 
 class DashboardLinkUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -54,6 +60,11 @@ class DashboardLinkUpdateRequest(BaseModel):
     selected_charts: Optional[List[str]] = None
     selected_performance_metrics_kpis: Optional[List[str]] = None
     show_change_period: Optional[Dict[str, bool]] = Field(None, description="Per-section flags for showing change period indicators")
+    # Allow updating global filters independently of other link fields
+    global_filters: Optional[Dict[str, List[str]]] = Field(
+        None,
+        description="Global filters configuration for this dashboard link (user_type, traffic_channels, traffic_sources, countries, regions, cities, page_urls, conversion_types, conversion_by)",
+    )
     executive_summary: Optional[Dict[str, Any]] = Field(None, description="Executive summary data (structured JSON)")
 
 @router.get("/data/brands")
@@ -1278,7 +1289,11 @@ async def get_reporting_dashboard(
     from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
     to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
     client_id: Optional[int] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    # NOTE: global_filters is currently intended for internal use when calling this
+    # endpoint from other route handlers (client/slug). We don't expose it as a
+    # public query parameter on this route to keep the external API stable.
+    global_filters: Optional[Dict[str, List[str]]] = None,
 ):
     """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard"""
     import time
@@ -1349,6 +1364,43 @@ async def get_reporting_dashboard(
             )
         
         kpis = {}
+        # Normalize global_filters to a dict if provided; otherwise keep as None
+        # This allows internal callers (client/slug routes) to pass filters through
+        if global_filters is not None and not isinstance(global_filters, dict):
+            try:
+                # In case a JSON string or other type is passed accidentally
+                import json
+
+                global_filters = json.loads(global_filters)
+            except Exception:
+                logger.warning(
+                    f"global_filters provided to get_reporting_dashboard but could not be parsed; value type={type(global_filters)}"
+                )
+                global_filters = None
+        
+        # Validate global_filters structure if provided
+        if global_filters is not None:
+            if not isinstance(global_filters, dict):
+                logger.warning(f"global_filters must be a dict, got {type(global_filters)}, ignoring")
+                global_filters = None
+            else:
+                # Validate that all values are lists
+                validated_filters = {}
+                for key, value in global_filters.items():
+                    if isinstance(value, list):
+                        # Filter out None values and ensure all items are strings
+                        validated_filters[key] = [str(v) for v in value if v is not None]
+                    elif value is not None:
+                        # Convert single value to list
+                        validated_filters[key] = [str(value)]
+                    # If value is None or empty, skip this filter
+                
+                if validated_filters:
+                    global_filters = validated_filters
+                    logger.info(f"Validated global_filters: {global_filters}")
+                else:
+                    logger.info("global_filters provided but all values were empty/None, treating as no filters")
+                    global_filters = None
         
         # ========== GA4 KPIs ==========
         ga4_start = time.time()
@@ -1357,12 +1409,20 @@ async def get_reporting_dashboard(
         prev_traffic_overview = None  # Initialize to avoid scope issues
         
         # Get GA4 property ID from client (primary) or brand (fallback)
+        # CRITICAL: Must use the same property ID that has the data in GA4 UI
+        # From GA4 URL: property ID is in format p321249063 (numeric part: 321249063)
         if client_id and client:
             ga4_property_id = client.get("ga4_property_id")
-            logger.info(f"GA4 check (client-centric): client_id={client_id}, ga4_property_id={ga4_property_id}")
+            logger.info(
+                f"[GA4 PROPERTY] Using client's property ID: client_id={client_id}, "
+                f"ga4_property_id={ga4_property_id}, global_filters={global_filters}"
+            )
         else:
             ga4_property_id = brand.get("ga4_property_id") if brand else None
-            logger.info(f"GA4 check (brand fallback): brand_id={brand_id}, ga4_property_id={ga4_property_id}")
+            logger.info(
+                f"[GA4 PROPERTY] Using brand's property ID: brand_id={brand_id}, "
+                f"ga4_property_id={ga4_property_id}, global_filters={global_filters}"
+            )
         
         if ga4_property_id:
             try:
@@ -1415,7 +1475,252 @@ async def get_reporting_dashboard(
                                 use_stored_snapshot = True
                                 logger.info(f"[GA4 KPI] Using latest stored KPI snapshot for brand {brand_id}, period_end_date: {kpi_snapshot['period_end_date']} (within tolerance)")
                 
-                if use_stored_snapshot:
+                # When global filters are applied, bypass stored snapshot logic and fetch
+                # filtered data directly from GA4 for maximum accuracy.
+                if global_filters:
+                    logger.info(
+                        f"[GA4 KPI] global_filters detected, fetching filtered traffic overview from GA4 for client_id={client_id}, property_id={property_id}, filters={global_filters}"
+                    )
+                    try:
+                        traffic_overview = await ga4_client.get_traffic_overview(
+                            property_id,
+                            start_date=start_date,
+                            end_date=end_date,
+                            global_filters=global_filters,
+                        )
+
+                        # Build KPI objects directly from filtered traffic_overview
+                        if traffic_overview:
+                            users = traffic_overview.get("users", 0)
+                            sessions = traffic_overview.get("sessions", 0)
+                            new_users = traffic_overview.get("newUsers", 0)
+                            bounce_rate = traffic_overview.get("bounceRate", 0)
+                            avg_session_duration = traffic_overview.get(
+                                "averageSessionDuration", 0
+                            )
+                            engagement_rate = traffic_overview.get("engagementRate", 0)
+                            engaged_sessions = traffic_overview.get("engagedSessions", 0)
+
+                            # Calculate previous period for change percentages (with same filters)
+                            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                            period_duration = (end_dt - start_dt).days + 1
+                            prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                            prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                            
+                            # Get previous period with same filters for comparison
+                            prev_traffic_overview = None
+                            try:
+                                prev_traffic_overview = await ga4_client.get_traffic_overview(
+                                    property_id,
+                                    start_date=prev_start,
+                                    end_date=prev_end,
+                                    global_filters=global_filters,
+                                )
+                            except Exception as prev_err:
+                                logger.warning(f"Could not fetch previous period with filters for comparison: {str(prev_err)}")
+                            
+                            # Calculate changes if previous period data available
+                            users_change = 0.0
+                            sessions_change = 0.0
+                            new_users_change = 0.0
+                            bounce_rate_change = 0.0
+                            avg_session_duration_change = 0.0
+                            engagement_rate_change = 0.0
+                            
+                            if prev_traffic_overview:
+                                prev_users = prev_traffic_overview.get("users", 0)
+                                prev_sessions = prev_traffic_overview.get("sessions", 0)
+                                prev_new_users = prev_traffic_overview.get("newUsers", 0)
+                                prev_bounce_rate = prev_traffic_overview.get("bounceRate", 0)
+                                prev_avg_duration = prev_traffic_overview.get("averageSessionDuration", 0)
+                                prev_engagement_rate = prev_traffic_overview.get("engagementRate", 0)
+                                
+                                if prev_users > 0:
+                                    users_change = ((users - prev_users) / prev_users) * 100
+                                if prev_sessions > 0:
+                                    sessions_change = ((sessions - prev_sessions) / prev_sessions) * 100
+                                if prev_new_users > 0:
+                                    new_users_change = ((new_users - prev_new_users) / prev_new_users) * 100
+                                elif prev_new_users == 0 and new_users > 0:
+                                    new_users_change = 100.0
+                                if prev_bounce_rate > 0:
+                                    bounce_rate_change = ((bounce_rate - prev_bounce_rate) / prev_bounce_rate) * 100
+                                if prev_avg_duration > 0:
+                                    avg_session_duration_change = ((avg_session_duration - prev_avg_duration) / prev_avg_duration) * 100
+                                if prev_engagement_rate > 0:
+                                    engagement_rate_change = ((engagement_rate - prev_engagement_rate) / prev_engagement_rate) * 100
+
+                            ga4_kpis = {
+                                "users": {
+                                    "value": users,
+                                    "change": round(users_change, 2),
+                                    "source": "GA4",
+                                    "label": "Total Users",
+                                    "icon": "People",
+                                },
+                                "sessions": {
+                                    "value": sessions,
+                                    "change": round(sessions_change, 2),
+                                    "source": "GA4",
+                                    "label": "Sessions",
+                                    "icon": "BarChart",
+                                },
+                                "new_users": {
+                                    "value": new_users,
+                                    "change": round(new_users_change, 2),
+                                    "source": "GA4",
+                                    "label": "New Users",
+                                    "icon": "PersonAdd",
+                                },
+                                "bounce_rate": {
+                                    "value": round(float(bounce_rate) * 100, 2),
+                                    "change": round(bounce_rate_change, 2),
+                                    "source": "GA4",
+                                    "label": "Bounce Rate",
+                                    "icon": "TrendingDown",
+                                    "format": "percentage",
+                                },
+                                "avg_session_duration": {
+                                    "value": round(float(avg_session_duration), 1),
+                                    "change": round(avg_session_duration_change, 2),
+                                    "source": "GA4",
+                                    "label": "Avg Session Duration",
+                                    "icon": "AccessTime",
+                                    "format": "duration",
+                                },
+                                "ga4_engagement_rate": {
+                                    "value": round(float(engagement_rate) * 100, 2),
+                                    "change": round(engagement_rate_change, 2),
+                                    "source": "GA4",
+                                    "label": "Engagement Rate",
+                                    "icon": "TrendingUp",
+                                    "format": "percentage",
+                                },
+                                "engaged_sessions": {
+                                    "value": engaged_sessions,
+                                    "change": 0.0,  # Could calculate if needed
+                                    "source": "GA4",
+                                    "label": "Engaged Sessions",
+                                    "icon": "People",
+                                },
+                            }
+
+                            logger.info(
+                                f"[GA4 KPI] Successfully loaded filtered KPIs for client_id={client_id} with global_filters={global_filters}, users={users}, sessions={sessions}"
+                            )
+                            section_times["ga4"] = time.time() - ga4_start
+                        else:
+                            # Even if traffic_overview is None or empty, create KPIs with zero values
+                            # This ensures the section stays visible even when filters return no data
+                            logger.warning(
+                                "[GA4 KPI] No traffic_overview returned when global_filters applied; creating KPIs with zero values"
+                            )
+                            ga4_kpis = {
+                                "users": {
+                                    "value": 0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Total Users",
+                                    "icon": "People",
+                                },
+                                "sessions": {
+                                    "value": 0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Sessions",
+                                    "icon": "BarChart",
+                                },
+                                "new_users": {
+                                    "value": 0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "New Users",
+                                    "icon": "PersonAdd",
+                                },
+                                "bounce_rate": {
+                                    "value": 0.0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Bounce Rate",
+                                    "icon": "TrendingDown",
+                                    "format": "percentage",
+                                },
+                                "avg_session_duration": {
+                                    "value": 0.0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Avg Session Duration",
+                                    "icon": "AccessTime",
+                                    "format": "duration",
+                                },
+                                "ga4_engagement_rate": {
+                                    "value": 0.0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Engagement Rate",
+                                    "icon": "TrendingUp",
+                                    "format": "percentage",
+                                },
+                            }
+                            section_times["ga4"] = time.time() - ga4_start
+                    except Exception as filter_err:
+                        logger.error(
+                            f"[GA4 KPI] Error fetching filtered traffic overview: {str(filter_err)}",
+                            exc_info=True
+                        )
+                        ga4_errors.append(f"Error with global_filters: {str(filter_err)}")
+                        # Create KPIs with zero values even on error, so section stays visible
+                        ga4_kpis = {
+                            "users": {
+                                "value": 0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Total Users",
+                                "icon": "People",
+                            },
+                            "sessions": {
+                                "value": 0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Sessions",
+                                "icon": "BarChart",
+                            },
+                            "new_users": {
+                                "value": 0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "New Users",
+                                "icon": "PersonAdd",
+                            },
+                            "bounce_rate": {
+                                "value": 0.0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Bounce Rate",
+                                "icon": "TrendingDown",
+                                "format": "percentage",
+                            },
+                            "avg_session_duration": {
+                                "value": 0.0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Avg Session Duration",
+                                "icon": "AccessTime",
+                                "format": "duration",
+                            },
+                            "ga4_engagement_rate": {
+                                "value": 0.0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Engagement Rate",
+                                "icon": "TrendingUp",
+                                "format": "percentage",
+                            },
+                        }
+                        section_times["ga4"] = time.time() - ga4_start
+
+                elif use_stored_snapshot:
                     # Use stored KPI snapshot
                     snapshot = kpi_snapshot
                     
@@ -2050,10 +2355,32 @@ async def get_reporting_dashboard(
                 logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
                 
                 # Use GA4 API directly to avoid aggregation issues
-                top_pages = await ga4_client.get_top_pages(property_id, start_date, end_date, limit=10)
-                traffic_sources = await ga4_client.get_traffic_sources(property_id, start_date, end_date)
-                geographic = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False)
-                devices = await ga4_client.get_device_breakdown(property_id, start_date, end_date)
+                # IMPORTANT: Pass global_filters so charts stay consistent with KPI filters
+                top_pages = await ga4_client.get_top_pages(
+                    property_id,
+                    start_date,
+                    end_date,
+                    limit=10,
+                )
+                traffic_sources = await ga4_client.get_traffic_sources(
+                    property_id,
+                    start_date,
+                    end_date,
+                    global_filters=global_filters,
+                )
+                geographic = await ga4_client.get_geographic_breakdown(
+                    property_id,
+                    start_date,
+                    end_date,
+                    limit=10,
+                    include_daily_breakdown=False,
+                    global_filters=global_filters,
+                )
+                devices = await ga4_client.get_device_breakdown(
+                    property_id,
+                    start_date,
+                    end_date,
+                )
                 
                 chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
                 chart_data["top_pages"] = top_pages if top_pages else []
@@ -3016,10 +3343,32 @@ async def get_reporting_dashboard(
                 logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
                 
                 # Use GA4 API directly to avoid aggregation issues
-                top_pages = await ga4_client.get_top_pages(property_id, start_date, end_date, limit=10)
-                traffic_sources = await ga4_client.get_traffic_sources(property_id, start_date, end_date)
-                geographic = await ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False)
-                devices = await ga4_client.get_device_breakdown(property_id, start_date, end_date)
+                # IMPORTANT: Pass global_filters so charts stay consistent with KPI filters
+                top_pages = await ga4_client.get_top_pages(
+                    property_id,
+                    start_date,
+                    end_date,
+                    limit=10,
+                )
+                traffic_sources = await ga4_client.get_traffic_sources(
+                    property_id,
+                    start_date,
+                    end_date,
+                    global_filters=global_filters,
+                )
+                geographic = await ga4_client.get_geographic_breakdown(
+                    property_id,
+                    start_date,
+                    end_date,
+                    limit=10,
+                    include_daily_breakdown=False,
+                    global_filters=global_filters,
+                )
+                devices = await ga4_client.get_device_breakdown(
+                    property_id,
+                    start_date,
+                    end_date,
+                )
                 
                 chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
                 chart_data["top_pages"] = top_pages if top_pages else []
@@ -3929,7 +4278,12 @@ async def get_reporting_dashboard_by_client(
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
     to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
-    db: Session = Depends(get_db)
+    # Global filters can be passed as JSON string via query param from frontend
+    global_filters: Optional[str] = Query(
+        None,
+        description="Global filters JSON (user_type, traffic_channels, traffic_sources, countries, regions, cities, page_urls, conversion_types, conversion_by)",
+    ),
+    db: Session = Depends(get_db),
 ):
     """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard by client ID (client-centric)
     
@@ -3963,7 +4317,48 @@ async def get_reporting_dashboard_by_client(
         # Pass client_id so GA4 queries can use it
         start_date = start_date or from_date
         end_date = end_date or to_date
-        return await get_reporting_dashboard(brand_id, start_date, end_date, client_id=client_id, db=db)
+
+        parsed_filters: Optional[Dict[str, List[str]]] = None
+        if global_filters:
+            import json
+
+            try:
+                # Handle both string and Query object types
+                # FastAPI Query params can sometimes be passed as Query objects
+                filters_str = str(global_filters) if not isinstance(global_filters, str) else global_filters
+                # If it's a Query object string representation, extract the actual value
+                if filters_str.startswith("annotation="):
+                    # This is a Query object, not a JSON string - skip parsing
+                    logger.warning(
+                        f"global_filters received as Query object for client {client_id}, "
+                        f"this usually means the frontend didn't send it correctly. "
+                        f"Treating as no filters."
+                    )
+                    parsed_filters = None
+                else:
+                    parsed_filters = json.loads(filters_str)
+                    logger.info(
+                        f"[GA4 FILTER] Successfully parsed global_filters for client {client_id}: {parsed_filters}"
+                    )
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    f"Failed to parse global_filters JSON for client {client_id}: {str(e)}; "
+                    f"value type={type(global_filters)}, value={global_filters}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Unexpected error parsing global_filters for client {client_id}: {str(e)}; "
+                    f"value type={type(global_filters)}, value={global_filters}"
+                )
+
+        return await get_reporting_dashboard(
+            brand_id,
+            start_date,
+            end_date,
+            client_id=client_id,
+            db=db,
+            global_filters=parsed_filters,
+        )
         
     except HTTPException:
         raise
@@ -3971,7 +4366,6 @@ async def get_reporting_dashboard_by_client(
         import traceback
         error_trace = traceback.format_exc()
         logger.error(f"Error fetching reporting dashboard for client {client_id}: {str(e)}\n{error_trace}")
-        raise HTTPException(status_code=500, detail=f"Error fetching reporting dashboard: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching reporting dashboard: {str(e)}")
 
 @router.get("/data/reporting-dashboard/slug/{slug}")
@@ -4028,12 +4422,25 @@ async def get_reporting_dashboard_by_slug(
             if not end_date:
                 end_date = dashboard_link["end_date"].isoformat()
             logger.info(f"Found dashboard link for slug '{slug}', client_id={client_id_for_dashboard}, date range {start_date} to {end_date}")
+            
+            # Load global_filters from dashboard link's kpi_selection if available
+            link_global_filters = None
+            if dashboard_link.get("kpi_selection") and dashboard_link["kpi_selection"].get("global_filters"):
+                link_global_filters = dashboard_link["kpi_selection"]["global_filters"]
+                logger.info(f"Loaded global_filters from dashboard link '{slug}': {link_global_filters}")
 
             if client.get("scrunch_brand_id"):
                 brand_id = client["scrunch_brand_id"]
             else:
                 try:
-                    result = await get_reporting_dashboard_by_client(client_id_for_dashboard, start_date, end_date, db=db)
+                    # Pass link_global_filters to get_reporting_dashboard_by_client if available
+                    result = await get_reporting_dashboard_by_client(
+                        client_id_for_dashboard, 
+                        start_date, 
+                        end_date, 
+                        global_filters=json.dumps(link_global_filters) if link_global_filters else None,
+                        db=db
+                    )
                     result["brand_slug"] = slug
                     result["dashboard_link"] = dashboard_link
                     kpis = result.get("kpis", {})
@@ -4167,7 +4574,15 @@ async def get_reporting_dashboard_by_slug(
             }
         
         # Call the existing get_reporting_dashboard function directly instead of making HTTP request
-        result = await get_reporting_dashboard(brand_id, start_date, end_date, client_id=client_id_for_dashboard, db=db)
+        # Use link_global_filters if available (from dashboard link), otherwise None
+        result = await get_reporting_dashboard(
+            brand_id, 
+            start_date, 
+            end_date, 
+            client_id=client_id_for_dashboard, 
+            db=db,
+            global_filters=link_global_filters
+        )
         result["brand_slug"] = slug
         if dashboard_link:
             result["dashboard_link"] = dashboard_link
@@ -6403,7 +6818,8 @@ async def upsert_dashboard_link_for_client(
         selected_charts=request.selected_charts,
         selected_performance_metrics_kpis=request.selected_performance_metrics_kpis,
         show_change_period=request.show_change_period,
-        executive_summary=request.executive_summary
+        executive_summary=request.executive_summary,
+        global_filters=request.global_filters,
     )
 
     if not link:

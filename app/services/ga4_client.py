@@ -52,14 +52,62 @@ class GA4APIClient:
         self._use_token = True  # Prefer stored tokens over service account
     
     def _apply_filters_to_request(self, request_params: Dict, global_filters: Optional[Dict[str, List[str]]], exclude_dimensions: Optional[List[str]] = None) -> Dict:
-        """Helper method to apply global filters to a GA4 request"""
+        """Helper method to apply global filters to a GA4 request
+        
+        Converts filter dict to GA4 FilterExpression object.
+        GA4 API requires FilterExpression objects, not raw dictionaries.
+        """
         from app.services.ga4_filter_builder import GA4FilterBuilder
         
-        dimension_filter = GA4FilterBuilder.build_dimension_filter(global_filters, exclude_dimensions)
-        if dimension_filter:
-            request_params["dimension_filter"] = dimension_filter
+        filter_dict = GA4FilterBuilder.build_dimension_filter(global_filters, exclude_dimensions)
+        if filter_dict:
+            # Convert dict structure to GA4 FilterExpression object
+            # GA4 API expects FilterExpression, not raw dict with andGroup
+            dimension_filter = self._dict_to_filter_expression(filter_dict)
+            if dimension_filter:
+                request_params["dimension_filter"] = dimension_filter
         
         return request_params
+    
+    def _dict_to_filter_expression(self, filter_dict: Dict) -> Optional[FilterExpression]:
+        """Convert filter dictionary to GA4 FilterExpression object
+        
+        GA4 API structure:
+        - Single filter: FilterExpression(filter=Filter(...))
+        - Multiple filters: FilterExpression(and_group=FilterExpressionList(expressions=[...]))
+        """
+        if not filter_dict:
+            return None
+        
+        # If it has andGroup, convert to FilterExpression with and_group
+        if "andGroup" in filter_dict:
+            expressions = []
+            for expr in filter_dict["andGroup"].get("expressions", []):
+                filter_obj = expr.get("filter", {})
+                field_name = filter_obj.get("fieldName")
+                in_list_filter = filter_obj.get("inListFilter")
+                
+                if field_name and in_list_filter:
+                    # Create Filter object
+                    ga4_filter = Filter(
+                        field_name=field_name,
+                        in_list_filter=Filter.InListFilter(
+                            values=in_list_filter.get("values", [])
+                        )
+                    )
+                    # Wrap in FilterExpression
+                    expressions.append(FilterExpression(filter=ga4_filter))
+            
+            if len(expressions) == 1:
+                # Single expression - return directly
+                return expressions[0]
+            elif len(expressions) > 1:
+                # Multiple expressions - use and_group
+                return FilterExpression(
+                    and_group=FilterExpressionList(expressions=expressions)
+                )
+        
+        return None
     
     def _get_credentials(self):
         """Get Google Analytics credentials - prefer stored tokens"""
@@ -134,10 +182,12 @@ class GA4APIClient:
             }
             
             # Apply global filters if provided
-            dimension_filter = GA4FilterBuilder.build_dimension_filter(global_filters)
-            if dimension_filter:
-                totals_request_params["dimension_filter"] = dimension_filter
-                logger.info(f"[GA4 FILTER] Applying filters to get_traffic_overview (totals): {GA4FilterBuilder.get_filter_summary(global_filters)}")
+            filter_dict = GA4FilterBuilder.build_dimension_filter(global_filters)
+            if filter_dict:
+                dimension_filter = self._dict_to_filter_expression(filter_dict)
+                if dimension_filter:
+                    totals_request_params["dimension_filter"] = dimension_filter
+                    logger.info(f"[GA4 FILTER] Applying filters to get_traffic_overview (totals): {GA4FilterBuilder.get_filter_summary(global_filters)}")
             
             totals_request = RunReportRequest(**totals_request_params)
             
@@ -546,10 +596,15 @@ class GA4APIClient:
             
             client = self._get_data_client()
             
-            # Build dimension filter (exclude 'countries' dimension to display selected countries)
-            dimension_filter = GA4FilterBuilder.build_dimension_filter(global_filters, exclude_dimensions=['countries'])
+            # Build dimension filter from global_filters.
+            # IMPORTANT: We do NOT exclude 'countries' here – if the user applies a
+            # Countries filter, GA4 should restrict results to those countries.
+            # This mirrors GA4 UI behavior (filter on country, then view Top Countries).
+            dimension_filter = GA4FilterBuilder.build_dimension_filter(global_filters)
             if dimension_filter and global_filters:
-                logger.info(f"[GA4 FILTER] Applying filters to get_geographic_breakdown: {GA4FilterBuilder.get_filter_summary(global_filters)}")
+                logger.info(
+                    f"[GA4 FILTER] Applying filters to get_geographic_breakdown: {GA4FilterBuilder.get_filter_summary(global_filters)}"
+                )
             
             if include_daily_breakdown:
                 # Return daily breakdown (one record per date per country)

@@ -42,6 +42,8 @@ import {
   ListItemText,
   Tabs,
   Tab,
+  Radio,
+  RadioGroup,
 } from "@mui/material";
 import {
   TrendingUp as TrendingUpIcon,
@@ -148,6 +150,7 @@ function ReportingDashboard({
   const prevClientIdRef = useRef(null);
   const prevBrandIdRef = useRef(null);
   const chartsInitializedRef = useRef(false); // Track if charts have been initialized
+  const prevGlobalFiltersRef = useRef(null); // Track previous global filters to detect changes
   const [clients, setClients] = useState([]);
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [clientSearchTerm, setClientSearchTerm] = useState("");
@@ -294,6 +297,11 @@ function ReportingDashboard({
       "what_to_watch",
     ])
   ); // For dialog
+  // Global filters state (per dashboard link / client)
+  // Structure matches backend GA4FilterBuilder expectations, e.g.:
+  // { user_type: ['new', 'returning'], countries: ['United States'], traffic_channels: ['Organic Search'] }
+  const [globalFilters, setGlobalFilters] = useState(null);
+  const [tempGlobalFilters, setTempGlobalFilters] = useState(null); // For settings dialog
   // Chart/visualization selections (for each section)
   const [selectedCharts, setSelectedCharts] = useState(new Set());
   const [tempSelectedCharts, setTempSelectedCharts] = useState(new Set()); // For dialog
@@ -886,6 +894,39 @@ function ReportingDashboard({
     publicSlug,
     manualLoadTrigger,
   ]);
+
+  // Watch globalFilters and reload dashboard when filters change
+  // This ensures filters are applied immediately when changed
+  useEffect(() => {
+    // Skip on initial mount (when prevGlobalFiltersRef.current is null and globalFilters is null)
+    if (prevGlobalFiltersRef.current === null && globalFilters === null) {
+      prevGlobalFiltersRef.current = globalFilters;
+      return;
+    }
+    
+    // Check if filters actually changed
+    const filtersChanged = JSON.stringify(prevGlobalFiltersRef.current) !== JSON.stringify(globalFilters);
+    
+    if (filtersChanged) {
+      debugLog("Global filters changed, reloading dashboard", {
+        previous: prevGlobalFiltersRef.current,
+        current: globalFilters,
+      });
+      
+      // Update ref before reloading
+      prevGlobalFiltersRef.current = globalFilters;
+      
+      // Only reload if we have a client/brand selected
+      if (selectedClientId || selectedBrandId || (isPublic && publicSlug)) {
+        // Small delay to ensure state is stable
+        const timeoutId = setTimeout(async () => {
+          await loadDashboardData();
+        }, 300);
+        
+        return () => clearTimeout(timeoutId);
+      }
+    }
+  }, [globalFilters, selectedClientId, selectedBrandId, isPublic, publicSlug]);
 
   // Ensure overview API is called when client changes and data is loaded (admin view only)
   useEffect(() => {
@@ -1498,14 +1539,17 @@ function ReportingDashboard({
         data = await reportingAPI.getReportingDashboardBySlug(
           publicSlug,
           effectiveStart,
-          effectiveEnd
+          effectiveEnd,
+          // In public view, global filters (if any) come from the dashboard link
+          globalFilters
         );
       } else if (selectedClientId) {
         // Use client-based endpoint for admin view (client-centric)
         data = await reportingAPI.getReportingDashboardByClient(
           selectedClientId,
           effectiveStart,
-          effectiveEnd
+          effectiveEnd,
+          globalFilters
         );
       } else {
         // Fallback to brand-based endpoint
@@ -2342,9 +2386,22 @@ function ReportingDashboard({
     setVisibleSections(new Set(tempVisibleSections));
     const savedHighlights = new Set(tempVisibleHighlights);
     setVisibleHighlights(savedHighlights);
-    console.log("🔍🔍🔍 SAVED SETTINGS - Highlights updated:", Array.from(savedHighlights), "Count:", savedHighlights.size);
+    console.log(
+      "🔍🔍🔍 SAVED SETTINGS - Highlights updated:",
+      Array.from(savedHighlights),
+      "Count:",
+      savedHighlights.size
+    );
     setSelectedCharts(new Set(tempSelectedCharts));
     setShowChangePeriod({ ...tempShowChangePeriod });
+    // Persist global filters from dialog into main state
+    const nextGlobalFilters =
+      tempGlobalFilters && Object.keys(tempGlobalFilters).length > 0
+        ? tempGlobalFilters
+        : null;
+    // Update global filters state
+    const filtersChanged = JSON.stringify(globalFilters) !== JSON.stringify(nextGlobalFilters);
+    setGlobalFilters(nextGlobalFilters);
     setShowKPISelector(false);
     setError(null); // Clear any previous errors
     debugLog("KPI, section, and chart selections updated in state", {
@@ -2354,7 +2411,21 @@ function ReportingDashboard({
       highlightCount: tempVisibleHighlights.size,
       chartCount: tempSelectedCharts.size,
       showChangePeriod: tempShowChangePeriod,
+      globalFilters: nextGlobalFilters,
+      filtersChanged,
     });
+    
+    // Reload dashboard data to apply filters immediately if they changed
+    // Use setTimeout to ensure state is updated before calling loadDashboardData
+    if (filtersChanged) {
+      debugLog("Global filters changed, will reload dashboard data", { 
+        oldFilters: globalFilters,
+        newFilters: nextGlobalFilters 
+      });
+      setTimeout(async () => {
+        await loadDashboardData();
+      }, 200);
+    }
   };
 
   const handleOpenKPISelector = () => {
@@ -2381,6 +2452,11 @@ function ReportingDashboard({
     setTempSelectedCharts(chartsToSelect);
     
     setTempShowChangePeriod({ ...showChangePeriod });
+    // Initialize temporary global filters for dialog
+    // Use empty object if no filters, so UI can still be edited
+    setTempGlobalFilters(globalFilters && Object.keys(globalFilters).length > 0 
+      ? { ...globalFilters } 
+      : {});
     // Expand all sections by default
     setExpandedSections(
       new Set([
@@ -2625,6 +2701,33 @@ function ReportingDashboard({
         setVisibleSections(new Set(link.kpi_selection.visible_sections));
       }
 
+      // Load global filters if present on the link's KPI selection
+      if (link.kpi_selection.global_filters) {
+        const linkFilters = link.kpi_selection.global_filters;
+        const filtersChanged = JSON.stringify(globalFilters) !== JSON.stringify(linkFilters);
+        setGlobalFilters(linkFilters);
+        debugLog("Loaded global filters from dashboard link", { 
+          linkId: link.id, 
+          filters: linkFilters,
+          filtersChanged
+        });
+        // Reload dashboard data to apply filters if they changed
+        if (filtersChanged) {
+          setTimeout(async () => {
+            await loadDashboardData();
+          }, 200);
+        }
+      } else {
+        // Clear filters if link doesn't have any
+        if (globalFilters) {
+          setGlobalFilters(null);
+          debugLog("Clearing global filters - link has no filters");
+          setTimeout(async () => {
+            await loadDashboardData();
+          }, 200);
+        }
+      }
+
       // CRITICAL: When editing a link, ALWAYS use current settings, never load old highlights
       // This ensures that when you update an old link, it uses your current highlight selections
       // The old highlights are ignored - your current settings take precedence
@@ -2768,6 +2871,10 @@ function ReportingDashboard({
         console.warn("⚠️ WARNING: No highlights selected! Saving empty array.");
       }
       payload.show_change_period = showChangePeriod;
+      // Include global filters for this dashboard link (if any)
+      if (globalFilters && Object.keys(globalFilters).length > 0) {
+        payload.global_filters = globalFilters;
+      }
 
       // Include executive summary ONLY if AI Overview section is selected
       // Check both executiveSummary state and overviewData.executive_summary
@@ -2805,6 +2912,9 @@ function ReportingDashboard({
       setLinkDialogOpen(false);
       // Reload links to get updated data (including KPI selections)
       await loadDashboardLinks();
+      // Reload dashboard data to apply any filter changes
+      // This ensures that when filters are saved with the link, they're immediately applied
+      await loadDashboardData();
       // If we just created a new link, clear editingLink so dropdown resets
       if (!editingLink) {
         setEditingLink(null);
@@ -7900,6 +8010,184 @@ function ReportingDashboard({
                 Choose which sections should be visible in the public dashboard
                 view. Each section shows specific KPIs and visualizations.
               </Typography>
+
+              {/* Global Filters - apply to all GA4 metrics for this dashboard link */}
+              <Box
+                mb={4}
+                pb={3}
+                borderBottom={`1px solid ${theme.palette.divider}`}
+              >
+                <Typography
+                  variant="subtitle1"
+                  fontWeight={700}
+                  sx={{
+                    fontSize: "1rem",
+                    letterSpacing: "-0.01em",
+                    mb: 1.5,
+                  }}
+                >
+                  Global Filters (GA4)
+                </Typography>
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  mb={2}
+                  sx={{ fontSize: "0.875rem" }}
+                >
+                  These filters apply to all GA4-based KPIs and charts for this
+                  dashboard link. Start with a small filter (for example, new
+                  users in a single country) to verify impact.
+                </Typography>
+
+                <Grid container spacing={2}>
+                  {/* User type filter */}
+                  <Grid item xs={12} sm={6}>
+                    <Typography
+                      variant="body2"
+                      fontWeight={600}
+                      sx={{ mb: 0.5, fontSize: "0.875rem" }}
+                    >
+                      User type
+                    </Typography>
+                    <RadioGroup
+                      row
+                      value={
+                        tempGlobalFilters?.user_type &&
+                        tempGlobalFilters.user_type.length > 0
+                          ? tempGlobalFilters.user_type[0]
+                          : "all"
+                      }
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setTempGlobalFilters((prev) => {
+                          const next = { ...(prev || {}) };
+                          if (value === "all") {
+                            delete next.user_type;
+                          } else {
+                            next.user_type = [value];
+                          }
+                          return next;
+                        });
+                      }}
+                    >
+                      <FormControlLabel
+                        value="all"
+                        control={<Radio size="small" />}
+                        label="All users"
+                      />
+                      <FormControlLabel
+                        value="new"
+                        control={<Radio size="small" />}
+                        label="New"
+                      />
+                      <FormControlLabel
+                        value="returning"
+                        control={<Radio size="small" />}
+                        label="Returning"
+                      />
+                    </RadioGroup>
+                  </Grid>
+
+                  {/* Country filter */}
+                  <Grid item xs={12} sm={6}>
+                    <Typography
+                      variant="body2"
+                      fontWeight={600}
+                      sx={{ mb: 0.5, fontSize: "0.875rem" }}
+                    >
+                      Countries
+                    </Typography>
+                    <Autocomplete
+                      multiple
+                      size="small"
+                      options={[
+                        "United States",
+                        "Canada",
+                        "United Kingdom",
+                        "Australia",
+                        "Germany",
+                        "France",
+                        "Italy",
+                        "Spain",
+                        "Netherlands",
+                        "Belgium",
+                        "Switzerland",
+                        "Austria",
+                        "Sweden",
+                        "Norway",
+                        "Denmark",
+                        "Finland",
+                        "Poland",
+                        "Ireland",
+                        "Portugal",
+                        "Greece",
+                        "Czech Republic",
+                        "Romania",
+                        "Hungary",
+                        "China",
+                        "Japan",
+                        "South Korea",
+                        "India",
+                        "Singapore",
+                        "Malaysia",
+                        "Thailand",
+                        "Indonesia",
+                        "Philippines",
+                        "Vietnam",
+                        "Taiwan",
+                        "Hong Kong",
+                        "New Zealand",
+                        "Brazil",
+                        "Mexico",
+                        "Argentina",
+                        "Chile",
+                        "Colombia",
+                        "Peru",
+                        "South Africa",
+                        "Egypt",
+                        "United Arab Emirates",
+                        "Saudi Arabia",
+                        "Israel",
+                        "Turkey",
+                        "Russia",
+                      ]}
+                      value={tempGlobalFilters?.countries || []}
+                      onChange={(_, newValue) => {
+                        setTempGlobalFilters((prev) => {
+                          const next = { ...(prev || {}) };
+                          const cleaned = (newValue || [])
+                            .map((v) => (typeof v === "string" ? v.trim() : ""))
+                            .filter((v) => v.length > 0);
+                          if (cleaned.length === 0) {
+                            delete next.countries;
+                          } else {
+                            next.countries = cleaned;
+                          }
+                          return next;
+                        });
+                      }}
+                      renderTags={(value, getTagProps) =>
+                        value.map((option, index) => (
+                          <Chip
+                            {...getTagProps({ index })}
+                            key={option}
+                            label={option}
+                            size="small"
+                          />
+                        ))
+                      }
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          variant="outlined"
+                          placeholder="Select countries"
+                          helperText="Select one or more countries. Leave empty for all countries."
+                        />
+                      )}
+                    />
+                  </Grid>
+                </Grid>
+              </Box>
 
               {/* Nested Dashboard Section Selection with Accordion */}
               {[

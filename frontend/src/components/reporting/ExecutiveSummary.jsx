@@ -247,8 +247,8 @@ export default function ExecutiveSummary({ summary, theme, dashboardData, visibl
       tag: 'analytics',
       tagColor: '#ff6b6b',
       requiresAttention: summary.executive_summary.toLowerCase().includes('drop') || 
-                       summary.executive_summary.toLowerCase().includes('decline') ||
-                       summary.executive_summary.toLowerCase().includes('decrease')
+                        summary.executive_summary.toLowerCase().includes('decline') ||
+                        summary.executive_summary.toLowerCase().includes('decrease')
     })
   }
 
