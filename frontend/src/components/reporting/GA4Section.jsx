@@ -10,8 +10,49 @@ import {
 import { getMonthName, getChannelLabel, getChannelColor, formatValue, getSourceColor, getSourceLabel } from './utils'
 
 export default function GA4Section({ dashboardData, formatValue, getSourceColor, getSourceLabel, theme, getMonthName, getChannelLabel, getChannelColor, shouldShowChangePeriod }) {
-  if (!dashboardData?.kpis?.users && !dashboardData?.chart_data?.ga4_traffic_overview) {
-    return null
+  // Don't hide the section even if there's no data - show empty state instead
+  // This ensures the section is visible even when filters return no results
+  const hasData = dashboardData?.kpis?.users || dashboardData?.chart_data?.ga4_traffic_overview || 
+                  dashboardData?.kpis?.sessions || dashboardData?.chart_data?.geographic_breakdown?.length > 0 ||
+                  dashboardData?.chart_data?.traffic_sources?.length > 0;
+  
+  // Always render the section header, but show empty state if no data
+  if (!hasData) {
+    return (
+      <>
+        <Typography 
+          variant="h5" 
+          fontWeight={700} 
+          sx={{ 
+            mt: 5, 
+            mb: 3,
+            fontSize: '1.5rem',
+            letterSpacing: '-0.02em',
+            color: 'text.primary'
+          }}
+        >
+          Google Analytics 4
+        </Typography>
+        <Typography 
+          variant="body2" 
+          color="text.secondary"
+          sx={{ 
+            mb: 3,
+            fontSize: '0.875rem'
+          }}
+        >
+          Website traffic and engagement metrics
+        </Typography>
+        <Box sx={{ p: 4, textAlign: 'center', color: 'text.secondary' }}>
+          <Typography variant="body1">
+            No data available for the selected filters and date range.
+          </Typography>
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            Try adjusting your filters or selecting a different date range.
+          </Typography>
+        </Box>
+      </>
+    );
   }
 
   // Get current date range label for charts

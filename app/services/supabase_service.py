@@ -3229,7 +3229,8 @@ class SupabaseService:
         selected_charts: Optional[List[str]] = None,
         selected_performance_metrics_kpis: Optional[List[str]] = None,
         show_change_period: Optional[Dict[str, bool]] = None,
-        executive_summary: Optional[Dict] = None
+        executive_summary: Optional[Dict] = None,
+        global_filters: Optional[Dict[str, List[str]]] = None,
     ) -> Optional[Dict]:
         """Create a new dashboard link for a client (always creates new, allows multiple links for same date range)"""
         try:
@@ -3279,15 +3280,25 @@ class SupabaseService:
                 link_id = link_dict.get("id")
                 
                 # Save KPI selections if provided
-                if link_id and (selected_kpis is not None or visible_sections is not None or visible_highlights is not None or selected_charts is not None or selected_performance_metrics_kpis is not None or show_change_period is not None):
+                if link_id and (
+                    selected_kpis is not None
+                    or visible_sections is not None
+                    or visible_highlights is not None
+                    or selected_charts is not None
+                    or selected_performance_metrics_kpis is not None
+                    or show_change_period is not None
+                    or global_filters is not None
+                ):
                     kpi_selection = self.upsert_dashboard_link_kpi_selection(
                         link_id=link_id,
                         selected_kpis=selected_kpis or [],
                         visible_sections=visible_sections,
                         visible_highlights=visible_highlights,
                         selected_charts=selected_charts or [],
-                        selected_performance_metrics_kpis=selected_performance_metrics_kpis or [],
-                        show_change_period=show_change_period
+                        selected_performance_metrics_kpis=selected_performance_metrics_kpis
+                        or [],
+                        show_change_period=show_change_period,
+                        global_filters=global_filters,
                     )
                     if kpi_selection:
                         link_dict["kpi_selection"] = kpi_selection
@@ -3495,8 +3506,12 @@ class SupabaseService:
             visible_sections = updates.pop("visible_sections", None)
             visible_highlights = updates.pop("visible_highlights", None)
             selected_charts = updates.pop("selected_charts", None)
-            selected_performance_metrics_kpis = updates.pop("selected_performance_metrics_kpis", None)
+            selected_performance_metrics_kpis = updates.pop(
+                "selected_performance_metrics_kpis", None
+            )
             show_change_period = updates.pop("show_change_period", None)
+            # Extract global_filters for KPI selections (stored on dashboard_link_kpi_selections)
+            global_filters = updates.pop("global_filters", None)
             # Extract executive_summary but we'll add it back to update_data if column exists
             executive_summary = updates.pop("executive_summary", None)
             
@@ -3544,15 +3559,28 @@ class SupabaseService:
             link_dict = dict(row._mapping)
             
             # Update KPI selections if provided
-            if selected_kpis is not None or visible_sections is not None or visible_highlights is not None or selected_charts is not None or selected_performance_metrics_kpis is not None or show_change_period is not None:
+            if (
+                selected_kpis is not None
+                or visible_sections is not None
+                or visible_highlights is not None
+                or selected_charts is not None
+                or selected_performance_metrics_kpis is not None
+                or show_change_period is not None
+                or global_filters is not None
+            ):
                 kpi_selection = self.upsert_dashboard_link_kpi_selection(
                     link_id=link_id,
                     selected_kpis=selected_kpis if selected_kpis is not None else [],
                     visible_sections=visible_sections,
                     visible_highlights=visible_highlights,
-                    selected_charts=selected_charts if selected_charts is not None else [],
-                    selected_performance_metrics_kpis=selected_performance_metrics_kpis if selected_performance_metrics_kpis is not None else [],
-                    show_change_period=show_change_period
+                    selected_charts=selected_charts
+                    if selected_charts is not None
+                    else [],
+                    selected_performance_metrics_kpis=selected_performance_metrics_kpis
+                    if selected_performance_metrics_kpis is not None
+                    else [],
+                    show_change_period=show_change_period,
+                    global_filters=global_filters,
                 )
                 if kpi_selection:
                     link_dict["kpi_selection"] = kpi_selection
@@ -3592,36 +3620,74 @@ class SupabaseService:
                     "visible_sections": row.visible_sections or [],
                     "selected_charts": row.selected_charts or [],
                     "created_at": row.created_at.isoformat() if row.created_at else None,
-                    "updated_at": row.updated_at.isoformat() if row.updated_at else None
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else None,
                 }
                 # Include selected_performance_metrics_kpis if the column exists
-                if hasattr(row, 'selected_performance_metrics_kpis'):
-                    result_dict["selected_performance_metrics_kpis"] = row.selected_performance_metrics_kpis or []
+                if hasattr(row, "selected_performance_metrics_kpis"):
+                    result_dict["selected_performance_metrics_kpis"] = (
+                        row.selected_performance_metrics_kpis or []
+                    )
                 # Include visible_highlights if the column exists
                 # CRITICAL: Use getattr with default None, then check if it's in the row mapping
                 try:
                     # Try to get from row attribute first
-                    visible_highlights_value = getattr(row, 'visible_highlights', None)
+                    visible_highlights_value = getattr(row, "visible_highlights", None)
                     # If that doesn't work, try from mapping
-                    if visible_highlights_value is None and hasattr(row, '_mapping'):
-                        visible_highlights_value = row._mapping.get('visible_highlights')
-                    
+                    if visible_highlights_value is None and hasattr(row, "_mapping"):
+                        visible_highlights_value = row._mapping.get("visible_highlights")
+
                     if visible_highlights_value is not None:
                         # Convert to list if it's a tuple or other iterable
                         if isinstance(visible_highlights_value, (list, tuple)):
-                            result_dict["visible_highlights"] = list(visible_highlights_value)
+                            result_dict["visible_highlights"] = list(
+                                visible_highlights_value
+                            )
                         else:
-                            result_dict["visible_highlights"] = [visible_highlights_value] if visible_highlights_value else []
-                        logger.info(f"✅ Loaded visible_highlights for link {link_id}: {result_dict.get('visible_highlights')} (type: {type(result_dict.get('visible_highlights'))})")
+                            result_dict["visible_highlights"] = (
+                                [visible_highlights_value]
+                                if visible_highlights_value
+                                else []
+                            )
+                        logger.info(
+                            f"✅ Loaded visible_highlights for link {link_id}: {result_dict.get('visible_highlights')} (type: {type(result_dict.get('visible_highlights'))})"
+                        )
                     else:
                         result_dict["visible_highlights"] = []
-                        logger.warning(f"⚠️ visible_highlights is None for link {link_id}, setting to empty array")
+                        logger.warning(
+                            f"⚠️ visible_highlights is None for link {link_id}, setting to empty array"
+                        )
                 except AttributeError:
                     # Column doesn't exist or can't be accessed
-                    logger.warning(f"Could not access visible_highlights column for link {link_id}")
+                    logger.warning(
+                        f"Could not access visible_highlights column for link {link_id}"
+                    )
                     result_dict["visible_highlights"] = []
+
+                # Include global_filters if the column exists
+                try:
+                    global_filters_value = getattr(row, "global_filters", None)
+                    if global_filters_value is None and hasattr(row, "_mapping"):
+                        global_filters_value = row._mapping.get("global_filters")
+
+                    # Store as dict; backend expects JSONB → Python dict
+                    if isinstance(global_filters_value, dict):
+                        result_dict["global_filters"] = global_filters_value
+                    elif global_filters_value is not None:
+                        # Fallback: log and still attach whatever structure we got
+                        result_dict["global_filters"] = global_filters_value
+                        logger.info(
+                            f"Loaded global_filters for link {link_id}: type={type(global_filters_value)}"
+                        )
+                    else:
+                        result_dict["global_filters"] = {}
+                except AttributeError:
+                    logger.warning(
+                        f"Could not access global_filters column for link {link_id}"
+                    )
+                    result_dict["global_filters"] = {}
+
                 # Include show_change_period if the column exists
-                if hasattr(row, 'show_change_period') and row.show_change_period:
+                if hasattr(row, "show_change_period") and row.show_change_period:
                     result_dict["show_change_period"] = row.show_change_period
                 return result_dict
             return None
@@ -3637,7 +3703,8 @@ class SupabaseService:
         visible_highlights: Optional[List[str]] = None,
         selected_charts: Optional[List[str]] = None,
         selected_performance_metrics_kpis: Optional[List[str]] = None,
-        show_change_period: Optional[Dict[str, bool]] = None
+        show_change_period: Optional[Dict[str, bool]] = None,
+        global_filters: Optional[Dict[str, List[str]]] = None,
     ) -> Optional[Dict]:
         """Create or update KPI selections for a dashboard link"""
         try:
@@ -3680,20 +3747,30 @@ class SupabaseService:
             # Only add visible_highlights if column exists
             # CRITICAL: Empty array [] is valid and should be saved (means no highlights selected)
             # Only skip if it's explicitly None (not provided in update)
-            if 'visible_highlights' in table_columns:
+            if "visible_highlights" in table_columns:
                 if visible_highlights is not None:
                     # Ensure it's a list (not tuple or other iterable)
                     if not isinstance(visible_highlights, list):
-                        visible_highlights = list(visible_highlights) if visible_highlights else []
+                        visible_highlights = (
+                            list(visible_highlights) if visible_highlights else []
+                        )
                     kpi_data["visible_highlights"] = visible_highlights
-                    logger.info(f"✅ Saving visible_highlights for link {link_id}: {visible_highlights} (type: {type(visible_highlights)}, len: {len(visible_highlights)})")
+                    logger.info(
+                        f"✅ Saving visible_highlights for link {link_id}: {visible_highlights} (type: {type(visible_highlights)}, len: {len(visible_highlights)})"
+                    )
                 else:
                     # If None, don't include it (will keep existing value on update, or be NULL on insert)
-                    logger.warning(f"⚠️ visible_highlights is None for link {link_id}, skipping (will keep existing value or be NULL)")
-            
+                    logger.warning(
+                        f"⚠️ visible_highlights is None for link {link_id}, skipping (will keep existing value or be NULL)"
+                    )
+
             # Only add show_change_period if column exists
-            if 'show_change_period' in table_columns:
+            if "show_change_period" in table_columns:
                 kpi_data["show_change_period"] = show_change_period
+
+            # Only add global_filters if column exists
+            if "global_filters" in table_columns and global_filters is not None:
+                kpi_data["global_filters"] = global_filters
             
             insert_stmt = pg_insert(table).values(
                 **kpi_data,
@@ -3707,15 +3784,19 @@ class SupabaseService:
                 "selected_performance_metrics_kpis": insert_stmt.excluded.selected_performance_metrics_kpis,
                 "updated_at": insert_stmt.excluded.updated_at,
             }
-            
+
             # Only update visible_highlights if column exists AND it was provided (not None)
             # CRITICAL: Empty array [] is valid (means no highlights), None means don't update
-            if 'visible_highlights' in table_columns and visible_highlights is not None:
+            if "visible_highlights" in table_columns and visible_highlights is not None:
                 update_set["visible_highlights"] = insert_stmt.excluded.visible_highlights
-            
+
             # Only update show_change_period if column exists
-            if 'show_change_period' in table_columns:
+            if "show_change_period" in table_columns:
                 update_set["show_change_period"] = insert_stmt.excluded.show_change_period
+
+            # Only update global_filters if column exists AND it was provided
+            if "global_filters" in table_columns and global_filters is not None:
+                update_set["global_filters"] = insert_stmt.excluded.global_filters
             
             insert_stmt = insert_stmt.on_conflict_do_update(
                 index_elements=['dashboard_link_id'],
@@ -3739,6 +3820,11 @@ class SupabaseService:
                 # Include show_change_period if the column exists
                 if hasattr(row, 'show_change_period') and row.show_change_period:
                     result_dict["show_change_period"] = row.show_change_period
+                # Include global_filters if the column exists
+                if hasattr(row, 'global_filters') and row.global_filters:
+                    result_dict["global_filters"] = row.global_filters
+                elif hasattr(row, '_mapping') and row._mapping.get('global_filters'):
+                    result_dict["global_filters"] = row._mapping.get('global_filters')
                 return result_dict
             return None
         except Exception as e:

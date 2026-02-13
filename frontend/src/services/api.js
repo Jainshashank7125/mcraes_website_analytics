@@ -912,20 +912,28 @@ export const reportingAPI = {
   },
   
   // Get consolidated reporting dashboard KPIs by client ID (client-centric)
-  getReportingDashboardByClient: async (clientId, startDate = null, endDate = null) => {
+  // Optionally accepts globalFilters object which will be JSON-encoded and sent as query param
+  getReportingDashboardByClient: async (clientId, startDate = null, endDate = null, globalFilters = null) => {
     const params = new URLSearchParams()
     if (startDate) params.append('start_date', startDate)
     if (endDate) params.append('end_date', endDate)
+    if (globalFilters && Object.keys(globalFilters).length > 0) {
+      params.append('global_filters', JSON.stringify(globalFilters))
+    }
     
     const response = await api.get(`/api/v1/data/reporting-dashboard/client/${clientId}?${params.toString()}`)
     return response.data
   },
   
   // Get consolidated reporting dashboard KPIs by slug (public access)
-  getReportingDashboardBySlug: async (slug, startDate = null, endDate = null) => {
+  // Optionally accepts globalFilters object (for future use / symmetry)
+  getReportingDashboardBySlug: async (slug, startDate = null, endDate = null, globalFilters = null) => {
     const params = new URLSearchParams()
     if (startDate) params.append('start_date', startDate)
     if (endDate) params.append('end_date', endDate)
+    if (globalFilters && Object.keys(globalFilters).length > 0) {
+      params.append('global_filters', JSON.stringify(globalFilters))
+    }
     
     const response = await api.get(`/api/v1/data/reporting-dashboard/slug/${slug}?${params.toString()}`)
     return response.data
