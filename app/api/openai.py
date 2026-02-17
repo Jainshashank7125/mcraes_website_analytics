@@ -190,6 +190,7 @@ class OverallOverviewRequest(BaseModel):
     brand_id: Optional[int] = Field(None, description="Brand ID to analyze (fallback if client_id not provided)")
     start_date: Optional[str] = Field(None, description="Start date (YYYY-MM-DD)")
     end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
+    dashboard_link_slug: Optional[str] = Field(None, description="Dashboard link slug to use selected KPIs/charts/sections from config")
 
 @router.post("/openai/metrics/review")
 @handle_api_errors(context="generating metric review")
@@ -448,9 +449,54 @@ async def generate_overall_overview(
         
         logger.info(f"[Executive Summary] Dashboard data fetched successfully - Total KPIs: {len(all_kpis)} (Main: {len(dashboard_data.get('kpis', {}))}, Scrunch: {len(scrunch_data.get('kpis', {})) if scrunch_data else 0})")
         
+        # ========== LOAD DASHBOARD LINK CONFIG IF SLUG PROVIDED ==========
+        # Filter KPIs, charts, and sections based on dashboard link configuration
+        selected_kpis: Optional[set] = None
+        selected_charts: Optional[set] = None
+        visible_sections: Optional[set] = None
+        
+        if request.dashboard_link_slug:
+            try:
+                from app.services.supabase_service import SupabaseService
+                supabase = SupabaseService(db=db)
+                dashboard_link = supabase.get_dashboard_link_by_slug(request.dashboard_link_slug)
+                
+                if dashboard_link and dashboard_link.get("kpi_selection"):
+                    kpi_selection = dashboard_link["kpi_selection"]
+                    
+                    # Extract selected KPIs
+                    if kpi_selection.get("selected_kpis") and isinstance(kpi_selection["selected_kpis"], list):
+                        selected_kpis = set(kpi_selection["selected_kpis"])
+                        logger.info(f"[Executive Summary] Loaded selected_kpis from dashboard link '{request.dashboard_link_slug}': {len(selected_kpis)} KPIs")
+                    
+                    # Extract selected charts
+                    if kpi_selection.get("selected_charts") and isinstance(kpi_selection["selected_charts"], list):
+                        selected_charts = set(kpi_selection["selected_charts"])
+                        logger.info(f"[Executive Summary] Loaded selected_charts from dashboard link '{request.dashboard_link_slug}': {len(selected_charts)} charts")
+                    
+                    # Extract visible sections
+                    if kpi_selection.get("visible_sections") and isinstance(kpi_selection["visible_sections"], list):
+                        visible_sections = set(kpi_selection["visible_sections"])
+                        logger.info(f"[Executive Summary] Loaded visible_sections from dashboard link '{request.dashboard_link_slug}': {len(visible_sections)} sections")
+                else:
+                    logger.warning(f"[Executive Summary] Dashboard link '{request.dashboard_link_slug}' found but has no kpi_selection config")
+            except Exception as e:
+                logger.warning(f"[Executive Summary] Error loading dashboard link config for slug '{request.dashboard_link_slug}': {str(e)}. Continuing without filtering.")
+        
+        # Filter KPIs by selected_kpis if provided
+        if selected_kpis and len(selected_kpis) > 0:
+            original_count = len(all_kpis)
+            all_kpis = {k: v for k, v in all_kpis.items() if k in selected_kpis}
+            logger.info(f"[Executive Summary] Filtered KPIs by selected_kpis: {original_count} → {len(all_kpis)} KPIs")
+            if len(all_kpis) == 0:
+                logger.warning(f"[Executive Summary] All KPIs filtered out by selected_kpis. This may result in empty summary.")
+        else:
+            logger.info(f"[Executive Summary] No selected_kpis filter applied - using all {len(all_kpis)} KPIs")
+        
         # ========== STRUCTURE DATA BY SECTIONS WITH KPIs AND CHARTS ==========
         # Organize data in a structured format with sections, KPIs, and chart data
-        structured_data = {
+        # Only include sections that are visible (if visible_sections is provided)
+        all_sections = {
             "GA4": {
                 "section_name": "Google Analytics 4 (Web Analytics)",
                 "kpis": [],
@@ -468,6 +514,24 @@ async def generate_overall_overview(
             }
         }
         
+        # Filter sections by visible_sections if provided
+        if visible_sections and len(visible_sections) > 0:
+            # Map section keys: visible_sections uses keys like "ga4", "agency_analytics", "scrunch_ai"
+            section_key_map = {
+                "ga4": "GA4",
+                "agency_analytics": "AgencyAnalytics",
+                "scrunch_ai": "Scrunch"
+            }
+            structured_data = {}
+            for visible_key in visible_sections:
+                mapped_key = section_key_map.get(visible_key)
+                if mapped_key and mapped_key in all_sections:
+                    structured_data[mapped_key] = all_sections[mapped_key]
+            logger.info(f"[Executive Summary] Filtered sections by visible_sections: {len(all_sections)} → {len(structured_data)} sections")
+        else:
+            structured_data = all_sections
+            logger.info(f"[Executive Summary] No visible_sections filter applied - using all {len(structured_data)} sections")
+        
         # Group KPIs by source
         for kpi_key, kpi_data in all_kpis.items():
             source = kpi_data.get("source", "Unknown")
@@ -484,31 +548,49 @@ async def generate_overall_overview(
                 structured_data[source]["kpis"].append(metric_info)
         
         # Add chart data from main dashboard
+        # Map backend chart data keys to frontend chart keys for filtering
+        chart_key_mapping = {
+            "users_over_time": ["ga4_daily_comparison_users", "ga4_daily_comparison_sessions", "ga4_daily_comparison_new_users"],
+            "traffic_sources": ["ga4_traffic_sources_distribution", "ga4_sessions_by_channel", "ga4_channel_performance"],
+            "top_pages": ["ga4_top_pages"],
+            "geographic_breakdown": ["ga4_geographic_distribution", "ga4_top_countries"],
+            "device_breakdown": ["ga4_device_breakdown"],
+            "top_campaigns": ["agency_top_campaigns"]
+        }
+        
         main_chart_data = dashboard_data.get("chart_data", {})
         if main_chart_data:
-            # GA4 Charts
+            # GA4 Charts - only include if selected_charts contains matching keys
             if main_chart_data.get("users_over_time"):
-                structured_data["GA4"]["charts"]["users_over_time"] = {
-                    "type": "line",
-                    "description": "Daily users over the reporting period",
-                    "data_points": len(main_chart_data["users_over_time"]),
-                    "sample": main_chart_data["users_over_time"][:5] if isinstance(main_chart_data["users_over_time"], list) else None
-                }
+                # Check if any of the mapped chart keys are selected
+                if not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("users_over_time", [])):
+                    structured_data["GA4"]["charts"]["users_over_time"] = {
+                        "type": "line",
+                        "description": "Daily users over the reporting period",
+                        "data_points": len(main_chart_data["users_over_time"]),
+                        "sample": main_chart_data["users_over_time"][:5] if isinstance(main_chart_data["users_over_time"], list) else None
+                    }
+            
             if main_chart_data.get("traffic_sources"):
-                structured_data["GA4"]["charts"]["traffic_sources"] = {
-                    "type": "bar",
-                    "description": "Traffic sources breakdown",
-                    "data_points": len(main_chart_data["traffic_sources"]),
-                    "top_sources": main_chart_data["traffic_sources"][:5] if isinstance(main_chart_data["traffic_sources"], list) else None
-                }
+                if not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("traffic_sources", [])):
+                    structured_data["GA4"]["charts"]["traffic_sources"] = {
+                        "type": "bar",
+                        "description": "Traffic sources breakdown",
+                        "data_points": len(main_chart_data["traffic_sources"]),
+                        "top_sources": main_chart_data["traffic_sources"][:5] if isinstance(main_chart_data["traffic_sources"], list) else None
+                    }
+            
             if main_chart_data.get("top_pages"):
-                structured_data["GA4"]["charts"]["top_pages"] = {
-                    "type": "table",
-                    "description": "Top performing pages",
-                    "data_points": len(main_chart_data["top_pages"]),
-                    "top_pages": main_chart_data["top_pages"][:5] if isinstance(main_chart_data["top_pages"], list) else None
-                }
+                if not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("top_pages", [])):
+                    structured_data["GA4"]["charts"]["top_pages"] = {
+                        "type": "table",
+                        "description": "Top performing pages",
+                        "data_points": len(main_chart_data["top_pages"]),
+                        "top_pages": main_chart_data["top_pages"][:5] if isinstance(main_chart_data["top_pages"], list) else None
+                    }
+            
             # Geographic breakdown: include ONLY if data is from North America countries; otherwise omit entirely
+            # Also check if geographic charts are selected
             geo_raw = main_chart_data.get("geographic_breakdown") or []
             if isinstance(geo_raw, list) and geo_raw:
                 geo_na = []
@@ -520,21 +602,32 @@ async def generate_overall_overview(
                     if c_lower in NORTH_AMERICA_COUNTRIES or c_lower.startswith("united states"):
                         geo_na.append({**g, "country": _normalize_country_for_overview(country)})
                 if geo_na:
-                    structured_data["GA4"]["charts"]["geographic_breakdown"] = {
-                        "type": "map",
-                        "description": "Geographic distribution of users (North America)",
-                        "data_points": len(geo_na),
-                        "top_countries": geo_na[:5]
-                    }
+                    # Only include if geographic charts are selected (or no filter applied)
+                    if not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("geographic_breakdown", [])):
+                        structured_data["GA4"]["charts"]["geographic_breakdown"] = {
+                            "type": "map",
+                            "description": "Geographic distribution of users (North America)",
+                            "data_points": len(geo_na),
+                            "top_countries": geo_na[:5]
+                        }
             
             # Agency Analytics Charts
             if main_chart_data.get("top_campaigns"):
-                structured_data["AgencyAnalytics"]["charts"]["top_campaigns"] = {
-                    "type": "bar",
-                    "description": "Top performing SEO campaigns",
-                    "data_points": len(main_chart_data["top_campaigns"]),
-                    "top_campaigns": main_chart_data["top_campaigns"][:5] if isinstance(main_chart_data["top_campaigns"], list) else None
-                }
+                if not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("top_campaigns", [])):
+                    structured_data["AgencyAnalytics"]["charts"]["top_campaigns"] = {
+                        "type": "bar",
+                        "description": "Top performing SEO campaigns",
+                        "data_points": len(main_chart_data["top_campaigns"]),
+                        "top_campaigns": main_chart_data["top_campaigns"][:5] if isinstance(main_chart_data["top_campaigns"], list) else None
+                    }
+        
+        # Log chart filtering results
+        if selected_charts and len(selected_charts) > 0:
+            total_charts = sum(len(section.get("charts", {})) for section in structured_data.values())
+            logger.info(f"[Executive Summary] Filtered charts by selected_charts: {len(selected_charts)} charts selected, {total_charts} charts included in structured data")
+        else:
+            total_charts = sum(len(section.get("charts", {})) for section in structured_data.values())
+            logger.info(f"[Executive Summary] No selected_charts filter applied - using all {total_charts} charts")
         
         # Add Scrunch chart data
         if scrunch_data and scrunch_data.get("chart_data"):
@@ -681,6 +774,8 @@ Reporting Period: {reporting_period}
 {structured_data_text}
 
 RULES: Use only the KPIs and chart data above. The data reflects the selected reporting period and client—base the summary strictly on this selection only. If a section has no data, say "Not available" or one brief line. Do not mention geography unless North America geographic data appears above; when mentioning countries use only North American names (United States, Canada, Mexico).
+
+CRITICAL - NO HALLUCINATION: ONLY reference KPIs, charts, and data points that appear in the structured data above. Do NOT mention any metrics, charts, or data points that are NOT listed above. Do NOT invent or infer any information not explicitly provided in the data sections above.
 
 You MUST return a valid JSON object with this exact structure (include "what_to_watch" — it must appear in the output):
 {{

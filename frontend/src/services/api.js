@@ -1179,12 +1179,13 @@ export const authAPI = {
 // OpenAI API endpoints
 export const openaiAPI = {
   // Get overall metrics overview (all sources combined)
-  getOverallOverview: async (clientId = null, brandId = null, startDate = null, endDate = null) => {
+  getOverallOverview: async (clientId = null, brandId = null, startDate = null, endDate = null, dashboardLinkSlug = null) => {
     const response = await api.post('/api/v1/openai/metrics/overview', {
       client_id: clientId,
       brand_id: brandId,
       start_date: startDate,
-      end_date: endDate
+      end_date: endDate,
+      dashboard_link_slug: dashboardLinkSlug
     })
     return response.data
   },
