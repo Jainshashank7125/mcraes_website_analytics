@@ -151,6 +151,7 @@ function ReportingDashboard({
   const prevBrandIdRef = useRef(null);
   const chartsInitializedRef = useRef(false); // Track if charts have been initialized
   const prevGlobalFiltersRef = useRef(null); // Track previous global filters to detect changes
+  const hasInitializedKPIsRef = useRef(false); // Track if KPIs have been initialized from data
   const [clients, setClients] = useState([]);
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [clientSearchTerm, setClientSearchTerm] = useState("");
@@ -812,6 +813,8 @@ function ReportingDashboard({
         setTempSelectedKPIs(new Set(KPI_ORDER));
         setSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
         setTempSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
+        // Reset the initialization flag so KPIs can be auto-filtered for the new client
+        hasInitializedKPIsRef.current = false;
         
         // Reset to all sections visible
         setVisibleSections(
@@ -1189,11 +1192,15 @@ function ReportingDashboard({
         endDate: linkEndDate,
       });
 
+      // Pass dashboard link slug so AI summary uses only selected KPIs/charts/sections
+      const dashboardLinkSlug = publicBrandInfo?.dashboard_link?.slug || publicSlug || null;
+
       const overview = await openaiAPI.getOverallOverview(
         clientId || undefined,
         brandId || undefined,
         linkStartDate || undefined,
-        linkEndDate || undefined
+        linkEndDate || undefined,
+        dashboardLinkSlug || undefined
       );
 
       if (overview.executive_summary) {
@@ -1284,11 +1291,32 @@ function ReportingDashboard({
     setLoadingOverview(true);
 
     try {
+      // Try to find matching dashboard link to get slug for filtering
+      // This ensures AI summary only uses selected KPIs/charts/sections
+      let dashboardLinkSlug = null;
+      if (effectiveClientId && startDate && endDate && dashboardLinks && dashboardLinks.length > 0) {
+        // Find matching link by date range and client
+        const matchingLink = dashboardLinks.find(
+          (link) =>
+            link.client_id === effectiveClientId &&
+            link.start_date === startDate &&
+            link.end_date === endDate
+        );
+        if (matchingLink && matchingLink.slug) {
+          dashboardLinkSlug = matchingLink.slug;
+          debugLog("Found matching dashboard link for AI summary filtering", {
+            slug: dashboardLinkSlug,
+            linkId: matchingLink.id,
+          });
+        }
+      }
+
       const overview = await openaiAPI.getOverallOverview(
         effectiveClientId,
         effectiveBrandId,
         startDate || undefined,
-        endDate || undefined
+        endDate || undefined,
+        dashboardLinkSlug || undefined
       );
       
       // Update overview state with the API response - ALWAYS replace previous data
@@ -1588,11 +1616,13 @@ function ReportingDashboard({
         });
         setDashboardData(data);
 
-        // On initial load, update selected KPIs to show all available KPIs from the data
+        // On initial load ONLY (when no filters are applied), update selected KPIs to show all available KPIs from the data
         // This ensures we only show KPIs that are actually available, not all from KPI_ORDER
-        // Only do this if we're still using the default (all KPIs from KPI_ORDER)
-        // and we haven't loaded selections from a dashboard link
-        if (data.kpis && !isPublic) {
+        // IMPORTANT: Only run this on the very first load when NO global filters are applied
+        // This prevents KPIs from disappearing when global filters are applied and some KPIs might be missing from response
+        // When filters are applied, we preserve the existing selectedKPIs even if some KPIs are missing from the response
+        const hasGlobalFilters = globalFilters && Object.keys(globalFilters).length > 0;
+        if (data.kpis && !isPublic && !hasInitializedKPIsRef.current && !hasGlobalFilters) {
           const availableKPIs = Object.keys(data.kpis).filter((k) =>
             KPI_ORDER.includes(k)
           );
@@ -1612,6 +1642,8 @@ function ReportingDashboard({
               setSelectedPerformanceMetricsKPIs(new Set(availableKPIs));
               setTempSelectedPerformanceMetricsKPIs(new Set(availableKPIs));
             }
+            // Mark as initialized so we don't run this again on subsequent reloads
+            hasInitializedKPIsRef.current = true;
           }
         }
 
@@ -2547,6 +2579,8 @@ function ReportingDashboard({
     setTempSelectedKPIs(new Set(KPI_ORDER));
     setSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
     setTempSelectedPerformanceMetricsKPIs(new Set(KPI_ORDER));
+    // Reset the initialization flag so KPIs can be auto-filtered again
+    hasInitializedKPIsRef.current = false;
 
     // Reset to all sections visible
     setVisibleSections(
@@ -3150,8 +3184,10 @@ function ReportingDashboard({
 
   const shouldShowKPI = (kpiKey) => {
     if (!isPublic) {
-      // In authenticated mode, always show KPIs (filtered by selectedKPIs)
-      return selectedKPIs.has(kpiKey);
+      // In authenticated (admin) mode, always show any KPI that exists in the data.
+      // We do NOT hide KPIs based on selections when filters are applied, to avoid
+      // KPIs disappearing unexpectedly (e.g., when GA4 global filters are used).
+      return true;
     }
     // In public mode, check publicKPISelections
     if (publicKPISelections === null) {
@@ -3954,7 +3990,7 @@ function ReportingDashboard({
                         sx={{ mb: { xs: 3, sm: 4 } }}
                       >
                         {/* Users KPI */}
-                        {dashboardData?.kpis?.users &&
+                        {(dashboardData?.kpis?.users !== undefined && dashboardData?.kpis?.users !== null) &&
                           shouldShowKPI("users") && (
                             <Grid item xs={6} sm={6} md={3}>
                               <motion.div
@@ -4075,7 +4111,7 @@ function ReportingDashboard({
                           )}
 
                         {/* Sessions */}
-                        {dashboardData?.kpis?.sessions &&
+                        {(dashboardData?.kpis?.sessions !== undefined && dashboardData?.kpis?.sessions !== null) &&
                           shouldShowKPI("sessions") && (
                             <Grid item xs={6} sm={6} md={3}>
                               <motion.div
@@ -4196,7 +4232,7 @@ function ReportingDashboard({
                           )}
 
                         {/* New Users */}
-                        {dashboardData?.kpis?.new_users &&
+                        {(dashboardData?.kpis?.new_users !== undefined && dashboardData?.kpis?.new_users !== null) &&
                           shouldShowKPI("new_users") && (
                             <Grid item xs={6} sm={6} md={3}>
                               <motion.div
@@ -4317,7 +4353,7 @@ function ReportingDashboard({
                               )}
 
                             {/* Engaged Sessions */}
-                            {dashboardData?.kpis?.engaged_sessions &&
+                            {(dashboardData?.kpis?.engaged_sessions !== undefined && dashboardData?.kpis?.engaged_sessions !== null) &&
                               shouldShowKPI("engaged_sessions") && (
                                 <Grid item xs={6} sm={6} md={3}>
                                   <motion.div
@@ -4438,7 +4474,7 @@ function ReportingDashboard({
                               )}
 
                             {/* Bounce Rate */}
-                            {dashboardData?.kpis?.bounce_rate &&
+                            {(dashboardData?.kpis?.bounce_rate !== undefined && dashboardData?.kpis?.bounce_rate !== null) &&
                               shouldShowKPI("bounce_rate") && (
                                 <Grid item xs={6} sm={6} md={3}>
                                   <motion.div
@@ -4557,7 +4593,7 @@ function ReportingDashboard({
                               )}
 
                             {/* Avg Session Duration */}
-                            {dashboardData?.kpis?.avg_session_duration &&
+                            {(dashboardData?.kpis?.avg_session_duration !== undefined && dashboardData?.kpis?.avg_session_duration !== null) &&
                               shouldShowKPI("avg_session_duration") && (
                                 <Grid item xs={6} sm={6} md={3}>
                                   <motion.div
@@ -4697,7 +4733,7 @@ function ReportingDashboard({
                               )}
 
                             {/* Engagement Rate */}
-                            {dashboardData?.kpis?.ga4_engagement_rate &&
+                            {(dashboardData?.kpis?.ga4_engagement_rate !== undefined && dashboardData?.kpis?.ga4_engagement_rate !== null) &&
                               shouldShowKPI("ga4_engagement_rate") && (
                                 <Grid item xs={6} sm={6} md={3}>
                                   <motion.div
