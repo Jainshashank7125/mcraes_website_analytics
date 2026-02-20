@@ -3293,10 +3293,9 @@ function ReportingDashboard({
 
   const shouldShowKPI = (kpiKey) => {
     if (!isPublic) {
-      // In authenticated (admin) mode, always show any KPI that exists in the data.
-      // We do NOT hide KPIs based on selections when filters are applied, to avoid
-      // KPIs disappearing unexpectedly (e.g., when GA4 global filters are used).
-      return true;
+      // In authenticated (admin) mode, respect selectedKPIs from the Select KPIs modal
+      // so that checking/unchecking KPIs and saving updates visibility for all sections (GA4, etc.)
+      return selectedKPIs.has(kpiKey);
     }
     // In public mode, check publicKPISelections
     if (publicKPISelections === null) {
