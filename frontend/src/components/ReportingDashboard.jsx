@@ -6121,6 +6121,7 @@ function ReportingDashboard({
                         )}
 
                         {/* Horizontal Bar Chart - Sessions by Channel */}
+                        {isChartVisible("ga4_sessions_by_channel") && (
                         <Grid item xs={12} md={6}>
                           <motion.div
                             initial={{ opacity: 0, y: 20 }}
@@ -6210,12 +6211,14 @@ function ReportingDashboard({
                             </Card>
                           </motion.div>
                         </Grid>
+                        )}
                       </Grid>
                     )}
 
                   {/* Stacked Bar Chart - Sessions vs Users by Channel */}
                   {dashboardData.chart_data?.traffic_sources &&
-                    dashboardData.chart_data.traffic_sources.length > 0 && (
+                    dashboardData.chart_data.traffic_sources.length > 0 &&
+                    isChartVisible("ga4_channel_performance") && (
                       <motion.div
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
