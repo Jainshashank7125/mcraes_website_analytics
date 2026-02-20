@@ -109,6 +109,7 @@ function Login() {
                   fullWidth
                   label="Email"
                   type="email"
+                  autoComplete="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
@@ -126,6 +127,7 @@ function Login() {
                   fullWidth
                   label="Password"
                   type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
