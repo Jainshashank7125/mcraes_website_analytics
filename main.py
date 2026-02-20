@@ -73,6 +73,15 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Debug: log request path for proxy investigation (remove after fix)
+@app.middleware("http")
+async def log_request_path(request: Request, call_next):
+    response = await call_next(request)
+    # Log path for 404s when needed
+    if response.status_code == 404:
+        logger.warning(f"404 request: method={request.method} path={request.scope.get('path')} raw_path={request.scope.get('raw_path')}")
+    return response
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -106,6 +115,11 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs"
     }
+
+@app.get("/api/v1/debug/path")
+async def debug_path(request: Request):
+    """Temporary: return request path to verify proxy."""
+    return {"path": request.url.path, "method": request.method}
 
 @app.get("/health")
 async def health_check():

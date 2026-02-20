@@ -23,9 +23,16 @@ async def sync_all_background(
     sync_mode: str = "complete",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    request = None
+    request = None,
+    brand_id: Optional[int] = None,  # When set, scope sync to this single brand only
 ):
-    """Background task to sync all Scrunch AI data"""
+    """Background task to sync all Scrunch AI data.
+
+    When brand_id is provided the sync is scoped to that single brand:
+    - Brands step is skipped (brand already exists in DB)
+    - Prompts and responses are synced only for brand_id
+    This is backward-compatible; existing callers that omit brand_id behave identically.
+    """
     # Create database session for background task
     db = SessionLocal()
     sync_job_service = SyncJobService(db=db)
@@ -44,28 +51,34 @@ async def sync_all_background(
         if sync_job_service.is_cancelled(job_id):
             logger.info(f"[Job {job_id}] Job cancelled during brand sync")
             return
-        
-        await sync_job_service.update_job_status(
-            job_id, "running", progress=10,
-            current_step="Syncing brands...", completed_steps=0, total_steps=3
-        )
-        logger.info(f"[Job {job_id}] Step 1: Syncing brands... (mode: {sync_mode})")
-        brands = await client.get_brands()
-        
-        if sync_job_service.is_cancelled(job_id):
-            logger.info(f"[Job {job_id}] Job cancelled after fetching brands")
-            return
-        
-        # For "new" mode, filter to only missing brands
-        if sync_mode == "new":
-            from app.db.models import Brand
-            existing_brand_ids = set(db.query(Brand.id).all())
-            existing_brand_ids = {row[0] for row in existing_brand_ids}
-            brands = [b for b in brands if b.get("id") not in existing_brand_ids]
-            logger.info(f"[Job {job_id}] New mode: Filtered to {len(brands)} new brands (out of {len(brands) + len(existing_brand_ids)} total)")
-        
-        brands_count = supabase.upsert_brands(brands) if brands else 0
-        logger.info(f"[Job {job_id}] Synced {brands_count} brands")
+
+        brands_count = 0
+        if brand_id:
+            # Scoped sync: brand already in DB, skip the brands API call entirely
+            logger.info(f"[Job {job_id}] Scoped sync for brand_id={brand_id} — skipping brands step")
+            brands = [{"id": brand_id}]
+        else:
+            await sync_job_service.update_job_status(
+                job_id, "running", progress=10,
+                current_step="Syncing brands...", completed_steps=0, total_steps=3
+            )
+            logger.info(f"[Job {job_id}] Step 1: Syncing brands... (mode: {sync_mode})")
+            brands = await client.get_brands()
+            
+            if sync_job_service.is_cancelled(job_id):
+                logger.info(f"[Job {job_id}] Job cancelled after fetching brands")
+                return
+            
+            # For "new" mode, filter to only missing brands
+            if sync_mode == "new":
+                from app.db.models import Brand
+                existing_brand_ids = set(db.query(Brand.id).all())
+                existing_brand_ids = {row[0] for row in existing_brand_ids}
+                brands = [b for b in brands if b.get("id") not in existing_brand_ids]
+                logger.info(f"[Job {job_id}] New mode: Filtered to {len(brands)} new brands (out of {len(brands) + len(existing_brand_ids)} total)")
+            
+            brands_count = supabase.upsert_brands(brands) if brands else 0
+            logger.info(f"[Job {job_id}] Synced {brands_count} brands")
         
         # Step 2: Sync prompts
         await sync_job_service.update_job_status(
@@ -76,9 +89,9 @@ async def sync_all_background(
         total_prompts = 0
         prompts_by_brand = []
         
-        # For "new" mode, get all brands from DB to sync prompts/responses for all
+        # For "new" mode (full sync), get all brands from DB to sync prompts/responses for all
         brands_to_process = brands
-        if sync_mode == "new":
+        if sync_mode == "new" and not brand_id:
             from app.db.models import Brand
             all_brands = db.query(Brand).all()
             brands_to_process = [{"id": b.id, "name": b.name} for b in all_brands]

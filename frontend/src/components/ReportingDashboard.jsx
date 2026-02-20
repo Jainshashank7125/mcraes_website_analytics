@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useLocation } from "react-router-dom";
 import {
   Box,
@@ -44,6 +44,7 @@ import {
   Tab,
   Radio,
   RadioGroup,
+  Collapse,
 } from "@mui/material";
 import {
   TrendingUp as TrendingUpIcon,
@@ -68,6 +69,10 @@ import {
   ExpandMore as ExpandMoreIcon,
   Analytics as AnalyticsIcon,
   Insights as InsightsIcon,
+  CloudSync as CloudSyncIcon,
+  Close as CloseIcon,
+  ExpandLess as ExpandLessIcon,
+  Error as ErrorIcon,
 } from "@mui/icons-material";
 import { motion } from "framer-motion";
 import {
@@ -135,6 +140,29 @@ const DATE_PRESETS = [
 // Helper function to get month name
 // getMonthName is now imported from utils
 
+// Error boundary so a render error shows fallback instead of blank page
+class ReportingErrorBoundary extends React.Component {
+  state = { hasError: false };
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <Box sx={{ p: 3, textAlign: "center" }}>
+          <Typography variant="h6" color="text.secondary" gutterBottom>
+            Something went wrong on this page.
+          </Typography>
+          <Button variant="contained" onClick={() => window.location.reload()}>
+            Reload page
+          </Button>
+        </Box>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function ReportingDashboard({
   publicSlug,
   brandInfo: publicBrandInfo,
@@ -145,6 +173,11 @@ function ReportingDashboard({
   const isPublic = !!publicSlug;
   const location = useLocation();
   const hasHandledNavigationClientId = useRef(false); // Track if we've handled clientId from navigation state
+
+  // ── Per-client sync state (mirrors ClientsList) ───────────────────────────
+  const [clientSync, setClientSync] = useState(null) // { allJobIds, jobStatuses, status, progress, currentStep, error, collapsed }
+  const syncPollRef = useRef(null)
+
   // Track previous client/brand IDs to detect actual client changes (not just date changes)
   // Dashboard links should persist when only dates change, but be cleared when client changes
   const prevClientIdRef = useRef(null);
@@ -360,32 +393,108 @@ function ReportingDashboard({
     setManualLoadTrigger(prev => prev + 1);
   };
 
-  // Handle refresh button click - reloads all data and regenerates overview
-  const handleRefresh = async () => {
-    // Clear overview cache to force fresh fetch
-    setOverviewData(null);
-    setOverviewCacheKey(null);
-    setExecutiveSummary(null);
-    setExecutiveSummaryCacheKey(null);
-    
-    // Capture current client/brand IDs before reloading to ensure correct IDs are used
-    const currentClientId = selectedClientId;
-    const currentBrandId = selectedBrandId;
-    
-    // Reload all data (loadDashboardData will automatically call generateOverviewAutomatically)
-    await loadAllData();
-    
-    // Explicitly call overview API after data is loaded to ensure it's refreshed
-    // This is a safety measure in case auto-generation doesn't trigger
-    if (!isPublic && (currentClientId || currentBrandId)) {
-      // Wait for state to update after loadAllData completes
-      setTimeout(() => {
-        // generateOverviewAutomatically will use current state values if data is not provided
-        // But we pass the captured IDs to ensure they match the loaded data
-        generateOverviewAutomatically(null, currentClientId, currentBrandId);
-      }, 400);
+  // ── Sync helpers (same logic as ClientsList) ─────────────────────────────
+  const deriveClientSyncStatus = (jobStatuses) => {
+    const vals = Object.values(jobStatuses || {})
+    if (vals.length === 0) return 'pending'
+    if (vals.some(s => s === 'failed')) return 'failed'
+    if (vals.some(s => s === 'running')) return 'running'
+    if (vals.some(s => s === 'pending')) return 'pending'
+    return 'completed'
+  }
+
+  const pollSync = useCallback(async () => {
+    setClientSync(prev => {
+      if (!prev) return prev
+      const active = Object.values(prev.jobStatuses || {}).filter(s => ['pending','running'].includes(s))
+      if (active.length === 0) return prev
+      return prev
+    })
+    setClientSync(prev => {
+      if (!prev) return prev
+      const allJobIds = prev.allJobIds || []
+      const activeIds = allJobIds.filter(jid => ['pending','running'].includes((prev.jobStatuses || {})[jid]))
+      if (activeIds.length === 0) return prev
+      // fire polls asynchronously, update state on response
+      Promise.all(activeIds.map(async jid => {
+        try { return { jid, job: await syncAPI.getSyncJobStatus(jid) } } catch { return { jid, job: null } }
+      })).then(results => {
+        setClientSync(cur => {
+          if (!cur) return cur
+          const jobStatuses = { ...(cur.jobStatuses || {}) }
+          let latestStep = cur.currentStep
+          let totalProg = 0, counted = 0
+          results.forEach(({ jid, job }) => {
+            if (!job) return
+            jobStatuses[jid] = job.status
+            if (job.current_step) latestStep = job.current_step
+            totalProg += job.progress ?? 0
+            counted++
+          })
+          const avgProg = counted > 0 ? Math.round(totalProg / counted) : cur.progress
+          const combinedStatus = deriveClientSyncStatus(jobStatuses)
+          const errors = results.filter(r => r.job?.status === 'failed').map(r => r.job?.error_message).filter(Boolean)
+          return { ...cur, jobStatuses, status: combinedStatus, progress: avgProg, currentStep: latestStep, error: errors.join('; ') || null }
+        })
+      })
+      return prev
+    })
+  }, [])
+
+  // Start/stop polling interval
+  useEffect(() => {
+    const isActive = clientSync && ['pending','running'].includes(clientSync.status)
+    if (isActive) {
+      if (!syncPollRef.current) syncPollRef.current = setInterval(pollSync, 15000)
+    } else {
+      if (syncPollRef.current) { clearInterval(syncPollRef.current); syncPollRef.current = null }
     }
-  };
+    return () => {}
+  }, [clientSync, pollSync])
+
+  // Auto-dismiss after 8 s once done
+  useEffect(() => {
+    if (!clientSync || !['completed','failed'].includes(clientSync.status)) return
+    const t = setTimeout(() => setClientSync(null), 8000)
+    return () => clearTimeout(t)
+  }, [clientSync])
+
+  // Clear sync panel when client changes
+  useEffect(() => {
+    setClientSync(null)
+    if (syncPollRef.current) { clearInterval(syncPollRef.current); syncPollRef.current = null }
+  }, [selectedClientId])
+
+  const handleSyncCurrentClient = async (e) => {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault()
+    if (e && typeof e.stopPropagation === 'function') e.stopPropagation()
+
+    const syncId = selectedClientId || promptsClientId
+    if (!syncId) return
+    if (clientSync && ['pending','running'].includes(clientSync.status)) return
+
+    setClientSync({ allJobIds: [], jobStatuses: {}, status: 'pending', progress: 0, currentStep: 'Starting sync...', error: null, collapsed: false })
+
+    try {
+      const result = await syncAPI.syncClient(syncId, startDate, endDate)
+      const allJobIds = result?.all_job_ids || []
+      const jobIds = result?.job_ids || {}
+      const jobStatuses = {}
+      allJobIds.forEach(jid => { jobStatuses[jid] = 'pending' })
+
+      const parts = []
+      if (jobIds.ga4) parts.push('GA4')
+      if (jobIds.agency_analytics?.length) parts.push(`Agency Analytics (${jobIds.agency_analytics.length} campaign${jobIds.agency_analytics.length > 1 ? 's' : ''})`)
+      if (jobIds.scrunch) parts.push('Scrunch AI')
+      const stepLabel = parts.length ? `Syncing: ${parts.join(', ')}` : 'No integrations configured'
+
+      setClientSync({ allJobIds, jobStatuses, status: allJobIds.length > 0 ? 'running' : 'completed', progress: 0, currentStep: stepLabel, error: null, collapsed: false })
+      if (allJobIds.length > 0) setTimeout(pollSync, 2000)
+    } catch (err) {
+      debugError('Failed to start client sync:', err)
+      setClientSync(prev => ({ ...(prev || {}), status: 'failed', currentStep: 'Failed to start sync.', error: err?.response?.data?.detail || err?.message || 'Unknown error' }))
+    }
+  }
 
   // Helper to set dates based on month selection (admin only)
   const applyMonthSelection = useCallback((monthStr) => {
@@ -3291,6 +3400,7 @@ function ReportingDashboard({
   const displayedKPIs = performanceMetricsKPIs;
 
   return (
+    <ReportingErrorBoundary>
     <Box sx={{ p: 3 }}>
       {/* Progress loader for public reporting page */}
       {isPublic && isLoadingReport && (
@@ -3339,6 +3449,45 @@ function ReportingDashboard({
           boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
         }}
       >
+        {/* Sync button - always visible, no conditional */}
+        <Box display="flex" justifyContent="flex-end" alignItems="center" mb={1}>
+          <Tooltip title={
+            !(selectedClientId || promptsClientId) ? 'Select a client to sync' :
+            !clientSync ? `Sync client data (${startDate || 'start'} → ${endDate || 'end'})` :
+            clientSync.status === 'running' || clientSync.status === 'pending' ? `Syncing… ${clientSync.progress || 0}%` :
+            clientSync.status === 'completed' ? 'Sync complete ✓' :
+            'Sync failed — click to retry'
+          } arrow>
+            <span>
+              <Button
+                type="button"
+                variant="contained"
+                color="primary"
+                size="small"
+                startIcon={
+                  clientSync && ['pending','running'].includes(clientSync?.status)
+                    ? <CircularProgress size={14} thickness={5} sx={{ color: 'inherit' }} />
+                    : clientSync?.status === 'completed'
+                    ? <CheckCircleIcon sx={{ fontSize: 16 }} />
+                    : <CloudSyncIcon />
+                }
+                disabled={!(selectedClientId || promptsClientId) || (clientSync && ['pending','running'].includes(clientSync?.status))}
+                onClick={(e) => {
+                  e?.preventDefault?.(); e?.stopPropagation?.();
+                  if (e?.stopImmediatePropagation) e.stopImmediatePropagation();
+                  handleSyncCurrentClient(e);
+                }}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  bgcolor: clientSync?.status === 'completed' ? 'success.main' : clientSync?.status === 'failed' ? 'error.main' : undefined,
+                }}
+              >
+                {clientSync && ['pending','running'].includes(clientSync?.status) ? 'Syncing…' : 'Sync client data'}
+              </Button>
+            </span>
+          </Tooltip>
+        </Box>
         <Box
           display="flex"
           justifyContent="space-between"
@@ -3416,7 +3565,7 @@ function ReportingDashboard({
               return "MacRAE'S Reporting Dashboard";
             })()}
           </Typography>
-
+         
           {/* Buttons - Right side */}
           <Box display="flex" gap={1.5} sx={{ flexShrink: 0 }}>
             {/* AI Overview button - only show in admin view */}
@@ -3466,27 +3615,97 @@ function ReportingDashboard({
                 <SettingsIcon sx={{ fontSize: 20 }} />
               </IconButton>
             )}
-            {/* Refresh button - only show in admin view */}
-            {!isPublic && (
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<RefreshIcon sx={{ fontSize: 16 }} />}
-              onClick={handleRefresh}
-              sx={{
-                borderRadius: 2,
-                px: 2,
-                py: 0.75,
-                fontWeight: 600,
-                bgcolor: "background.paper",
-              }}
-            >
-              Refresh
-            </Button>
-            )}
+            {/* Sync client data - always visible, no conditional */}
+            <Tooltip title={
+              !(selectedClientId || promptsClientId) ? 'Select a client to sync' :
+              !clientSync ? `Sync client data (${startDate || 'start'} → ${endDate || 'end'})` :
+              clientSync.status === 'running' || clientSync.status === 'pending' ? `Syncing… ${clientSync.progress || 0}%` :
+              clientSync.status === 'completed' ? 'Sync complete ✓' :
+              'Sync failed — click to retry'
+            } arrow>
+              <span>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  disabled={!(selectedClientId || promptsClientId) || (clientSync && ['pending','running'].includes(clientSync.status))}
+                  type="button"
+                  onClick={(e) => { e?.preventDefault?.(); e?.stopPropagation?.(); handleSyncCurrentClient(e); }}
+                    startIcon={
+                      clientSync && ['pending','running'].includes(clientSync.status)
+                        ? <CircularProgress size={14} thickness={5} sx={{ color: 'inherit' }} />
+                        : clientSync?.status === 'completed'
+                        ? <CheckCircleIcon sx={{ fontSize: 16, color: 'success.main' }} />
+                        : <CloudSyncIcon sx={{ fontSize: 16 }} />
+                    }
+                    sx={{
+                      borderRadius: 2,
+                      px: 2,
+                      py: 0.75,
+                      fontWeight: 600,
+                      textTransform: 'none',
+                      fontSize: '0.875rem',
+                      bgcolor: 'background.paper',
+                      borderColor: clientSync?.status === 'completed'
+                        ? 'success.main'
+                        : clientSync?.status === 'failed'
+                        ? 'error.main'
+                        : theme.palette.divider,
+                      color: clientSync?.status === 'completed'
+                        ? 'success.main'
+                        : clientSync?.status === 'failed'
+                        ? 'error.main'
+                        : 'text.primary',
+                      '&:hover': {
+                        bgcolor: alpha(theme.palette.info.main, 0.05),
+                        borderColor: theme.palette.info.main,
+                        color: theme.palette.info.main,
+                      },
+                    }}
+                  >
+                    {clientSync && ['pending','running'].includes(clientSync.status) ? 'Syncing…' : 'Sync client data'}
+                  </Button>
+              </span>
+            </Tooltip>
           </Box>
         </Box>
-
+        <Box display="flex" alignItems="center" gap={1}>
+          <Tooltip title={
+            !(selectedClientId || promptsClientId) ? 'Select a client to sync' :
+            !clientSync ? `Sync client data (${startDate || 'start'} → ${endDate || 'end'})` :
+            clientSync.status === 'running' || clientSync.status === 'pending' ? `Syncing… ${clientSync.progress || 0}%` :
+            clientSync.status === 'completed' ? 'Sync complete ✓' :
+            'Sync failed — click to retry'
+          } arrow>
+            <span>
+              <Button
+                type="button"
+                variant="contained"
+                color="primary"
+                size="small"
+                startIcon={
+                  clientSync && ['pending','running'].includes(clientSync.status)
+                    ? <CircularProgress size={14} thickness={5} sx={{ color: 'inherit' }} />
+                    : clientSync?.status === 'completed'
+                    ? <CheckCircleIcon sx={{ fontSize: 16 }} />
+                    : <CloudSyncIcon />
+                }
+                disabled={!(selectedClientId || promptsClientId) || (clientSync && ['pending','running'].includes(clientSync?.status))}
+                onClick={(e) => {
+                  e?.preventDefault?.(); e?.stopPropagation?.();
+                  if (e?.stopImmediatePropagation) e.stopImmediatePropagation();
+                  handleSyncCurrentClient(e);
+                }}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  bgcolor: clientSync?.status === 'completed' ? 'success.main' : clientSync?.status === 'failed' ? 'error.main' : undefined,
+                }}
+              >
+                {clientSync && ['pending','running'].includes(clientSync?.status) ? 'Syncing…' : 'Sync client data'}
+              </Button>
+            </span>
+          </Tooltip>
+        </Box>
         {/* Date Range Display for Public View */}
         {isPublic && startDate && endDate && (
           <Paper
@@ -3539,6 +3758,42 @@ function ReportingDashboard({
               bgcolor: "background.paper",
             }}
           >
+            {/* Sync - first in row so always visible */}
+            <Tooltip title={
+              !(selectedClientId || promptsClientId) ? 'Select a client first' :
+              clientSync && ['pending','running'].includes(clientSync.status) ? `Syncing… ${clientSync.progress || 0}%` :
+              clientSync?.status === 'completed' ? 'Sync complete ✓' :
+              clientSync?.status === 'failed' ? 'Sync failed — click to retry' :
+              `Sync GA4, Agency Analytics & Scrunch (${startDate || 'start'} – ${endDate || 'end'})`
+            } arrow>
+              <span style={{ flexShrink: 0 }}>
+                <Button
+                  data-testid="reporting-sync-btn"
+                  variant="contained"
+                  color="primary"
+                  size="medium"
+                  disabled={!(selectedClientId || promptsClientId) || (clientSync && ['pending','running'].includes(clientSync.status))}
+                  type="button"
+                  onClick={(e) => { e?.preventDefault?.(); e?.stopPropagation?.(); handleSyncCurrentClient(e); }}
+                  startIcon={
+                    clientSync && ['pending','running'].includes(clientSync.status)
+                      ? <CircularProgress size={16} thickness={5} sx={{ color: 'inherit' }} />
+                      : clientSync?.status === 'completed'
+                      ? <CheckCircleIcon sx={{ fontSize: 18, color: 'white' }} />
+                      : <CloudSyncIcon sx={{ fontSize: 18 }} />
+                  }
+                  sx={{
+                    minWidth: 120,
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    flexShrink: 0,
+                    bgcolor: clientSync?.status === 'completed' ? 'success.main' : clientSync?.status === 'failed' ? 'error.main' : undefined,
+                  }}
+                >
+                  {clientSync && ['pending','running'].includes(clientSync.status) ? 'Syncing…' : 'Sync'}
+                </Button>
+              </span>
+            </Tooltip>
             <Autocomplete
               size="small"
               sx={{ minWidth: 300 }}
@@ -3647,6 +3902,28 @@ function ReportingDashboard({
                     }}
                   >
                     Load Data
+                  </Button>
+                  {/* Sync - plain button next to Load Data so it always shows */}
+                  <Button
+                    variant="contained"
+                    size="medium"
+                    color="primary"
+                    startIcon={
+                      clientSync && ['pending','running'].includes(clientSync?.status)
+                        ? <CircularProgress size={16} thickness={5} sx={{ color: 'inherit' }} />
+                        : <CloudSyncIcon sx={{ fontSize: 18 }} />
+                    }
+                    disabled={!(selectedClientId || promptsClientId) || (clientSync && ['pending','running'].includes(clientSync?.status))}
+                    onClick={(e) => { e?.preventDefault?.(); e?.stopPropagation?.(); handleSyncCurrentClient(e); }}
+                    sx={{
+                      minWidth: 120,
+                      textTransform: 'none',
+                      fontWeight: 600,
+                      flexShrink: 0,
+                      bgcolor: clientSync?.status === 'completed' ? 'success.main' : clientSync?.status === 'failed' ? 'error.main' : undefined,
+                    }}
+                  >
+                    {clientSync && ['pending','running'].includes(clientSync?.status) ? 'Syncing…' : 'Sync'}
                   </Button>
                 </Box>
                 
@@ -9605,7 +9882,82 @@ function ReportingDashboard({
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* ── Floating sync progress panel ──────────────────────────────── */}
+      {clientSync && (
+        <Box sx={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 1400, width: 320,
+          borderRadius: 2.5, overflow: 'hidden',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.10)',
+          border: `1px solid ${theme.palette.divider}`, bgcolor: 'background.paper',
+        }}>
+          {/* Header */}
+          <Box sx={{
+            display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1.25,
+            background: `linear-gradient(135deg, ${theme.palette.primary.main} 0%, ${theme.palette.primary.dark} 100%)`,
+            cursor: 'pointer',
+          }} onClick={() => setClientSync(p => ({ ...p, collapsed: !p?.collapsed }))}>
+            <CloudSyncIcon sx={{ color: 'white', fontSize: 18 }} />
+            <Typography variant="body2" fontWeight={700} color="white" sx={{ flex: 1, fontSize: '0.8125rem' }}>
+              Client Sync
+              {['pending','running'].includes(clientSync.status) && ` · ${clientSync.progress || 0}%`}
+              {clientSync.status === 'completed' && ' · Complete'}
+              {clientSync.status === 'failed' && ' · Failed'}
+            </Typography>
+            <IconButton size="small" sx={{ color: 'white', p: 0.25 }}
+              onClick={e => { e.stopPropagation(); setClientSync(p => ({ ...p, collapsed: !p?.collapsed })) }}>
+              {clientSync.collapsed
+                ? <ExpandMoreIcon sx={{ fontSize: 18 }} />
+                : <ExpandLessIcon sx={{ fontSize: 18 }} />}
+            </IconButton>
+            {['completed','failed'].includes(clientSync.status) && (
+              <IconButton size="small" sx={{ color: 'white', p: 0.25 }}
+                onClick={e => { e.stopPropagation(); setClientSync(null) }}>
+                <CloseIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            )}
+          </Box>
+
+          <Collapse in={!clientSync.collapsed}>
+            <Box sx={{ px: 2, py: 1.5 }}>
+              {/* Progress bar */}
+              <LinearProgress
+                variant={clientSync.status === 'pending' ? 'indeterminate' : 'determinate'}
+                value={clientSync.progress || 0}
+                sx={{
+                  height: 6, borderRadius: 3, mb: 1,
+                  bgcolor: alpha(
+                    clientSync.status === 'completed' ? theme.palette.success.main :
+                    clientSync.status === 'failed' ? theme.palette.error.main :
+                    theme.palette.primary.main, 0.12),
+                  '& .MuiLinearProgress-bar': {
+                    borderRadius: 3,
+                    bgcolor: clientSync.status === 'completed' ? theme.palette.success.main :
+                             clientSync.status === 'failed' ? theme.palette.error.main :
+                             theme.palette.primary.main,
+                  },
+                }}
+              />
+              {/* Current step */}
+              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem', display: 'block', lineHeight: 1.5 }}>
+                {clientSync.status === 'failed' && clientSync.error
+                  ? clientSync.error
+                  : clientSync.status === 'completed'
+                  ? 'All data synced successfully.'
+                  : clientSync.currentStep || 'Processing…'}
+              </Typography>
+              {['pending','running'].includes(clientSync.status) && (
+                <Typography variant="caption" sx={{ fontSize: '0.6875rem', color: theme.palette.primary.main, fontWeight: 700, mt: 0.5, display: 'block' }}>
+                  {clientSync.progress || 0}% complete
+                </Typography>
+              )}
+            </Box>
+          </Collapse>
+        </Box>
+      )}
+
     </Box>
+    </ReportingErrorBoundary>
   );
 }
 

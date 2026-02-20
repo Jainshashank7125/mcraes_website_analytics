@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Box,
@@ -29,6 +29,7 @@ import {
   DialogContent,
   DialogContentText,
   DialogActions,
+  Collapse,
 } from '@mui/material'
 import {
   Business as BusinessIcon,
@@ -42,12 +43,188 @@ import {
   OpenInNew as OpenInNewIcon,
   Tag as TagIcon,
   Delete as DeleteIcon,
+  CloudSync as CloudSyncIcon,
+  CheckCircle as CheckCircleIcon,
+  Error as ErrorIcon,
+  Close as CloseIcon,
+  ExpandLess as ExpandLessIcon,
+  ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { clientAPI, ga4API, dataAPI } from '../services/api'
+import { clientAPI, ga4API, dataAPI, syncAPI } from '../services/api'
 import { debugError } from '../utils/debug'
 import { queryKeys } from '../hooks/queryKeys'
 import ClientManagement from './ClientManagement'
+
+// ─── Client Sync Progress Panel ─────────────────────────────────────────────
+function ClientSyncProgressPanel({ syncs, onDismiss }) {
+  const theme = useTheme()
+  const [collapsed, setCollapsed] = useState(false)
+
+  const entries = Object.values(syncs)
+  if (entries.length === 0) return null
+
+  const activeCount = entries.filter(s => ['pending', 'running'].includes(s.status)).length
+  const completedCount = entries.filter(s => s.status === 'completed').length
+  const failedCount = entries.filter(s => s.status === 'failed').length
+
+  const statusColor = (status) => {
+    if (status === 'completed') return theme.palette.success.main
+    if (status === 'failed') return theme.palette.error.main
+    if (status === 'running') return theme.palette.primary.main
+    return theme.palette.warning.main
+  }
+
+  const statusLabel = (status) => {
+    if (status === 'completed') return 'Complete'
+    if (status === 'failed') return 'Failed'
+    if (status === 'running') return 'Running'
+    return 'Pending'
+  }
+
+  return (
+    <Box
+      sx={{
+        position: 'fixed',
+        bottom: 24,
+        right: 24,
+        zIndex: 1400,
+        width: 340,
+        borderRadius: 2.5,
+        overflow: 'hidden',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.10)',
+        border: `1px solid ${theme.palette.divider}`,
+        bgcolor: 'background.paper',
+      }}
+    >
+      {/* Header */}
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+          px: 2,
+          py: 1.25,
+          background: `linear-gradient(135deg, ${theme.palette.primary.main} 0%, ${theme.palette.primary.dark} 100%)`,
+          cursor: 'pointer',
+        }}
+        onClick={() => setCollapsed(c => !c)}
+      >
+        <CloudSyncIcon sx={{ color: 'white', fontSize: 18 }} />
+        <Typography variant="body2" fontWeight={700} color="white" sx={{ flex: 1, fontSize: '0.8125rem' }}>
+          Client Sync
+          {activeCount > 0 && ` · ${activeCount} running`}
+          {completedCount > 0 && ` · ${completedCount} done`}
+          {failedCount > 0 && ` · ${failedCount} failed`}
+        </Typography>
+        <IconButton size="small" sx={{ color: 'white', p: 0.25 }}
+          onClick={e => { e.stopPropagation(); setCollapsed(c => !c) }}>
+          {collapsed ? <ExpandMoreIcon sx={{ fontSize: 18 }} /> : <ExpandLessIcon sx={{ fontSize: 18 }} />}
+        </IconButton>
+      </Box>
+
+      {/* Sync cards */}
+      <Collapse in={!collapsed}>
+        <Box sx={{ maxHeight: 420, overflowY: 'auto' }}>
+          {entries.map(sync => (
+            <Box
+              key={sync.clientId}
+              sx={{
+                px: 2,
+                py: 1.5,
+                borderBottom: `1px solid ${theme.palette.divider}`,
+                '&:last-child': { borderBottom: 'none' },
+              }}
+            >
+              {/* Row: name + status chip + dismiss */}
+              <Box display="flex" alignItems="center" gap={1} mb={0.75}>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography
+                    variant="body2"
+                    fontWeight={600}
+                    sx={{ fontSize: '0.8125rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                  >
+                    {sync.clientName}
+                  </Typography>
+                </Box>
+                <Chip
+                  label={statusLabel(sync.status)}
+                  size="small"
+                  icon={
+                    sync.status === 'completed' ? <CheckCircleIcon style={{ fontSize: 12 }} /> :
+                    sync.status === 'failed' ? <ErrorIcon style={{ fontSize: 12 }} /> :
+                    sync.status === 'running' ? <CircularProgress size={10} thickness={5} style={{ color: 'white' }} /> :
+                    null
+                  }
+                  sx={{
+                    height: 20,
+                    fontSize: '0.6875rem',
+                    fontWeight: 700,
+                    bgcolor: alpha(statusColor(sync.status), 0.12),
+                    color: statusColor(sync.status),
+                    border: `1px solid ${alpha(statusColor(sync.status), 0.3)}`,
+                    '& .MuiChip-icon': { color: statusColor(sync.status) },
+                  }}
+                />
+                {['completed', 'failed'].includes(sync.status) && (
+                  <IconButton size="small" sx={{ p: 0.25, color: 'text.secondary' }} onClick={() => onDismiss(sync.clientId)}>
+                    <CloseIcon sx={{ fontSize: 14 }} />
+                  </IconButton>
+                )}
+              </Box>
+
+              {/* Progress bar */}
+              <LinearProgress
+                variant={sync.status === 'pending' ? 'indeterminate' : 'determinate'}
+                value={sync.progress || 0}
+                sx={{
+                  height: 5,
+                  borderRadius: 3,
+                  mb: 0.75,
+                  bgcolor: alpha(statusColor(sync.status), 0.12),
+                  '& .MuiLinearProgress-bar': {
+                    borderRadius: 3,
+                    bgcolor: statusColor(sync.status),
+                    ...(sync.status === 'running' && {
+                      backgroundImage: `linear-gradient(90deg, ${statusColor(sync.status)}, ${alpha(statusColor(sync.status), 0.6)}, ${statusColor(sync.status)})`,
+                      backgroundSize: '200% 100%',
+                      animation: 'shimmer 2s linear infinite',
+                    }),
+                  },
+                  '@keyframes shimmer': {
+                    '0%': { backgroundPosition: '200% 0' },
+                    '100%': { backgroundPosition: '-200% 0' },
+                  },
+                }}
+              />
+
+              {/* Current step */}
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ fontSize: '0.6875rem', display: 'block', lineHeight: 1.4 }}
+              >
+                {sync.currentStep || (sync.status === 'pending' ? 'Queued...' : sync.status === 'completed' ? 'All data synced successfully.' : sync.status === 'failed' ? (sync.error || 'Sync failed.') : 'Processing...')}
+              </Typography>
+
+              {/* Progress percentage */}
+              {sync.status === 'running' && (
+                <Typography
+                  variant="caption"
+                  sx={{ fontSize: '0.6875rem', color: theme.palette.primary.main, fontWeight: 600 }}
+                >
+                  {sync.progress || 0}%
+                </Typography>
+              )}
+            </Box>
+          ))}
+        </Box>
+      </Collapse>
+    </Box>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function ClientsList() {
   const [managementOpen, setManagementOpen] = useState(false)
@@ -65,6 +242,12 @@ function ClientsList() {
     scrunch: null, // null = all, true = has Scrunch, false = no Scrunch
     active: true, // Default to true (active clients only), null = all, true = active, false = inactive
   })
+
+  // ── Per-client sync state ────────────────────────────────────────────────
+  // { [clientId]: { clientId, clientName, jobId, status, progress, currentStep, error } }
+  const [clientSyncs, setClientSyncs] = useState({})
+  const pollIntervalRef = useRef(null)
+
   const navigate = useNavigate()
   const theme = useTheme()
   const queryClient = useQueryClient()
@@ -109,6 +292,181 @@ function ClientsList() {
   useEffect(() => {
     setPage(0)
   }, [filters.ga4, filters.scrunch, filters.active])
+
+  // ── Polling: every 15 s while any sync is active ──────────────────────────
+  // Each clientSync entry tracks multiple job_ids (one per integration).
+  // Combined status: failed > running > pending > completed.
+  const deriveStatus = (jobStatuses) => {
+    const vals = Object.values(jobStatuses)
+    if (vals.length === 0) return 'pending'
+    if (vals.some(s => s === 'failed')) return 'failed'
+    if (vals.some(s => s === 'running')) return 'running'
+    if (vals.some(s => s === 'pending')) return 'pending'
+    return 'completed'
+  }
+
+  const pollClientSyncs = useCallback(async () => {
+    const entries = Object.values(clientSyncs)
+    const active = entries.filter(s => ['pending', 'running'].includes(s.status))
+    if (active.length === 0) return
+
+    await Promise.all(
+      active.map(async (sync) => {
+        const allJobIds = sync.allJobIds || []
+        if (allJobIds.length === 0) return
+
+        // Poll every job in parallel
+        const results = await Promise.all(
+          allJobIds.map(async (jobId) => {
+            try {
+              const job = await syncAPI.getSyncJobStatus(jobId)
+              return { jobId, job }
+            } catch {
+              return { jobId, job: null }
+            }
+          })
+        )
+
+        setClientSyncs(prev => {
+          const entry = prev[sync.clientId]
+          if (!entry) return prev
+
+          // Build per-job status map
+          const jobStatuses = { ...(entry.jobStatuses || {}) }
+          let latestStep = entry.currentStep
+          let totalProgress = 0
+          let counted = 0
+
+          results.forEach(({ jobId, job }) => {
+            if (!job) return
+            jobStatuses[jobId] = job.status
+            if (job.current_step) latestStep = job.current_step
+            totalProgress += job.progress ?? 0
+            counted++
+          })
+
+          const avgProgress = counted > 0 ? Math.round(totalProgress / counted) : entry.progress
+          const combinedStatus = deriveStatus(jobStatuses)
+          const errors = results
+            .filter(r => r.job?.status === 'failed')
+            .map(r => r.job?.error_message)
+            .filter(Boolean)
+
+          return {
+            ...prev,
+            [sync.clientId]: {
+              ...entry,
+              jobStatuses,
+              status: combinedStatus,
+              progress: avgProgress,
+              currentStep: latestStep,
+              error: errors.length > 0 ? errors.join('; ') : null,
+            },
+          }
+        })
+      })
+    )
+  }, [clientSyncs])
+
+  useEffect(() => {
+    const hasActive = Object.values(clientSyncs).some(s => ['pending', 'running'].includes(s.status))
+    if (hasActive) {
+      if (!pollIntervalRef.current) {
+        pollIntervalRef.current = setInterval(pollClientSyncs, 15000)
+      }
+    } else {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current)
+        pollIntervalRef.current = null
+      }
+    }
+    return () => {}
+  }, [clientSyncs, pollClientSyncs])
+
+  // Auto-dismiss completed/failed syncs after 8 s
+  useEffect(() => {
+    const done = Object.values(clientSyncs).filter(s => ['completed', 'failed'].includes(s.status))
+    if (done.length === 0) return
+    const timer = setTimeout(() => {
+      setClientSyncs(prev => {
+        const next = { ...prev }
+        done.forEach(s => { delete next[s.clientId] })
+        return next
+      })
+    }, 8000)
+    return () => clearTimeout(timer)
+  }, [clientSyncs])
+
+  const handleSyncClient = async (e, client) => {
+    e.stopPropagation()
+    const clientId = client.id
+    if (clientSyncs[clientId]?.status === 'running' || clientSyncs[clientId]?.status === 'pending') return
+
+    // Optimistic pending state
+    setClientSyncs(prev => ({
+      ...prev,
+      [clientId]: {
+        clientId,
+        clientName: client.company_name || `Client ${clientId}`,
+        allJobIds: [],
+        jobStatuses: {},
+        status: 'pending',
+        progress: 0,
+        currentStep: 'Starting sync...',
+        error: null,
+      },
+    }))
+
+    try {
+      const result = await syncAPI.syncClient(clientId)
+      const allJobIds = result?.all_job_ids || []
+      const jobIds = result?.job_ids || {}
+      // Build initial jobStatuses map (all pending)
+      const jobStatuses = {}
+      allJobIds.forEach(jid => { jobStatuses[jid] = 'pending' })
+
+      // Build label for step showing what's being synced
+      const parts = []
+      if (jobIds.ga4) parts.push('GA4')
+      if (jobIds.agency_analytics?.length) parts.push(`Agency Analytics (${jobIds.agency_analytics.length} campaign${jobIds.agency_analytics.length > 1 ? 's' : ''})`)
+      if (jobIds.scrunch) parts.push('Scrunch AI')
+      const stepLabel = parts.length ? `Syncing: ${parts.join(', ')}` : 'No integrations configured'
+
+      setClientSyncs(prev => ({
+        ...prev,
+        [clientId]: {
+          ...prev[clientId],
+          allJobIds,
+          jobStatuses,
+          status: allJobIds.length > 0 ? 'running' : 'completed',
+          currentStep: stepLabel,
+        },
+      }))
+
+      if (allJobIds.length > 0) {
+        setTimeout(pollClientSyncs, 2000)
+      }
+    } catch (err) {
+      debugError('Failed to start client sync:', err)
+      setClientSyncs(prev => ({
+        ...prev,
+        [clientId]: {
+          ...prev[clientId],
+          status: 'failed',
+          currentStep: 'Failed to start sync.',
+          error: err?.response?.data?.detail || err.message || 'Unknown error',
+        },
+      }))
+    }
+  }
+
+  const dismissClientSync = (clientId) => {
+    setClientSyncs(prev => {
+      const next = { ...prev }
+      delete next[clientId]
+      return next
+    })
+  }
   
   // Use React Query hook for clients with pagination and filters
   const { data: clientsData = {}, isLoading: loading, isFetching, error } = useQuery({
@@ -736,6 +1094,61 @@ function ClientsList() {
                       </TableCell>
                       <TableCell align="right">
                         <Box display="flex" gap={0.5} justifyContent="flex-end">
+                          {/* ── Sync button ── */}
+                          {(() => {
+                            const sync = clientSyncs[client.id]
+                            const isActive = sync && ['pending', 'running'].includes(sync.status)
+                            const isDone = sync?.status === 'completed'
+                            const isFailed = sync?.status === 'failed'
+                            return (
+                              <Tooltip
+                                title={
+                                  isActive ? `Syncing… ${sync.progress || 0}%` :
+                                  isDone ? 'Sync complete' :
+                                  isFailed ? 'Sync failed — click to retry' :
+                                  'Sync all data for this client (GA4, Agency Analytics, Scrunch)'
+                                }
+                                arrow
+                              >
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    onClick={(e) => handleSyncClient(e, client)}
+                                    disabled={isActive}
+                                    sx={{
+                                      color: isDone
+                                        ? theme.palette.success.main
+                                        : isFailed
+                                        ? theme.palette.error.main
+                                        : theme.palette.info.main,
+                                      transition: 'all 0.2s',
+                                      '&:hover': {
+                                        bgcolor: alpha(
+                                          isDone ? theme.palette.success.main :
+                                          isFailed ? theme.palette.error.main :
+                                          theme.palette.info.main,
+                                          0.1
+                                        ),
+                                      },
+                                    }}
+                                  >
+                                    {isActive ? (
+                                      <CircularProgress
+                                        size={16}
+                                        thickness={5}
+                                        sx={{ color: theme.palette.primary.main }}
+                                      />
+                                    ) : isDone ? (
+                                      <CheckCircleIcon sx={{ fontSize: 18 }} />
+                                    ) : (
+                                      <CloudSyncIcon sx={{ fontSize: 18 }} />
+                                    )}
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                            )
+                          })()}
+
                           <Tooltip title="Manage Client Settings" arrow>
                             <IconButton
                               size="small"
@@ -821,6 +1234,9 @@ function ClientsList() {
         onClose={handleManagementClose}
         client={selectedClient}
       />
+
+      {/* Floating client sync progress panel */}
+      <ClientSyncProgressPanel syncs={clientSyncs} onDismiss={dismissClientSync} />
 
       {/* Delete Confirmation Dialog */}
       <Dialog

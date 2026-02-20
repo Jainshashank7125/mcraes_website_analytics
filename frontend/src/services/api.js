@@ -65,10 +65,59 @@ const saveTokenToStorage = (accessToken, refreshToken) => {
   }
 }
 
-// Add request interceptor to include auth token
+// Buffer before expiry to consider token "expired" (1 minute)
+const TOKEN_EXPIRY_BUFFER_MS = 60 * 1000
+
+const isSessionTokenExpired = () => {
+  const rememberMe = localStorage.getItem('remember_me') === 'true'
+  const storage = rememberMe ? localStorage : sessionStorage
+  const expiresAt = storage.getItem('token_expires_at') || localStorage.getItem('token_expires_at') || sessionStorage.getItem('token_expires_at')
+  if (!expiresAt) return true
+  const expiresTime = parseInt(expiresAt, 10)
+  return Date.now() >= (expiresTime - TOKEN_EXPIRY_BUFFER_MS)
+}
+
+/**
+ * Ensure we have a valid session access_token for sync API so we never get 401.
+ * Refreshes token if expired using fetch (no axios interceptors) and returns the access_token.
+ */
+const ensureValidTokenForSync = async () => {
+  const token = getTokenFromStorage()
+  if (token && !isSessionTokenExpired()) return token
+  const refreshToken = getRefreshTokenFromStorage()
+  if (!refreshToken) return token || null
+  try {
+    const base = API_BASE_URL.replace(/\/$/, '')
+    const res = await fetch(`${base}/api/v1/auth/v2/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'refresh-token': refreshToken },
+      body: '{}',
+    })
+    if (!res.ok) return token || null
+    const data = await res.json()
+    const access_token = data.access_token
+    const newRefreshToken = data.refresh_token
+    if (access_token) {
+      saveTokenToStorage(access_token, newRefreshToken)
+      if (data.expires_in) {
+        const rememberMe = localStorage.getItem('remember_me') === 'true'
+        const storage = rememberMe ? localStorage : sessionStorage
+        storage.setItem('token_expires_at', String(Date.now() + data.expires_in * 1000))
+      }
+      return access_token
+    }
+  } catch (_) { /* ignore */ }
+  return token || null
+}
+
+// Add request interceptor to include auth token; for sync API ensure session token is fresh so we never get 401
 api.interceptors.request.use(
-  (config) => {
-    const token = getTokenFromStorage()
+  async (config) => {
+    const url = config.url || ''
+    const isSyncApi = url.includes('/api/v1/sync/')
+    const token = isSyncApi
+      ? await ensureValidTokenForSync()
+      : getTokenFromStorage()
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
@@ -140,7 +189,7 @@ api.interceptors.response.use(
         isRefreshing = false
         processQueue(new Error('No refresh token'), null)
         
-        if (!isPublicRoute) {
+        if (!isPublicRoute && !originalRequest?.skipAuthRedirect) {
           window.location.href = '/login'
         }
         return Promise.reject(error)
@@ -199,10 +248,8 @@ api.interceptors.response.use(
           errorMessage.toLowerCase().includes('session has expired') ||
           errorMessage.toLowerCase().includes('invalid refresh token')
         
-        // Always redirect to login on refresh failure (unless already on public route)
-        // This prevents infinite loader loops
-        if (!isPublicRoute) {
-          // Use setTimeout to ensure state updates complete before redirect
+        // Always redirect to login on refresh failure (unless skipAuthRedirect e.g. sync - stay on page)
+        if (!isPublicRoute && !originalRequest?.skipAuthRedirect) {
           setTimeout(() => {
             window.location.href = '/login'
           }, 100)
@@ -260,6 +307,16 @@ export const syncAPI = {
     params.append('sync_mode', syncMode)
     
     const response = await api.post(`/api/v1/sync/all?${params.toString()}`)
+    return response.data
+  },
+
+  // Sync all data for a specific client (GA4 + Agency Analytics + Scrunch) - returns job_id
+  syncClient: async (clientId, startDate = null, endDate = null) => {
+    const params = new URLSearchParams()
+    if (startDate) params.append('start_date', startDate)
+    if (endDate) params.append('end_date', endDate)
+    const query = params.toString()
+    const response = await api.post(`/api/v1/sync/client/${clientId}${query ? `?${query}` : ''}`, {}, { skipAuthRedirect: true })
     return response.data
   },
 
