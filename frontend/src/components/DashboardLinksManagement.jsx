@@ -44,6 +44,7 @@ import {
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon,
   BarChart as BarChartIcon,
+  History as HistoryIcon,
 } from '@mui/icons-material';
 import { clientAPI } from '../services/api';
 import { debugLog, debugError } from '../utils/debug';
@@ -87,6 +88,12 @@ function DashboardLinksManagement() {
   const [trackingLink, setTrackingLink] = useState(null);
   const [trackingMetrics, setTrackingMetrics] = useState(null);
   const [loadingMetrics, setLoadingMetrics] = useState(false);
+
+  // Activity logs dialog states
+  const [logsDialogOpen, setLogsDialogOpen] = useState(false);
+  const [logsLink, setLogsLink] = useState(null);
+  const [linkLogs, setLinkLogs] = useState([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
   const [ipLocations, setIpLocations] = useState(new Map()); // Map of IP -> location data
   const [loadingLocations, setLoadingLocations] = useState(false);
 
@@ -339,6 +346,23 @@ function DashboardLinksManagement() {
     }
   };
 
+  const handleOpenLogsDialog = async (link) => {
+    if (!link.client_id) return;
+    setLogsLink(link);
+    setLogsDialogOpen(true);
+    setLoadingLogs(true);
+    setLinkLogs([]);
+    try {
+      const res = await clientAPI.getDashboardLinkLogs(link.client_id, link.id);
+      setLinkLogs(res.items || []);
+    } catch (err) {
+      debugError("Error loading dashboard link logs:", err);
+      setLinkLogs([]);
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
+
   const handleOpenTrackingDialog = async (link) => {
     if (!link.client_id) return;
     setTrackingLink(link);
@@ -533,6 +557,9 @@ function DashboardLinksManagement() {
                 <TableCell sx={{ fontWeight: 700 }}>Slug</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>Date Created</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Created By</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Updated At</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Updated By</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>Expiration Date</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>KPI Selections</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>Actions</TableCell>
@@ -604,6 +631,15 @@ function DashboardLinksManagement() {
                     <Typography variant="body2">{formatDate(link.created_at)}</Typography>
                   </TableCell>
                   <TableCell>
+                    <Typography variant="body2">{link.created_by || '—'}</Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2">{link.updated_at ? formatDateTime(link.updated_at) : '—'}</Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2">{link.updated_by || '—'}</Typography>
+                  </TableCell>
+                  <TableCell>
                     <Typography variant="body2">
                       {link.expires_at ? formatDateTime(link.expires_at) : 'Never'}
                     </Typography>
@@ -649,6 +685,15 @@ function DashboardLinksManagement() {
                           }}
                         >
                           <LinkIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="View Activity Log">
+                        <IconButton
+                          size="small"
+                          onClick={() => handleOpenLogsDialog(link)}
+                          sx={{ color: theme.palette.text.secondary }}
+                        >
+                          <HistoryIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
                       <Tooltip title="View Tracking Metrics">
@@ -805,6 +850,87 @@ function DashboardLinksManagement() {
             sx={{ textTransform: 'none' }}
           >
             {saving ? 'Saving...' : 'Update'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Activity Log Dialog - logs for this link (created/updated, created_at, created_by, what changed) */}
+      <Dialog
+        open={logsDialogOpen}
+        onClose={() => setLogsDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 2,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+          },
+        }}
+      >
+        <DialogTitle>
+          <Typography variant="h6" fontWeight={600}>
+            Activity Log - {logsLink?.name || logsLink?.slug || 'Dashboard Link'}
+          </Typography>
+          {logsLink && (
+            <Typography variant="caption" color="text.secondary" display="block">
+              Client: {logsLink.client_name || 'N/A'} | Slug: {logsLink.slug}
+            </Typography>
+          )}
+        </DialogTitle>
+        <DialogContent>
+          {loadingLogs ? (
+            <Box display="flex" justifyContent="center" py={4}>
+              <CircularProgress />
+            </Box>
+          ) : (
+            <TableContainer component={Paper} variant="outlined" sx={{ border: `1px solid ${theme.palette.divider}` }}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow sx={{ bgcolor: alpha(theme.palette.primary.main, 0.06) }}>
+                    <TableCell sx={{ fontWeight: 700 }}>Activity</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>Created At</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>Created By</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {linkLogs.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={3} align="center" sx={{ py: 3 }}>
+                        <Typography variant="body2" color="text.secondary">
+                          No activity log entries yet.
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    linkLogs.map((log) => (
+                      <TableRow key={log.id} hover>
+                        <TableCell>
+                          <Chip
+                            label={log.action === 'created' ? 'Created' : 'Updated'}
+                            size="small"
+                            color={log.action === 'created' ? 'success' : 'primary'}
+                            variant="outlined"
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant="body2">
+                            {log.created_at ? formatDateTime(log.created_at) : '—'}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant="body2">{log.created_by || '—'}</Typography>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setLogsDialogOpen(false)} sx={{ textTransform: 'none' }}>
+            Close
           </Button>
         </DialogActions>
       </Dialog>

@@ -227,13 +227,33 @@ class DashboardLink(Base):
     executive_summary = Column(JSON, nullable=True)  # JSONB in DB - Structured Executive Brief data
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    created_by = Column(String, nullable=True, index=True)  # Email of user who created the link
+    updated_by = Column(String, nullable=True, index=True)  # Email of user who last updated the link
 
     # Relationships
     kpi_selection = relationship("DashboardLinkKPISelection", back_populates="link", uselist=False, cascade="all, delete-orphan")
     tracking_events = relationship("DashboardLinkTracking", back_populates="link", cascade="all, delete-orphan")
+    activity_logs = relationship("DashboardLinkLog", back_populates="link", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<DashboardLink(id={self.id}, client_id={self.client_id}, slug='{self.slug}', enabled={self.enabled})>"
+
+
+class DashboardLinkLog(Base):
+    """Activity log for dashboard link create/update (created_at, created_by, changes)."""
+    __tablename__ = "dashboard_link_logs"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    dashboard_link_id = Column(Integer, ForeignKey("dashboard_links.id", ondelete="CASCADE"), nullable=False, index=True)
+    action = Column(String, nullable=False, index=True)  # 'created' | 'updated'
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    created_by = Column(String, nullable=True, index=True)  # User email who performed the action
+    changes = Column(JSON, nullable=True)  # For 'updated': {field, old_value, new_value}[] (not shown in UI)
+
+    link = relationship("DashboardLink", back_populates="activity_logs")
+
+    def __repr__(self):
+        return f"<DashboardLinkLog(id={self.id}, dashboard_link_id={self.dashboard_link_id}, action='{self.action}', created_at='{self.created_at}')>"
 
 
 class DashboardLinkKPISelection(Base):
