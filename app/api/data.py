@@ -1613,6 +1613,7 @@ async def get_reporting_dashboard(
                         else:
                             # Even if traffic_overview is None or empty, create KPIs with zero values
                             # This ensures the section stays visible even when filters return no data
+                            # IMPORTANT: Include ALL KPIs to prevent them from disappearing in the UI
                             logger.warning(
                                 "[GA4 KPI] No traffic_overview returned when global_filters applied; creating KPIs with zero values"
                             )
@@ -1637,6 +1638,13 @@ async def get_reporting_dashboard(
                                     "source": "GA4",
                                     "label": "New Users",
                                     "icon": "PersonAdd",
+                                },
+                                "engaged_sessions": {
+                                    "value": 0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Engaged Sessions",
+                                    "icon": "People",
                                 },
                                 "bounce_rate": {
                                     "value": 0.0,
@@ -1671,6 +1679,7 @@ async def get_reporting_dashboard(
                         )
                         ga4_errors.append(f"Error with global_filters: {str(filter_err)}")
                         # Create KPIs with zero values even on error, so section stays visible
+                        # IMPORTANT: Include ALL KPIs to prevent them from disappearing in the UI
                         ga4_kpis = {
                             "users": {
                                 "value": 0,
@@ -1692,6 +1701,13 @@ async def get_reporting_dashboard(
                                 "source": "GA4",
                                 "label": "New Users",
                                 "icon": "PersonAdd",
+                            },
+                            "engaged_sessions": {
+                                "value": 0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Engaged Sessions",
+                                "icon": "People",
                             },
                             "bounce_rate": {
                                 "value": 0.0,
@@ -2361,6 +2377,7 @@ async def get_reporting_dashboard(
                     start_date,
                     end_date,
                     limit=10,
+                    global_filters=global_filters,
                 )
                 traffic_sources = await ga4_client.get_traffic_sources(
                     property_id,
@@ -2380,6 +2397,7 @@ async def get_reporting_dashboard(
                     property_id,
                     start_date,
                     end_date,
+                    global_filters=global_filters,
                 )
                 
                 chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
@@ -7128,6 +7146,28 @@ async def get_dashboard_link_kpi_selections(
         }
     
     return kpi_selection
+
+
+@router.get("/data/clients/{client_id}/dashboard-links/{link_id}/logs")
+@handle_api_errors(context="listing dashboard link activity logs")
+async def list_dashboard_link_logs(
+    client_id: int,
+    link_id: int,
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """List activity logs for a dashboard link (created/updated, created_at, created_by, changes)."""
+    supabase = SupabaseService(db=db)
+    client = supabase.get_client_by_id(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    links = supabase.list_dashboard_links_for_client(client_id)
+    link = next((l for l in links if l.get("id") == link_id), None)
+    if not link:
+        raise HTTPException(status_code=404, detail="Dashboard link not found")
+    logs = supabase.list_dashboard_link_logs(link_id)
+    return {"items": logs}
+
 
 @router.get("/data/clients/{client_id}/dashboard-links/{link_id}/metrics")
 @handle_api_errors(context="getting dashboard link metrics")

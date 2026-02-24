@@ -3261,6 +3261,9 @@ class SupabaseService:
                 link_data["description"] = description
             if has_executive_summary_column and executive_summary is not None:
                 link_data["executive_summary"] = executive_summary
+            # Audit: created_by if column exists
+            if "created_by" in table_columns and user_email:
+                link_data["created_by"] = user_email
 
             insert_stmt = pg_insert(table).values(
                 **link_data,
@@ -3278,7 +3281,8 @@ class SupabaseService:
             if row:
                 link_dict = dict(row._mapping)
                 link_id = link_dict.get("id")
-                
+                # Activity log: link created
+                self._insert_dashboard_link_log(link_id, "created", user_email, None)
                 # Save KPI selections if provided
                 if link_id and (
                     selected_kpis is not None
@@ -3531,6 +3535,18 @@ class SupabaseService:
                 update_data["executive_summary"] = executive_summary
                 logger.info(f"Adding executive_summary to update_data for link {link_id}, type: {type(executive_summary)}")
             
+            # Audit: updated_by if column exists
+            has_updated_by = "updated_by" in table_columns
+            if has_updated_by and user_email:
+                update_data["updated_by"] = user_email
+
+            # Fetch current row before update for activity log (what changed)
+            old_row = None
+            if update_data:
+                query_old = select(table).where(table.c.id == link_id).limit(1)
+                old_result = self.db.execute(query_old)
+                old_row = old_result.first()
+            
             # Update link fields if any
             if update_data:
                 update_data["updated_at"] = datetime.now()
@@ -3548,6 +3564,9 @@ class SupabaseService:
                 row = result.fetchone()
                 if not row:
                     return None
+                # Activity log: link updated (what changed)
+                changes = self._build_link_changes(old_row, update_data) if old_row else None
+                self._insert_dashboard_link_log(link_id, "updated", user_email, changes)
             else:
                 # If no link fields to update, just fetch the link
                 query = select(table).where(table.c.id == link_id).limit(1)
@@ -3604,6 +3623,83 @@ class SupabaseService:
             self.db.rollback()
             logger.error(f"Error deleting dashboard link {link_id}: {str(e)}")
             return False
+
+    def _build_link_changes(self, old_row: Any, update_data: Dict) -> Optional[List[Dict]]:
+        """Build human-readable list of {field, old_value, new_value} for activity log."""
+        if not old_row or not update_data:
+            return None
+        changes = []
+        skip_keys = {"updated_at", "updated_by"}
+        old = dict(old_row._mapping) if hasattr(old_row, "_mapping") else {}
+        for field, new_val in update_data.items():
+            if field in skip_keys:
+                continue
+            old_val = old.get(field)
+            if old_val == new_val:
+                continue
+            # Serialize for display (dates, bools, etc.)
+            def _fmt(v):
+                if v is None:
+                    return None
+                if hasattr(v, "isoformat"):
+                    return v.isoformat()
+                if isinstance(v, (dict, list)):
+                    return str(v)[:200]
+                return str(v)
+            changes.append({
+                "field": field,
+                "old_value": _fmt(old_val),
+                "new_value": _fmt(new_val),
+            })
+        return changes if changes else None
+
+    def _insert_dashboard_link_log(
+        self,
+        link_id: int,
+        action: str,
+        created_by: Optional[str],
+        changes: Optional[List[Dict]],
+    ) -> None:
+        """Insert one row into dashboard_link_logs (created or updated)."""
+        try:
+            log_table = self._get_table("dashboard_link_logs")
+            self.db.execute(
+                log_table.insert().values(
+                    dashboard_link_id=link_id,
+                    action=action,
+                    created_by=created_by,
+                    changes=changes,
+                )
+            )
+            self.db.commit()
+        except Exception as e:
+            self.db.rollback()
+            logger.error(
+                f"Could not insert dashboard link log for link_id={link_id}: {e}. "
+                "Ensure migration 002_dashboard_link_logs is applied (dashboard_link_logs table exists)."
+            )
+
+    def list_dashboard_link_logs(self, link_id: int) -> List[Dict]:
+        """List activity logs for a dashboard link (created_at, created_by, action, changes)."""
+        try:
+            log_table = self._get_table("dashboard_link_logs")
+            query = (
+                select(log_table)
+                .where(log_table.c.dashboard_link_id == link_id)
+                .order_by(log_table.c.created_at.desc())
+            )
+            result = self.db.execute(query)
+            rows = result.fetchall()
+            out = []
+            for r in rows:
+                d = dict(r._mapping)
+                if d.get("created_at") and hasattr(d["created_at"], "isoformat"):
+                    d["created_at"] = d["created_at"].isoformat()
+                out.append(d)
+            return out
+        except Exception as e:
+            logger.error(f"Error listing dashboard link logs for link_id={link_id}: {e}")
+            return []
 
     def get_dashboard_link_kpi_selection(self, link_id: int) -> Optional[Dict]:
         """Get KPI selections for a dashboard link"""

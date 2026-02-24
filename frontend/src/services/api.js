@@ -754,6 +754,12 @@ export const clientAPI = {
     return response.data
   },
 
+  // Get dashboard link activity logs (admin)
+  getDashboardLinkLogs: async (clientId, linkId) => {
+    const response = await api.get(`/api/v1/data/clients/${clientId}/dashboard-links/${linkId}/logs`)
+    return response.data
+  },
+
   // Get dashboard link metrics (admin)
   getDashboardLinkMetrics: async (clientId, linkId, startDate, endDate) => {
     const params = {}
