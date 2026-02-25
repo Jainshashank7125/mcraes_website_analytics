@@ -181,8 +181,10 @@ class GA4APIClient:
                 ],
             }
             
-            # Apply global filters if provided
+            # Apply global filters if provided.
+            # Set dimension_filter = None so it's always defined before later use (daily_request_params).
             filter_dict = GA4FilterBuilder.build_dimension_filter(global_filters)
+            dimension_filter = None
             if filter_dict:
                 dimension_filter = self._dict_to_filter_expression(filter_dict)
                 if dimension_filter:
