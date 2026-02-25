@@ -1242,14 +1242,27 @@ export const authAPI = {
 // OpenAI API endpoints
 export const openaiAPI = {
   // Get overall metrics overview (all sources combined)
-  getOverallOverview: async (clientId = null, brandId = null, startDate = null, endDate = null, dashboardLinkSlug = null) => {
-    const response = await api.post('/api/v1/openai/metrics/overview', {
+  getOverallOverview: async (
+    clientId = null,
+    brandId = null,
+    startDate = null,
+    endDate = null,
+    dashboardLinkSlug = null,
+    selectedKPIs = null,
+    selectedCharts = null,
+    visibleSections = null
+  ) => {
+    const payload = {
       client_id: clientId,
       brand_id: brandId,
       start_date: startDate,
       end_date: endDate,
       dashboard_link_slug: dashboardLinkSlug
-    })
+    }
+    if (selectedKPIs != null) payload.selected_kpis = Array.isArray(selectedKPIs) ? selectedKPIs : Array.from(selectedKPIs)
+    if (selectedCharts != null) payload.selected_charts = Array.isArray(selectedCharts) ? selectedCharts : Array.from(selectedCharts)
+    if (visibleSections != null) payload.visible_sections = Array.isArray(visibleSections) ? visibleSections : Array.from(visibleSections)
+    const response = await api.post('/api/v1/openai/metrics/overview', payload)
     return response.data
   },
   

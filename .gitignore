@@ -90,3 +90,6 @@ dumps/*.dump
 # Uncomment the line below if you want to exclude all ZIP files too:
 # dumps/*.zip
 
+dumps/*
+logs/*
+dumps/weekly_backup_20260215_050001.dump.gz

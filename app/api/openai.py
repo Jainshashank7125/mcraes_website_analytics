@@ -34,6 +34,26 @@ def _normalize_country_for_overview(country: str) -> str:
         return country.strip().title()
     return country.strip()
 
+
+def _round_for_overview(value: Any, fmt: str = "number") -> Any:
+    """Round numeric values for AI overview so the model outputs clean numbers (max 2 decimals).
+    REGRESSION: Do not remove or relax rounding — long decimals in summary. See test_openai_overview_rounding.py."""
+    if value is None:
+        return value
+    if not isinstance(value, (int, float)):
+        return value
+    if fmt == "percentage":
+        return round(float(value), 1)
+    if fmt == "duration" or fmt == "seconds":
+        return round(float(value), 1)
+    # Rates, ratios, and general numbers: max 2 decimal places
+    if abs(value) >= 1000:
+        return round(float(value), 0)
+    if abs(value) >= 1:
+        return round(float(value), 2)
+    return round(float(value), 2)
+
+
 router = APIRouter()
 openai_client = OpenAIClient()
 
@@ -191,6 +211,9 @@ class OverallOverviewRequest(BaseModel):
     start_date: Optional[str] = Field(None, description="Start date (YYYY-MM-DD)")
     end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
     dashboard_link_slug: Optional[str] = Field(None, description="Dashboard link slug to use selected KPIs/charts/sections from config")
+    selected_kpis: Optional[List[str]] = Field(None, description="Current KPI selection when no link (e.g. from main dashboard)")
+    selected_charts: Optional[List[str]] = Field(None, description="Current chart selection when no link")
+    visible_sections: Optional[List[str]] = Field(None, description="Current visible sections when no link")
 
 @router.post("/openai/metrics/review")
 @handle_api_errors(context="generating metric review")
@@ -449,45 +472,78 @@ async def generate_overall_overview(
         
         logger.info(f"[Executive Summary] Dashboard data fetched successfully - Total KPIs: {len(all_kpis)} (Main: {len(dashboard_data.get('kpis', {}))}, Scrunch: {len(scrunch_data.get('kpis', {})) if scrunch_data else 0})")
         
-        # ========== LOAD DASHBOARD LINK CONFIG IF SLUG PROVIDED ==========
-        # Filter KPIs, charts, and sections based on dashboard link configuration
+        # ========== CONFIG SOURCE: LINK IF SELECTED, ELSE UI (REQUEST) ==========
+        # If a dashboard link is selected and has config → use link config.
+        # If no link is selected (or link has no config) → use config from request (current UI).
         selected_kpis: Optional[set] = None
         selected_charts: Optional[set] = None
         visible_sections: Optional[set] = None
-        
+        link_has_config = False
+
         if request.dashboard_link_slug:
             try:
                 from app.services.supabase_service import SupabaseService
                 supabase = SupabaseService(db=db)
                 dashboard_link = supabase.get_dashboard_link_by_slug(request.dashboard_link_slug)
-                
+
                 if dashboard_link and dashboard_link.get("kpi_selection"):
                     kpi_selection = dashboard_link["kpi_selection"]
-                    
-                    # Extract selected KPIs
+
                     if kpi_selection.get("selected_kpis") and isinstance(kpi_selection["selected_kpis"], list):
                         selected_kpis = set(kpi_selection["selected_kpis"])
                         logger.info(f"[Executive Summary] Loaded selected_kpis from dashboard link '{request.dashboard_link_slug}': {len(selected_kpis)} KPIs")
-                    
-                    # Extract selected charts
                     if kpi_selection.get("selected_charts") and isinstance(kpi_selection["selected_charts"], list):
                         selected_charts = set(kpi_selection["selected_charts"])
                         logger.info(f"[Executive Summary] Loaded selected_charts from dashboard link '{request.dashboard_link_slug}': {len(selected_charts)} charts")
-                    
-                    # Extract visible sections
                     if kpi_selection.get("visible_sections") and isinstance(kpi_selection["visible_sections"], list):
                         visible_sections = set(kpi_selection["visible_sections"])
                         logger.info(f"[Executive Summary] Loaded visible_sections from dashboard link '{request.dashboard_link_slug}': {len(visible_sections)} sections")
+                    link_has_config = selected_kpis is not None or selected_charts is not None or visible_sections is not None
                 else:
                     logger.warning(f"[Executive Summary] Dashboard link '{request.dashboard_link_slug}' found but has no kpi_selection config")
             except Exception as e:
-                logger.warning(f"[Executive Summary] Error loading dashboard link config for slug '{request.dashboard_link_slug}': {str(e)}. Continuing without filtering.")
+                logger.warning(f"[Executive Summary] Error loading dashboard link config for slug '{request.dashboard_link_slug}': {str(e)}. Using config from request (UI).")
+
+        # No link selected, or link has no config → use config from request (current UI).
+        # When link is selected and has config → use link config unless request explicitly sends overrides.
+        if not request.dashboard_link_slug or not link_has_config:
+            if request.selected_kpis is not None:
+                selected_kpis = set(request.selected_kpis)
+                logger.info(f"[Executive Summary] No link selected (or link has no config); using selected_kpis from request (UI): {len(selected_kpis)} KPIs")
+            if request.selected_charts is not None:
+                selected_charts = set(request.selected_charts)
+                logger.info(f"[Executive Summary] No link selected (or link has no config); using selected_charts from request (UI): {len(selected_charts)} charts")
+            if request.visible_sections is not None:
+                visible_sections = set(request.visible_sections)
+                logger.info(f"[Executive Summary] No link selected (or link has no config); using visible_sections from request (UI): {len(visible_sections)} sections")
+        else:
+            # Link selected and has config: request body overrides link when provided (including empty list).
+            if request.selected_kpis is not None:
+                selected_kpis = set(request.selected_kpis)
+                logger.info(f"[Executive Summary] Using selected_kpis from request (UI override): {len(selected_kpis)} KPIs")
+            elif selected_kpis is not None:
+                logger.info(f"[Executive Summary] Using selected_kpis from dashboard link: {len(selected_kpis)} KPIs")
+            if request.selected_charts is not None:
+                selected_charts = set(request.selected_charts)
+                logger.info(f"[Executive Summary] Using selected_charts from request (UI override): {len(selected_charts)} charts")
+            elif selected_charts is not None:
+                logger.info(f"[Executive Summary] Using selected_charts from dashboard link: {len(selected_charts)} charts")
+            if request.visible_sections is not None:
+                visible_sections = set(request.visible_sections)
+                logger.info(f"[Executive Summary] Using visible_sections from request (UI override): {len(visible_sections)} sections")
+            elif visible_sections is not None:
+                logger.info(f"[Executive Summary] Using visible_sections from dashboard link: {len(visible_sections)} sections")
         
-        # Filter KPIs by selected_kpis if provided
-        if selected_kpis and len(selected_kpis) > 0:
+        # Filter KPIs by selected_kpis when provided (request or link). Empty set = user chose no KPIs.
+        # ONLY these filtered KPIs are added to structured_data and thus to the prompt — no other metrics.
+        if selected_kpis is not None:
             original_count = len(all_kpis)
+            had_conversion_revenue = {"conversions", "revenue"} & set(all_kpis.keys())
             all_kpis = {k: v for k, v in all_kpis.items() if k in selected_kpis}
-            logger.info(f"[Executive Summary] Filtered KPIs by selected_kpis: {original_count} → {len(all_kpis)} KPIs")
+            excluded = had_conversion_revenue - set(all_kpis.keys())
+            if excluded:
+                logger.info(f"[Executive Summary] Excluded from summary (not in selected_kpis): {excluded}")
+            logger.info(f"[Executive Summary] Filtered KPIs by selected_kpis: {original_count} → {len(all_kpis)} KPIs (only these go to prompt: {list(all_kpis.keys())})")
             if len(all_kpis) == 0:
                 logger.warning(f"[Executive Summary] All KPIs filtered out by selected_kpis. This may result in empty summary.")
         else:
@@ -532,18 +588,37 @@ async def generate_overall_overview(
             structured_data = all_sections
             logger.info(f"[Executive Summary] No visible_sections filter applied - using all {len(structured_data)} sections")
         
-        # Group KPIs by source
+        # Group KPIs by source; round values so the AI outputs clean numbers (fewer decimal places).
+        # Only filtered all_kpis (selected by user) are iterated — so only checked KPIs reach the prompt.
         for kpi_key, kpi_data in all_kpis.items():
             source = kpi_data.get("source", "Unknown")
             if source in structured_data:
+                fmt = kpi_data.get("format", "number")
+                raw_value = kpi_data.get("value")
+                raw_change = kpi_data.get("change")
+                rounded_value = _round_for_overview(raw_value, fmt) if raw_value is not None else None
+                rounded_change = round(float(raw_change), 1) if isinstance(raw_change, (int, float)) else raw_change
+                # Build a display string with rounded value for the prompt (so AI sees e.g. 2.83 not 2.82956...)
+                existing_display = kpi_data.get("display")
+                if existing_display and isinstance(existing_display, str):
+                    display_str = existing_display
+                elif rounded_value is not None:
+                    if fmt == "percentage":
+                        display_str = f"{rounded_value}%"
+                    elif fmt == "currency":
+                        display_str = f"${float(rounded_value):,.2f}" if isinstance(rounded_value, (int, float)) else str(rounded_value)
+                    else:
+                        display_str = f"{rounded_value:,.2f}" if isinstance(rounded_value, float) else f"{rounded_value:,}" if isinstance(rounded_value, (int, float)) else str(rounded_value)
+                else:
+                    display_str = None
                 metric_info = {
                     "key": kpi_key,
                     "label": kpi_data.get("label", kpi_key),
-                    "value": kpi_data.get("value"),
-                    "change": kpi_data.get("change"),
-                    "format": kpi_data.get("format", "number"),
+                    "value": rounded_value if rounded_value is not None else raw_value,
+                    "change": rounded_change,
+                    "format": fmt,
                     "icon": kpi_data.get("icon"),
-                    "display": kpi_data.get("display")
+                    "display": display_str
                 }
                 structured_data[source]["kpis"].append(metric_info)
         
@@ -760,6 +835,7 @@ Positive-only constraints:
 - You MUST include the "what_to_watch" section: 2-3 bullets of positive opportunities or focus areas (no negative concerns).
 - Overall status: only "✅ Positive momentum" or "✅ On track".
 - Geographic/location: mention ONLY if North America data is in the input; use ONLY standard North American country names (e.g. United States, Canada, Mexico). Do not mention or infer non-North American regions.
+- NUMBER FORMAT: Use at most 2 decimal places for any number (e.g. 1.74 not 1.735487...). Use 1 decimal for percentages (e.g. 84.5%). Never output long decimal strings.
 - Maximum length: ~450-600 words. No emojis except ✅. No buzzwords. Calm, executive tone."""
 
         # User prompt requesting structured JSON output — POSITIVE ONLY, NO HALLUCINATION
@@ -773,9 +849,9 @@ Reporting Period: {reporting_period}
 
 {structured_data_text}
 
-RULES: Use only the KPIs and chart data above. The data reflects the selected reporting period and client—base the summary strictly on this selection only. If a section has no data, say "Not available" or one brief line. Do not mention geography unless North America geographic data appears above; when mentioning countries use only North American names (United States, Canada, Mexico).
+RULES: The data above is the ONLY content selected for this report. Your summary must be based strictly on this selection—nothing else. Only the sections, KPIs, and charts listed above exist for this report; do not reference any metric, chart, or section that is not listed. If a section has no data, say "Not available" or one brief line. Do not mention geography unless North America geographic data appears above; when mentioning countries use only North American names (United States, Canada, Mexico).
 
-CRITICAL - NO HALLUCINATION: ONLY reference KPIs, charts, and data points that appear in the structured data above. Do NOT mention any metrics, charts, or data points that are NOT listed above. Do NOT invent or infer any information not explicitly provided in the data sections above.
+CRITICAL - SELECTED CONTENT ONLY: The user has chosen which KPIs, charts, and sections to include. You MUST mention ONLY what appears in the structured data above. Do NOT mention any metric, KPI, chart, or topic that is NOT listed above (e.g. if conversions or revenue are not in the list, do not mention them; if a section is missing, do not refer to it). Do NOT invent or infer anything not explicitly provided.
 
 You MUST return a valid JSON object with this exact structure (include "what_to_watch" — it must appear in the output):
 {{
@@ -799,6 +875,7 @@ Requirements:
 - what_to_watch: MUST have 2-3 bullets (positive opportunities/focus areas only; no negative concerns). This section is required.
 - ai_visibility_snapshot, content_authority_snapshot: 2-4 bullets each, from data only; if no data, "Not available".
 - Do not invent numbers or trends. Only use what is in the data.
+- When citing numbers, use at most 2 decimal places (e.g. 1.74, 84.5%); never output long decimals like 1.7354877318970678.
 - Return ONLY valid JSON, no markdown, no code blocks."""
         
         # Generate overview using OpenAI
@@ -952,16 +1029,23 @@ def validate_executive_summary(summary: Dict) -> Optional[str]:
     return None  # No validation errors
 
 def format_metrics_for_prompt(metrics: List[Dict]) -> str:
-    """Format metrics data for OpenAI prompt"""
+    """Format metrics data for OpenAI prompt (use rounded values for clean output)."""
     formatted = []
     for metric in metrics:
-        value_str = str(metric["value"])
-        if metric.get("format") == "percentage":
-            value_str = f"{metric['value']}%"
-        elif metric.get("format") == "currency":
-            value_str = f"${metric['value']:,.2f}"
+        val = metric.get("value")
+        fmt = metric.get("format", "number")
+        if metric.get("display"):
+            value_str = str(metric["display"])
+        elif val is None:
+            value_str = "N/A"
+        elif fmt == "percentage":
+            r = _round_for_overview(val, "percentage")
+            value_str = f"{r}%"
+        elif fmt == "currency":
+            value_str = f"{float(val):,.2f}" if isinstance(val, (int, float)) else str(val)
         else:
-            value_str = f"{metric['value']:,}" if isinstance(metric['value'], (int, float)) else str(metric['value'])
+            r = _round_for_overview(val, fmt)
+            value_str = f"{r:,.2f}" if isinstance(r, float) else f"{r:,}" if isinstance(r, (int, float)) else str(val)
         
         change_str = ""
         change_value = metric.get("change")

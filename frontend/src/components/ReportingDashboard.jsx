@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback, Component } from "react";
 import { useLocation } from "react-router-dom";
 import {
   Box,
@@ -141,7 +141,7 @@ const DATE_PRESETS = [
 // getMonthName is now imported from utils
 
 // Error boundary so a render error shows fallback instead of blank page
-class ReportingErrorBoundary extends React.Component {
+class ReportingErrorBoundary extends Component {
   state = { hasError: false };
   static getDerivedStateFromError() {
     return { hasError: true };
@@ -1420,12 +1420,16 @@ function ReportingDashboard({
         }
       }
 
+      // Pass current KPI/chart/section selection so summary uses only selected metrics (e.g. only Total Users)
       const overview = await openaiAPI.getOverallOverview(
         effectiveClientId,
         effectiveBrandId,
         startDate || undefined,
         endDate || undefined,
-        dashboardLinkSlug || undefined
+        dashboardLinkSlug || undefined,
+        Array.from(selectedKPIs),
+        Array.from(selectedCharts),
+        Array.from(visibleSections)
       );
       
       // Update overview state with the API response - ALWAYS replace previous data
@@ -2566,6 +2570,76 @@ function ReportingDashboard({
       setTimeout(async () => {
         await loadDashboardData();
       }, 200);
+    }
+
+    // When user saves config: clear in-memory and cache for overview so "AI Overview" never shows stale.
+    // Then regenerate with the new KPI/section/chart selection for this client and date range.
+    const cacheKey = `${selectedClientId || selectedBrandId}-${startDate}-${endDate}`;
+    setExecutiveSummary(null);
+    setOverviewData(null);
+    setOverviewCacheKey(null);
+    setExecutiveSummaryCacheKey(null);
+
+    if (
+      tempVisibleSections.has("ai_overview") &&
+      dashboardData?.kpis &&
+      Object.keys(dashboardData.kpis).length > 0 &&
+      (selectedClientId || selectedBrandId) &&
+      startDate &&
+      endDate
+    ) {
+      setLoadingOverview(true);
+      let dashboardLinkSlug = null;
+      if (editingLink?.slug && editingLink?.client_id === selectedClientId &&
+          editingLink.start_date === startDate && editingLink.end_date === endDate) {
+        dashboardLinkSlug = editingLink.slug;
+      }
+      if (!dashboardLinkSlug && dashboardLinks?.length > 0 && selectedClientId) {
+        const match = dashboardLinks.find(
+          (link) =>
+            link.client_id === selectedClientId &&
+            link.start_date === startDate &&
+            link.end_date === endDate
+        );
+        if (match?.slug) dashboardLinkSlug = match.slug;
+      }
+      try {
+        const overview = await openaiAPI.getOverallOverview(
+          selectedClientId || undefined,
+          selectedBrandId || undefined,
+          startDate,
+          endDate,
+          dashboardLinkSlug || undefined,
+          Array.from(tempSelectedKPIs),
+          Array.from(tempSelectedCharts),
+          Array.from(tempVisibleSections)
+        );
+        setOverviewData(overview);
+        setOverviewCacheKey(cacheKey);
+        setExpandedMetricsSources(new Set());
+        if (overview?.executive_summary) {
+          setExecutiveSummary(overview.executive_summary);
+          setExecutiveSummaryCacheKey(cacheKey);
+          if (!isPublic && dashboardLinks?.length > 0 && (selectedClientId || selectedBrandId)) {
+            saveExecutiveSummaryToMatchingLink(overview.executive_summary);
+          }
+        } else {
+          setExecutiveSummary(null);
+          setExecutiveSummaryCacheKey(null);
+        }
+        debugLog("AI overview regenerated after config save", {
+          selectedKpisCount: tempSelectedKPIs.size,
+          cacheKey,
+        });
+      } catch (overviewErr) {
+        debugError("Failed to regenerate AI overview after config save:", overviewErr);
+        setExecutiveSummary(null);
+        setOverviewData(null);
+        setOverviewCacheKey(null);
+        setExecutiveSummaryCacheKey(null);
+      } finally {
+        setLoadingOverview(false);
+      }
     }
   };
 
