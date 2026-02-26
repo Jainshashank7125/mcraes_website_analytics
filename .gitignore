@@ -82,14 +82,13 @@ htmlcov/
 .dmypy.json
 dmypy.json
 
-# Database dumps (unencrypted)
-dumps/*.dump
+# Database dumps (unencrypted) — do not commit; exceeds GitHub file size limit
+dumps/
+dumps/*
 *.dump
+*.dump.gz
 
 # Note: Password-protected ZIP files (*.zip) in dumps/ can be committed if needed
-# Uncomment the line below if you want to exclude all ZIP files too:
 # dumps/*.zip
 
-dumps/*
 logs/*
-dumps/weekly_backup_20260215_050001.dump.gz
