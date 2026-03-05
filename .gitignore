@@ -93,4 +93,4 @@ dumps/*.dump
 dumps/*
 logs/*
 dumps/weekly_backup_20260215_050001.dump.gz
-.gz
+*.gz
