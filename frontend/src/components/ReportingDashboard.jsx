@@ -1053,12 +1053,9 @@ function ReportingDashboard({
       // Create cache key to check if overview already exists for this client/brand and date range
       const cacheKey = `${selectedClientId || selectedBrandId}-${startDate}-${endDate}`;
       
-      // Only call overview API if we don't already have overview data for this cache key
-      // and we're not already loading
-      if (
-        (!overviewData || overviewCacheKey !== cacheKey) &&
-        !loadingOverview
-      ) {
+      // Only call overview API if we haven't yet fetched for this cache key
+      // (avoids retry loop when API fails: after failure we set overviewCacheKey = cacheKey so we don't retry)
+      if (overviewCacheKey !== cacheKey && !loadingOverview) {
         // Use a small delay to avoid duplicate calls (since loadDashboardData also calls it)
         const timeoutId = setTimeout(() => {
           // Double-check conditions before calling (state might have changed)
@@ -1067,7 +1064,7 @@ function ReportingDashboard({
             dashboardData.kpis &&
             Object.keys(dashboardData.kpis).length > 0 &&
             (selectedClientId || selectedBrandId) &&
-            (!overviewData || overviewCacheKey !== cacheKey) &&
+            overviewCacheKey !== cacheKey &&
             !loadingOverview
           ) {
             generateOverviewAutomatically(
@@ -1477,7 +1474,8 @@ function ReportingDashboard({
       debugError("Error generating overview:", err);
       // Don't set error here - just log it, user can retry by clicking button
       setOverviewData(null);
-      setOverviewCacheKey(null);
+      // Keep cache key so useEffect won't retry in a loop (user can retry by changing date/client or clicking AI Overview again)
+      setOverviewCacheKey(cacheKey);
       setExecutiveSummary(null);
       setExecutiveSummaryCacheKey(null);
     } finally {

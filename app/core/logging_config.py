@@ -21,4 +21,7 @@ def setup_logging():
     
     # Enable DEBUG logging for data API module
     logging.getLogger("app.api.data").setLevel(logging.DEBUG)
+    
+    # Enable DEBUG logging for openai API module (to capture prompt/response text)
+    logging.getLogger("app.api.openai").setLevel(logging.DEBUG)
 

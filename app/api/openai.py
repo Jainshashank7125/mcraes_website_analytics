@@ -36,22 +36,18 @@ def _normalize_country_for_overview(country: str) -> str:
 
 
 def _round_for_overview(value: Any, fmt: str = "number") -> Any:
-    """Round numeric values for AI overview so the model outputs clean numbers (max 2 decimals).
+    """Round numeric values for AI overview to whole numbers (no decimals).
     REGRESSION: Do not remove or relax rounding — long decimals in summary. See test_openai_overview_rounding.py."""
     if value is None:
         return value
     if not isinstance(value, (int, float)):
         return value
     if fmt == "percentage":
-        return round(float(value), 1)
+        return round(float(value))
     if fmt == "duration" or fmt == "seconds":
-        return round(float(value), 1)
-    # Rates, ratios, and general numbers: max 2 decimal places
-    if abs(value) >= 1000:
-        return round(float(value), 0)
-    if abs(value) >= 1:
-        return round(float(value), 2)
-    return round(float(value), 2)
+        return round(float(value))
+    # All numbers: round to nearest integer
+    return round(float(value))
 
 
 router = APIRouter()
@@ -321,7 +317,7 @@ Provide a clear, professional review (4-5 bullet points) that highlights what's 
         
         result = await openai_client.create_chat_completion(
             messages=messages,
-            model="gpt-5-mini",
+            model="gpt-5.1-2025-11-13",
         )
         
         # Extract the review text
@@ -604,11 +600,11 @@ async def generate_overall_overview(
                     display_str = existing_display
                 elif rounded_value is not None:
                     if fmt == "percentage":
-                        display_str = f"{rounded_value}%"
+                        display_str = f"{int(rounded_value)}%"
                     elif fmt == "currency":
-                        display_str = f"${float(rounded_value):,.2f}" if isinstance(rounded_value, (int, float)) else str(rounded_value)
+                        display_str = f"${int(rounded_value):,}" if isinstance(rounded_value, (int, float)) else str(rounded_value)
                     else:
-                        display_str = f"{rounded_value:,.2f}" if isinstance(rounded_value, float) else f"{rounded_value:,}" if isinstance(rounded_value, (int, float)) else str(rounded_value)
+                        display_str = f"{int(rounded_value):,}" if isinstance(rounded_value, (int, float)) else str(rounded_value)
                 else:
                     display_str = None
                 metric_info = {
@@ -635,66 +631,54 @@ async def generate_overall_overview(
         
         main_chart_data = dashboard_data.get("chart_data", {})
         if main_chart_data:
-            # GA4 Charts - only include if selected_charts contains matching keys
-            if main_chart_data.get("users_over_time"):
-                # Check if any of the mapped chart keys are selected
-                if not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("users_over_time", [])):
+            # GA4 Charts - only include if GA4 section is in structured_data and chart is selected
+            if "GA4" in structured_data:
+                if main_chart_data.get("users_over_time") and (not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("users_over_time", []))):
                     structured_data["GA4"]["charts"]["users_over_time"] = {
                         "type": "line",
                         "description": "Daily users over the reporting period",
                         "data_points": len(main_chart_data["users_over_time"]),
                         "sample": main_chart_data["users_over_time"][:5] if isinstance(main_chart_data["users_over_time"], list) else None
                     }
-            
-            if main_chart_data.get("traffic_sources"):
-                if not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("traffic_sources", [])):
+                if main_chart_data.get("traffic_sources") and (not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("traffic_sources", []))):
                     structured_data["GA4"]["charts"]["traffic_sources"] = {
                         "type": "bar",
                         "description": "Traffic sources breakdown",
                         "data_points": len(main_chart_data["traffic_sources"]),
                         "top_sources": main_chart_data["traffic_sources"][:5] if isinstance(main_chart_data["traffic_sources"], list) else None
                     }
-            
-            if main_chart_data.get("top_pages"):
-                if not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("top_pages", [])):
+                if main_chart_data.get("top_pages") and (not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("top_pages", []))):
                     structured_data["GA4"]["charts"]["top_pages"] = {
                         "type": "table",
                         "description": "Top performing pages",
                         "data_points": len(main_chart_data["top_pages"]),
                         "top_pages": main_chart_data["top_pages"][:5] if isinstance(main_chart_data["top_pages"], list) else None
                     }
-            
-            # Geographic breakdown: include ONLY if data is from North America countries; otherwise omit entirely
-            # Also check if geographic charts are selected
-            geo_raw = main_chart_data.get("geographic_breakdown") or []
-            if isinstance(geo_raw, list) and geo_raw:
-                geo_na = []
-                for g in geo_raw:
-                    country = (g.get("country") or "").strip()
-                    if not country:
-                        continue
-                    c_lower = country.lower()
-                    if c_lower in NORTH_AMERICA_COUNTRIES or c_lower.startswith("united states"):
-                        geo_na.append({**g, "country": _normalize_country_for_overview(country)})
-                if geo_na:
-                    # Only include if geographic charts are selected (or no filter applied)
-                    if not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("geographic_breakdown", [])):
+                geo_raw = main_chart_data.get("geographic_breakdown") or []
+                if isinstance(geo_raw, list) and geo_raw:
+                    geo_na = []
+                    for g in geo_raw:
+                        country = (g.get("country") or "").strip()
+                        if not country:
+                            continue
+                        c_lower = country.lower()
+                        if c_lower in NORTH_AMERICA_COUNTRIES or c_lower.startswith("united states"):
+                            geo_na.append({**g, "country": _normalize_country_for_overview(country)})
+                    if geo_na and (not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("geographic_breakdown", []))):
                         structured_data["GA4"]["charts"]["geographic_breakdown"] = {
                             "type": "map",
                             "description": "Geographic distribution of users (North America)",
                             "data_points": len(geo_na),
                             "top_countries": geo_na[:5]
                         }
-            
             # Agency Analytics Charts
-            if main_chart_data.get("top_campaigns"):
-                if not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("top_campaigns", [])):
-                    structured_data["AgencyAnalytics"]["charts"]["top_campaigns"] = {
-                        "type": "bar",
-                        "description": "Top performing SEO campaigns",
-                        "data_points": len(main_chart_data["top_campaigns"]),
-                        "top_campaigns": main_chart_data["top_campaigns"][:5] if isinstance(main_chart_data["top_campaigns"], list) else None
-                    }
+            if "AgencyAnalytics" in structured_data and main_chart_data.get("top_campaigns") and (not selected_charts or any(key in selected_charts for key in chart_key_mapping.get("top_campaigns", []))):
+                structured_data["AgencyAnalytics"]["charts"]["top_campaigns"] = {
+                    "type": "bar",
+                    "description": "Top performing SEO campaigns",
+                    "data_points": len(main_chart_data["top_campaigns"]),
+                    "top_campaigns": main_chart_data["top_campaigns"][:5] if isinstance(main_chart_data["top_campaigns"], list) else None
+                }
         
         # Log chart filtering results
         if selected_charts and len(selected_charts) > 0:
@@ -704,8 +688,8 @@ async def generate_overall_overview(
             total_charts = sum(len(section.get("charts", {})) for section in structured_data.values())
             logger.info(f"[Executive Summary] No selected_charts filter applied - using all {total_charts} charts")
         
-        # Add Scrunch chart data
-        if scrunch_data and scrunch_data.get("chart_data"):
+        # Add Scrunch chart data (only if Scrunch section is in structured_data)
+        if "Scrunch" in structured_data and scrunch_data and scrunch_data.get("chart_data"):
             scrunch_chart_data = scrunch_data.get("chart_data", {})
             if scrunch_chart_data.get("top_performing_prompts"):
                 structured_data["Scrunch"]["charts"]["top_performing_prompts"] = {
@@ -722,18 +706,15 @@ async def generate_overall_overview(
                     "sample_insights": scrunch_chart_data["scrunch_ai_insights"][:3] if isinstance(scrunch_chart_data["scrunch_ai_insights"], list) else None
                 }
         
-        # Prepare overall metrics summary (for backward compatibility)
-        kpis_by_source = {
-            "GA4": structured_data["GA4"]["kpis"],
-            "AgencyAnalytics": structured_data["AgencyAnalytics"]["kpis"],
-            "Scrunch": structured_data["Scrunch"]["kpis"]
-        }
+        # Prepare overall metrics summary from whatever sections are present (no assumption all three exist)
+        kpis_by_source = {k: v["kpis"] for k, v in structured_data.items()}
         
         all_metrics = []
         for source, metrics in kpis_by_source.items():
             all_metrics.extend(metrics)
         
-        logger.info(f"[Executive Summary] Structured data - GA4: {len(structured_data['GA4']['kpis'])} KPIs, {len(structured_data['GA4']['charts'])} charts | AgencyAnalytics: {len(structured_data['AgencyAnalytics']['kpis'])} KPIs, {len(structured_data['AgencyAnalytics']['charts'])} charts | Scrunch: {len(structured_data['Scrunch']['kpis'])} KPIs, {len(structured_data['Scrunch']['charts'])} charts")
+        log_parts = [f"{k}: {len(v['kpis'])} KPIs, {len(v['charts'])} charts" for k, v in structured_data.items()]
+        logger.info(f"[Executive Summary] Structured data - " + " | ".join(log_parts))
         
         if not all_metrics:
             logger.error("[Executive Summary] No metrics found to analyze after grouping")
@@ -805,7 +786,23 @@ async def generate_overall_overview(
                             if sample_data and len(sample_data) > 0:
                                 structured_data_text += f"    Sample data: {json.dumps(sample_data[:3], indent=6, default=str)}\n"
         
-        logger.debug(f"[Executive Summary] Structured data text length: {len(structured_data_text)} characters")
+        logger.info(f"[Executive Summary] Structured data text length: {len(structured_data_text)} characters")
+        
+        # Build explicit allowed-topics list so what_worked, what_to_watch, etc. can only reference these
+        allowed_topics = []
+        for _sec_key, _sec_data in structured_data.items():
+            if _sec_data.get("kpis") or _sec_data.get("charts"):
+                allowed_topics.append(_sec_data["section_name"])
+                for _kpi in _sec_data.get("kpis", []):
+                    _label = _kpi.get("label") or _kpi.get("key")
+                    if _label and _label not in allowed_topics:
+                        allowed_topics.append(_label)
+                for _chart_info in _sec_data.get("charts", {}).values():
+                    _desc = _chart_info.get("description")
+                    if _desc and _desc not in allowed_topics:
+                        allowed_topics.append(_desc)
+        allowed_topics_str = ", ".join(allowed_topics) if allowed_topics else "(no data)"
+        logger.info(f"[Executive Summary] Allowed topics for bullets ({len(allowed_topics)} items): {allowed_topics_str}")
         
         # Also keep backward-compatible format for metrics
         metrics_by_source_text = ""
@@ -828,6 +825,7 @@ STRICT — NO HALLUCINATION:
 - Do NOT make up KPIs, chart insights, or comparisons that are not in the data.
 - If data for a section is missing or not in the input, write "Not available" or one short line and move on; do NOT invent content.
 - Every bullet and sentence must be grounded in the metrics/charts text you were given. No speculation.
+- For what_worked, what_to_watch, ai_visibility_snapshot, content_authority_snapshot, focus_next_30_days, and client_action_needed: every bullet must reference ONLY a section name, KPI name, or chart that appears in the user's data. Do not mention conversions, revenue, users, sessions, or any other topic not explicitly listed in the user's structured data.
 
 Positive-only constraints:
 - Show only positive outcomes, improvements, wins, and opportunities. No declines, risks, or negative framing.
@@ -835,7 +833,7 @@ Positive-only constraints:
 - You MUST include the "what_to_watch" section: 2-3 bullets of positive opportunities or focus areas (no negative concerns).
 - Overall status: only "✅ Positive momentum" or "✅ On track".
 - Geographic/location: mention ONLY if North America data is in the input; use ONLY standard North American country names (e.g. United States, Canada, Mexico). Do not mention or infer non-North American regions.
-- NUMBER FORMAT: Use at most 2 decimal places for any number (e.g. 1.74 not 1.735487...). Use 1 decimal for percentages (e.g. 84.5%). Never output long decimal strings.
+- NUMBER FORMAT: Use whole numbers only — no decimal places for any number (e.g. 47 not 46.7, 89% not 89.1%). Never output decimals.
 - Maximum length: ~450-600 words. No emojis except ✅. No buzzwords. Calm, executive tone."""
 
         # User prompt requesting structured JSON output — POSITIVE ONLY, NO HALLUCINATION
@@ -852,6 +850,10 @@ Reporting Period: {reporting_period}
 RULES: The data above is the ONLY content selected for this report. Your summary must be based strictly on this selection—nothing else. Only the sections, KPIs, and charts listed above exist for this report; do not reference any metric, chart, or section that is not listed. If a section has no data, say "Not available" or one brief line. Do not mention geography unless North America geographic data appears above; when mentioning countries use only North American names (United States, Canada, Mexico).
 
 CRITICAL - SELECTED CONTENT ONLY: The user has chosen which KPIs, charts, and sections to include. You MUST mention ONLY what appears in the structured data above. Do NOT mention any metric, KPI, chart, or topic that is NOT listed above (e.g. if conversions or revenue are not in the list, do not mention them; if a section is missing, do not refer to it). Do NOT invent or infer anything not explicitly provided.
+
+FOR what_worked, what_to_watch, ai_visibility_snapshot, content_authority_snapshot, focus_next_30_days, AND client_action_needed: Every bullet and sentence must reference ONLY the following topics that appear in the data above. Do NOT mention any metric, section, or chart name that is not in this list.
+ALLOWED TOPICS (use only these): {allowed_topics_str}
+If you mention a number or metric, it must be one of the KPI names or chart descriptions in the list above. Do not add conversions, revenue, users, sessions, or any other topic not in the allowed list.
 
 You MUST return a valid JSON object with this exact structure (include "what_to_watch" — it must appear in the output):
 {{
@@ -871,11 +873,12 @@ You MUST return a valid JSON object with this exact structure (include "what_to_
 }}
 
 Requirements:
-- what_worked: 3-5 bullets, each tied to data above.
-- what_to_watch: MUST have 2-3 bullets (positive opportunities/focus areas only; no negative concerns). This section is required.
-- ai_visibility_snapshot, content_authority_snapshot: 2-4 bullets each, from data only; if no data, "Not available".
+- what_worked: 3-5 bullets, each tied to data above. Each bullet must reference ONLY a topic from the ALLOWED TOPICS list (section name, KPI label, or chart description from the data). Do not mention anything not in that list.
+- what_to_watch: MUST have 2-3 bullets (positive opportunities/focus areas only; no negative concerns). Each bullet must reference ONLY a topic from the ALLOWED TOPICS list. This section is required.
+- ai_visibility_snapshot, content_authority_snapshot: 2-4 bullets each, each referencing ONLY ALLOWED TOPICS; if no data for a section, "Not available".
+- focus_next_30_days, client_action_needed: base ONLY on ALLOWED TOPICS; do not mention metrics or sections not in the data above.
 - Do not invent numbers or trends. Only use what is in the data.
-- When citing numbers, use at most 2 decimal places (e.g. 1.74, 84.5%); never output long decimals like 1.7354877318970678.
+- When citing numbers, use whole numbers only — no decimal places (e.g. 47 not 46.77, 89% not 89.1%). Never output decimals.
 - Return ONLY valid JSON, no markdown, no code blocks."""
         
         # Generate overview using OpenAI
@@ -890,13 +893,20 @@ Requirements:
             }
         ]
         
-        logger.info(f"[Executive Summary] Sending request to OpenAI - model: gpt-5.1-2025-11-13, max_tokens: 1000")
-        logger.debug(f"[Executive Summary] System prompt length: {len(system_prompt)} characters")
-        logger.debug(f"[Executive Summary] User prompt length: {len(user_prompt)} characters")
+        _model_name = "gpt-5.1-2025-11-13"
+        logger.info(
+            f"[Executive Summary] Sending request to OpenAI\n"
+            f"  Model       : {_model_name}\n"
+            f"  Client      : {client_name} (client_id={client_id}, brand_id={brand_id})\n"
+            f"  Period      : {reporting_period}\n"
+            f"  KPIs in prompt: {len(all_metrics)} | Sections: {list(structured_data.keys())}\n"
+            f"  System prompt ({len(system_prompt)} chars):\n{system_prompt}\n"
+            f"  User prompt ({len(user_prompt)} chars):\n{user_prompt}"
+        )
         
         result = await openai_client.create_chat_completion(
             messages=messages,
-            model="gpt-5.1-2025-11-13",
+            model=_model_name,
             # max_tokens=1000
         )
         
@@ -906,8 +916,12 @@ Requirements:
         response_text = ""
         if result.get("choices") and len(result["choices"]) > 0:
             response_text = result["choices"][0].get("message", {}).get("content", "")
-            logger.debug(f"[Executive Summary] Response text length: {len(response_text)} characters")
-            logger.debug(f"[Executive Summary] Response text preview (first 200 chars): {response_text[:200]}")
+            logger.info(
+                f"[Executive Summary] OpenAI response received\n"
+                f"  Model    : {_model_name}\n"
+                f"  Length   : {len(response_text)} chars\n"
+                f"  Response :\n{response_text}"
+            )
         else:
             logger.warning("[Executive Summary] No choices in OpenAI response")
         
@@ -1040,12 +1054,12 @@ def format_metrics_for_prompt(metrics: List[Dict]) -> str:
             value_str = "N/A"
         elif fmt == "percentage":
             r = _round_for_overview(val, "percentage")
-            value_str = f"{r}%"
+            value_str = f"{int(r)}%"
         elif fmt == "currency":
-            value_str = f"{float(val):,.2f}" if isinstance(val, (int, float)) else str(val)
+            value_str = f"${int(round(float(val))):,}" if isinstance(val, (int, float)) else str(val)
         else:
             r = _round_for_overview(val, fmt)
-            value_str = f"{r:,.2f}" if isinstance(r, float) else f"{r:,}" if isinstance(r, (int, float)) else str(val)
+            value_str = f"{int(r):,}" if isinstance(r, (int, float)) else str(val)
         
         change_str = ""
         change_value = metric.get("change")

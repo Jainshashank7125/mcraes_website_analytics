@@ -67,8 +67,10 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - mcraes-network
-    ports:
-      - "5432:5432"
+    # Port 5432 not published to host to avoid conflict with other Postgres (e.g. staging).
+    # Backend connects via service name "postgres" on the internal network.
+    # ports:
+    #   - "5432:5432"
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]

@@ -6859,11 +6859,14 @@ async def upsert_dashboard_link_for_client(
             
             logger.info(f"Generating AI Overview for dashboard link {link.get('id')} - client_id={client_id}, dates={start_date_str} to {end_date_str}")
             
+            # Use this link's slug so overview is generated with the config just saved to DB
+            link_slug = link.get("slug")
             overview_request = OverallOverviewRequest(
                 client_id=client_id,
                 brand_id=None,
                 start_date=start_date_str,
-                end_date=end_date_str
+                end_date=end_date_str,
+                dashboard_link_slug=link_slug,
             )
             
             overview_response = await generate_overall_overview(overview_request, db=db)
@@ -6976,11 +6979,14 @@ async def update_dashboard_link(
             
             logger.info(f"Generating AI Overview for dashboard link {link_id} - client_id={client_id}, dates={start_date_str} to {end_date_str}")
             
+            # Use updated link's slug so overview is generated with the config just saved to DB
+            link_slug = updated_link.get("slug")
             overview_request = OverallOverviewRequest(
                 client_id=client_id,
                 brand_id=None,
                 start_date=start_date_str,
-                end_date=end_date_str
+                end_date=end_date_str,
+                dashboard_link_slug=link_slug,
             )
             
             overview_response = await generate_overall_overview(overview_request, db=db)
