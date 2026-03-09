@@ -90,12 +90,10 @@ const refreshAccessToken = async () => {
     clearStorage(sessionStorage)
     stopTokenRefresh()
     
-    // Redirect to login if refresh token expired
+    // Redirect to login if refresh token expired (only main dashboard; share link stays)
     const currentPath = window.location.pathname
-    const isPublicRoute = 
-      currentPath === '/login' || 
-      currentPath === '/signup' || 
-      currentPath.startsWith('/reporting/')
+    const match = currentPath.match(/^\/reporting\/client\/([^/]+)$/)
+    const isPublicRoute = currentPath === '/login' || currentPath === '/signup' || (!!match && match[1].length > 0)
     
     if (!isPublicRoute) {
       window.location.href = '/login'

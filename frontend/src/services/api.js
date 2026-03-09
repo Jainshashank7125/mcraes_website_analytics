@@ -143,16 +143,20 @@ const processQueue = (error, token = null) => {
   failedQueue = []
 }
 
+// Only the share link is "public" — main dashboard (/reporting) requires auth and should get refresh/redirect on 401
+const isPublicRouteForAuth = (path) => {
+  if (path === '/login' || path === '/signup') return true
+  const match = path.match(/^\/reporting\/client\/([^/]+)$/)
+  return !!match && match[1].length > 0
+}
+
 // Add response interceptor to handle auth errors and token refresh
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config
     const currentPath = window.location.pathname
-    const isPublicRoute = 
-      currentPath === '/login' || 
-      currentPath === '/signup' || 
-      currentPath.startsWith('/reporting/')
+    const isPublicRoute = isPublicRouteForAuth(currentPath)
 
     // If error is 401 and we haven't tried to refresh yet
     // Skip refresh attempt if already on login page or if this is the refresh endpoint itself
@@ -178,11 +182,7 @@ api.interceptors.response.use(
       
       if (!refreshToken) {
         // No refresh token, clear everything and redirect
-        const currentPath = window.location.pathname
-        const isPublicRoute = 
-          currentPath === '/login' || 
-          currentPath === '/signup' || 
-          currentPath.startsWith('/reporting/')
+        const isPublicRoute = isPublicRouteForAuth(window.location.pathname)
         
         clearAllTokens()
         
@@ -222,11 +222,7 @@ api.interceptors.response.use(
         return api(originalRequest)
       } catch (refreshError) {
         // Refresh failed, clear tokens and redirect
-        const currentPath = window.location.pathname
-        const isPublicRoute = 
-          currentPath === '/login' || 
-          currentPath === '/signup' || 
-          currentPath.startsWith('/reporting/')
+        const isPublicRoute = isPublicRouteForAuth(window.location.pathname)
         
         clearAllTokens()
         
