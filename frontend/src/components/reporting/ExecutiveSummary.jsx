@@ -11,7 +11,8 @@ import {
   Card,
   CardContent,
   useMediaQuery,
-  Button
+  Button,
+  TextField
 } from '@mui/material'
 import {
   CheckCircle as CheckCircleIcon,
@@ -25,7 +26,12 @@ import {
   People as PeopleIcon,
   Analytics as AnalyticsIcon,
   ExpandMore as ExpandMoreIcon,
-  ExpandLess as ExpandLessIcon
+  ExpandLess as ExpandLessIcon,
+  Edit as EditIcon,
+  Check as CheckIcon,
+  Close as CloseIcon,
+  Add as AddIcon,
+  DeleteOutline as DeleteOutlineIcon
 } from '@mui/icons-material'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -204,8 +210,10 @@ const HighlightCard = ({ highlight, theme, isMobile }) => {
   )
 }
 
-export default function ExecutiveSummary({ summary, theme, dashboardData, visibleHighlights }) {
+export default function ExecutiveSummary({ summary, theme, dashboardData, visibleHighlights, editable = false, onSave, saving = false }) {
   const [highlightIndex, setHighlightIndex] = useState(0)
+  const [editingCardType, setEditingCardType] = useState(null)
+  const [editDraft, setEditDraft] = useState(null)
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
   const isTablet = useMediaQuery(theme.breakpoints.down('md'))
 
@@ -302,6 +310,54 @@ export default function ExecutiveSummary({ summary, theme, dashboardData, visibl
   }
 
   const currentHighlight = hasHighlights ? filteredHighlights[highlightIndex] : null
+  const isEditingCurrentCard = currentHighlight && editable && editingCardType === currentHighlight.type
+
+  const startEditingCurrentCard = () => {
+    if (!currentHighlight || !editable) return
+    setEditingCardType(currentHighlight.type)
+    if (Array.isArray(currentHighlight.content)) {
+      setEditDraft([...currentHighlight.content])
+    } else {
+      setEditDraft(typeof currentHighlight.content === 'string' ? currentHighlight.content : '')
+    }
+  }
+
+  const cancelEditing = () => {
+    setEditingCardType(null)
+    setEditDraft(null)
+  }
+
+  const handleSaveEdit = () => {
+    if (!summary || editDraft == null || typeof onSave !== 'function') return
+    const updated = { ...summary }
+    if (editingCardType === 'executive_summary') {
+      updated.executive_summary = typeof editDraft === 'string' ? editDraft : ''
+    } else if (editingCardType === 'what_worked') {
+      updated.what_worked = Array.isArray(editDraft) ? editDraft.filter(Boolean) : []
+    } else if (editingCardType === 'what_to_watch') {
+      updated.what_to_watch = Array.isArray(editDraft) ? editDraft.filter(Boolean) : []
+    }
+    onSave(updated)
+    setEditingCardType(null)
+    setEditDraft(null)
+  }
+
+  const addBullet = () => {
+    setEditDraft(prev => (Array.isArray(prev) ? [...prev, ''] : ['']))
+  }
+
+  const removeBullet = (index) => {
+    setEditDraft(prev => (Array.isArray(prev) ? prev.filter((_, i) => i !== index) : []))
+  }
+
+  const updateBullet = (index, value) => {
+    setEditDraft(prev => {
+      if (!Array.isArray(prev)) return [value]
+      const next = [...prev]
+      next[index] = value
+      return next
+    })
+  }
 
   // Extract key metrics for "At a Glance" section
   const getKeyMetrics = () => {
@@ -499,6 +555,94 @@ export default function ExecutiveSummary({ summary, theme, dashboardData, visibl
               )}
             </AnimatePresence>
           </Box>
+
+          {/* Edit button directly below the highlight card — edits the currently visible card */}
+          {editable && currentHighlight && !editingCardType && (
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
+              <Button
+                size="small"
+                startIcon={<EditIcon />}
+                onClick={startEditingCurrentCard}
+                sx={{ textTransform: 'none', fontWeight: 600 }}
+                variant="outlined"
+              >
+                Edit {currentHighlight.title}
+              </Button>
+            </Box>
+          )}
+
+          {/* Inline editor for the current card (Executive Summary = rich text, What Worked / What to Watch = bullet list) */}
+          {editable && currentHighlight && isEditingCurrentCard && editDraft != null && (
+            <Paper
+              elevation={0}
+              sx={{
+                mt: 2,
+                p: 2.5,
+                border: `2px solid ${theme.palette.primary.main}`,
+                borderRadius: 2,
+                bgcolor: alpha(theme.palette.primary.main, 0.04)
+              }}
+            >
+              <Typography variant="subtitle2" fontWeight={600} color="primary" sx={{ mb: 2 }}>
+                Edit {currentHighlight.title}
+              </Typography>
+              {currentHighlight.type === 'executive_summary' ? (
+                <TextField
+                  multiline
+                  minRows={6}
+                  maxRows={20}
+                  fullWidth
+                  value={editDraft}
+                  onChange={(e) => setEditDraft(e.target.value)}
+                  placeholder="Edit executive summary..."
+                  sx={{
+                    '& .MuiOutlinedInput-root': {
+                      borderRadius: 2,
+                      bgcolor: 'background.paper'
+                    }
+                  }}
+                  inputProps={{ 'data-testid': 'executive-summary-edit' }}
+                />
+              ) : (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                  {(Array.isArray(editDraft) ? editDraft : []).map((item, idx) => (
+                    <Box key={idx} sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+                      <Typography component="span" sx={{ pt: 1.5, color: 'primary.main', fontWeight: 'bold' }}>•</Typography>
+                      <TextField
+                        size="small"
+                        fullWidth
+                        value={item}
+                        onChange={(e) => updateBullet(idx, e.target.value)}
+                        placeholder={`Bullet ${idx + 1}`}
+                        sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2, bgcolor: 'background.paper' } }}
+                      />
+                      <IconButton size="small" onClick={() => removeBullet(idx)} aria-label="Remove bullet" sx={{ mt: 0.5 }}>
+                        <DeleteOutlineIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  ))}
+                  <Button size="small" startIcon={<AddIcon />} onClick={addBullet} sx={{ textTransform: 'none', alignSelf: 'flex-start' }}>
+                    Add bullet
+                  </Button>
+                </Box>
+              )}
+              <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
+                <Button
+                  variant="contained"
+                  size="small"
+                  startIcon={saving ? null : <CheckIcon />}
+                  onClick={handleSaveEdit}
+                  disabled={saving}
+                  sx={{ textTransform: 'none' }}
+                >
+                  {saving ? 'Saving…' : 'Save'}
+                </Button>
+                <Button variant="outlined" size="small" startIcon={<CloseIcon />} onClick={cancelEditing} sx={{ textTransform: 'none' }}>
+                  Cancel
+                </Button>
+              </Box>
+            </Paper>
+          )}
 
           {/* Carousel Indicators */}
           {filteredHighlights.length > 1 && (

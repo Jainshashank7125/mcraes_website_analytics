@@ -73,7 +73,7 @@ import {
   Close as CloseIcon,
   ExpandLess as ExpandLessIcon,
   Error as ErrorIcon,
-} from "@mui/icons-material";
+should } from "@mui/icons-material";
 import { motion } from "framer-motion";
 import {
   LineChart,
@@ -287,7 +287,9 @@ function ReportingDashboard({
   const [activeTab, setActiveTab] = useState(0); // 0 = Executive Summary, 1 = Detailed Metrics
   const [expandedMetricsSources, setExpandedMetricsSources] = useState(
     new Set()
-  ); // Track which metric sources are expanded
+  );
+  // AI Overview: saved link URL to show after per-card save (any dashboard access)
+  const [savedOverviewLinkUrl, setSavedOverviewLinkUrl] = useState(null);
   // Pagination state for Scrunch AI Insights table
   const [insightsPage, setInsightsPage] = useState(0);
   const [insightsRowsPerPage, setInsightsRowsPerPage] = useState(10);
@@ -1198,7 +1200,7 @@ function ReportingDashboard({
         hasLinks: !!dashboardLinks,
         linksCount: dashboardLinks?.length || 0,
       });
-      return;
+      return null;
     }
 
     try {
@@ -1237,6 +1239,7 @@ function ReportingDashboard({
           linkId: matchingLink.id,
           slug: matchingLink.slug,
         });
+        return matchingLink;
       } else {
         debugLog("No matching dashboard link found for auto-save", {
           startDate,
@@ -1248,11 +1251,57 @@ function ReportingDashboard({
             end: l.end_date,
           })),
         });
+        return null;
       }
     } catch (err) {
       debugError("Error auto-saving executive summary to dashboard link:", err);
-      // Don't throw - this is a convenience feature, not critical
+      return null;
     }
+  };
+
+  // Save edited AI overview (per-card: executive summary, what worked, what to watch) and show dashboard link
+  const handleSaveOverviewEdit = async (updatedSummary) => {
+    if (!updatedSummary || typeof updatedSummary !== "object") return;
+    setLoading(true);
+    setError(null);
+    try {
+      let link = null;
+      if (isPublic && publicBrandInfo?.dashboard_link) {
+        const dlink = publicBrandInfo.dashboard_link;
+        const clientId = dlink.client_id || publicBrandInfo.clientData?.id;
+        if (clientId && dlink.id) {
+          await clientAPI.updateDashboardLink(clientId, dlink.id, {
+            executive_summary: updatedSummary,
+          });
+          link = dlink;
+        }
+      }
+      if (!link) {
+        link = await saveExecutiveSummaryToMatchingLink(updatedSummary);
+      }
+      setExecutiveSummary(updatedSummary);
+      setOverviewData((prev) => (prev ? { ...prev, executive_summary: updatedSummary } : prev));
+      if (link?.slug) {
+        setSavedOverviewLinkUrl(`${window.location.origin}/reporting/client/${link.slug}`);
+      } else {
+        setError(
+          "No dashboard link for this date range. Create or select a link with the same dates to save the overview, then try again."
+        );
+      }
+    } catch (err) {
+      debugError("Error saving overview edit:", err);
+      setError(err?.response?.data?.detail || err?.message || "Failed to save overview");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCopyOverviewLink = () => {
+    if (!savedOverviewLinkUrl) return;
+    navigator.clipboard.writeText(savedOverviewLinkUrl).then(
+      () => setError(null),
+      () => setError("Failed to copy URL")
+    );
   };
 
   // Generate overview for public dashboard link and save it
@@ -3091,12 +3140,12 @@ function ReportingDashboard({
         payload.global_filters = globalFilters;
       }
 
-      // Include executive summary ONLY if AI Overview section is selected
-      // Check both executiveSummary state and overviewData.executive_summary
+      // Save dashboard "last state": all three AI overview cards (executive summary, what worked, what to watch)
+      // when AI Overview section is selected. Backend uses this as-is and does not regenerate.
       const summaryToSave = executiveSummary || overviewData?.executive_summary;
       if (summaryToSave && visibleSections.has("ai_overview")) {
         payload.executive_summary = summaryToSave;
-        debugLog("Including executive summary in save payload", {
+        debugLog("Including executive summary (all three cards) in save payload", {
           hasExecutiveSummary: !!executiveSummary,
           hasOverviewData: !!overviewData?.executive_summary,
           linkId: editingLink?.id,
@@ -4251,20 +4300,44 @@ function ReportingDashboard({
           {/* Executive Summary Tab Content - Show in public view when tab 0 is active AND AI Overview is selected */}
           {isPublic && activeTab === 0 && isSectionVisible("ai_overview") && (
             <Box sx={{ px: 3 }}>
+              {savedOverviewLinkUrl && (
+                <Alert
+                  severity="success"
+                  sx={{ mb: 2, borderRadius: 2 }}
+                  onClose={() => setSavedOverviewLinkUrl(null)}
+                  action={
+                    <Button
+                      size="small"
+                      startIcon={<ContentCopyIcon />}
+                      onClick={handleCopyOverviewLink}
+                      sx={{ textTransform: "none" }}
+                    >
+                      Copy link
+                    </Button>
+                  }
+                >
+                  <Typography variant="body2" component="span">
+                    Overview saved. Share link:{" "}
+                    <Box
+                      component="a"
+                      href={savedOverviewLinkUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      sx={{ wordBreak: "break-all", color: "primary.main" }}
+                    >
+                      {savedOverviewLinkUrl}
+                    </Box>
+                  </Typography>
+                </Alert>
+              )}
               {executiveSummary ? (
-                <ExecutiveSummary 
-                  summary={executiveSummary} 
-                  theme={theme} 
-                  visibleHighlights={(() => {
-                    if (isPublic) {
-                      // CRITICAL: Only use saved highlights, never show all by default
-                      const highlightsToUse = publicVisibleHighlights !== null ? publicVisibleHighlights : new Set();
-                      console.log("🔍 PASSING HIGHLIGHTS TO EXECUTIVESUMMARY (PUBLIC):", Array.from(highlightsToUse), "Size:", highlightsToUse.size);
-                      return highlightsToUse;
-                    }
-                    console.log("🔍 PASSING HIGHLIGHTS TO EXECUTIVESUMMARY (ADMIN):", Array.from(visibleHighlights), "Size:", visibleHighlights.size);
-                    return visibleHighlights;
-                  })()}
+                <ExecutiveSummary
+                  summary={executiveSummary}
+                  theme={theme}
+                  visibleHighlights={publicVisibleHighlights !== null ? publicVisibleHighlights : new Set()}
+                  editable={!isPublic}
+                  onSave={handleSaveOverviewEdit}
+                  saving={loading}
                 />
               ) : null}
             </Box>
@@ -4281,19 +4354,46 @@ function ReportingDashboard({
               loading={loadingOverview}
             >
               <Box sx={{ mb: 4 }}>
-                <ExecutiveSummary 
-                  summary={executiveSummary} 
-                  theme={theme} 
-                  visibleHighlights={(() => {
-                    if (isPublic) {
-                      // CRITICAL: Only use saved highlights, never show all by default
-                      const highlightsToUse = publicVisibleHighlights !== null ? publicVisibleHighlights : new Set();
-                      console.log("🔍 PASSING HIGHLIGHTS TO EXECUTIVESUMMARY (DETAILED METRICS TAB - PUBLIC):", Array.from(highlightsToUse), "Size:", highlightsToUse.size);
-                      return highlightsToUse;
+                {savedOverviewLinkUrl && (
+                  <Alert
+                    severity="success"
+                    sx={{ mb: 2, borderRadius: 2 }}
+                    onClose={() => setSavedOverviewLinkUrl(null)}
+                    action={
+                      <Button
+                        size="small"
+                        startIcon={<ContentCopyIcon />}
+                        onClick={handleCopyOverviewLink}
+                        sx={{ textTransform: "none" }}
+                      >
+                        Copy link
+                      </Button>
                     }
-                    console.log("🔍 PASSING HIGHLIGHTS TO EXECUTIVESUMMARY (DETAILED METRICS TAB - ADMIN):", Array.from(visibleHighlights), "Size:", visibleHighlights.size);
+                  >
+                    <Typography variant="body2" component="span">
+                      Overview saved. Share link:{" "}
+                      <Box
+                        component="a"
+                        href={savedOverviewLinkUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        sx={{ wordBreak: "break-all", color: "primary.main" }}
+                      >
+                        {savedOverviewLinkUrl}
+                      </Box>
+                    </Typography>
+                  </Alert>
+                )}
+                <ExecutiveSummary
+                  summary={executiveSummary}
+                  theme={theme}
+                  visibleHighlights={(() => {
+                    if (isPublic) return publicVisibleHighlights !== null ? publicVisibleHighlights : new Set();
                     return visibleHighlights;
                   })()}
+                  editable={!isPublic}
+                  onSave={handleSaveOverviewEdit}
+                  saving={loading}
                 />
               </Box>
             </SectionContainer>
@@ -9784,6 +9884,9 @@ function ReportingDashboard({
                 <ExecutiveSummary
                   summary={overviewData.executive_summary}
                   theme={theme}
+                  editable={!isPublic}
+                  onSave={handleSaveOverviewEdit}
+                  saving={loading}
                 />
               ) : overviewData.overview ? (
               <Paper
