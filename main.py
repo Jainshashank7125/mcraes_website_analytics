@@ -4,7 +4,7 @@ from fastapi.exceptions import RequestValidationError, HTTPException
 from contextlib import asynccontextmanager
 import uvicorn
 from app.core.config import settings
-from app.api import sync, data, database, auth, auth_v2, audit, sync_jobs, openai, websocket
+from app.api import sync, data, database, auth, auth_v2, audit, sync_jobs, openai, websocket, telemetry
 from app.db.database import init_db, check_db_connection
 from app.core.logging_config import setup_logging
 from app.core.error_handlers import (
@@ -14,6 +14,7 @@ from app.core.error_handlers import (
     general_exception_handler
 )
 from app.core.exceptions import BaseAPIException
+from app.core.telemetry import setup_telemetry
 import logging
 
 # Setup logging
@@ -73,6 +74,9 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Initialize OTEL only when enabled via env vars.
+setup_telemetry(app)
+
 # Debug: log request path for proxy investigation (remove after fix)
 @app.middleware("http")
 async def log_request_path(request: Request, call_next):
@@ -107,6 +111,7 @@ app.include_router(database.router, prefix="/api/v1", tags=["database"])
 app.include_router(audit.router, prefix="/api/v1", tags=["audit"])
 app.include_router(openai.router, prefix="/api/v1", tags=["openai"])
 app.include_router(websocket.router, prefix="/api/v1", tags=["websocket"])
+app.include_router(telemetry.router, prefix="/api/v1", tags=["telemetry"])
 
 @app.get("/")
 async def root():

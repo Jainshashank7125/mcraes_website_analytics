@@ -54,6 +54,18 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_HOURS: int = 3  # 3 hours TTL for access tokens
     JWT_REFRESH_TOKEN_EXPIRE_HOURS: int = 15  # 15 hours TTL for refresh tokens
     JWT_REFRESH_TOKEN_MAX_USAGE: int = 4  # Maximum usage limit for refresh tokens
+
+    # OpenTelemetry / SigNoz
+    OTEL_ENABLED: str = "false"
+    OTEL_SERVICE_NAME: str = "mcraes-backend"
+    OTEL_SERVICE_VERSION: str = "1.0.0"
+    OTEL_DEPLOYMENT_ENVIRONMENT: str = "staging"
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://otel-collector:4317"
+    OTEL_EXPORTER_OTLP_INSECURE: str = "true"
+    OTEL_EXPORTER_OTLP_HEADERS: Optional[str] = None
+    OTEL_RESOURCE_ATTRIBUTES: Optional[str] = None
+    OTEL_METRIC_EXPORT_INTERVAL_MS: int = 15000
+    OTEL_LOGS_ENABLED: str = "true"
     
     @property
     def database_url(self) -> str:
@@ -118,6 +130,42 @@ class Settings(BaseSettings):
             )
         
         return database_url
+
+    @property
+    def otel_headers_dict(self) -> dict:
+        """
+        Parse OTEL_EXPORTER_OTLP_HEADERS from comma-separated `k=v` pairs.
+        Example: "signoz-ingestion-key=xyz,another-header=value"
+        """
+        if not self.OTEL_EXPORTER_OTLP_HEADERS:
+            return {}
+
+        headers = {}
+        for pair in self.OTEL_EXPORTER_OTLP_HEADERS.split(","):
+            item = pair.strip()
+            if not item or "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            headers[key.strip()] = value.strip()
+        return headers
+
+    @property
+    def otel_resource_attributes_dict(self) -> dict:
+        """
+        Parse OTEL_RESOURCE_ATTRIBUTES from comma-separated `k=v` pairs.
+        Example: "service.name=my-service,deployment.environment=staging"
+        """
+        if not self.OTEL_RESOURCE_ATTRIBUTES:
+            return {}
+
+        attributes = {}
+        for pair in self.OTEL_RESOURCE_ATTRIBUTES.split(","):
+            item = pair.strip()
+            if not item or "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            attributes[key.strip()] = value.strip()
+        return attributes
     
     class Config:
         env_file = ".env"
