@@ -14,6 +14,7 @@ from google.analytics.data_v1beta.types import (
     Metric,
     FilterExpression,
     Filter,
+    FilterExpressionList,
     RunRealtimeReportRequest,
     OrderBy,
 )
@@ -334,16 +335,19 @@ class GA4APIClient:
                 logger.info(f"[GA4 CLIENT] API Request: RunReportRequest with property={property_id}, date_range={prev_start} to {prev_end}")
                 
                 # Get previous period totals WITHOUT dimensions (for accurate totalUsers)
-                prev_totals_request = RunReportRequest(
-                    property=f"properties/{property_id}",
-                    date_ranges=[DateRange(start_date=prev_start, end_date=prev_end)],
-                    # NO dimensions - for accurate totalUsers
-                    metrics=[
-                        Metric(name="totalUsers"),  # Correct unique user count
+                # Apply same dimension_filter as current period when global_filters is set
+                prev_totals_params = {
+                    "property": f"properties/{property_id}",
+                    "date_ranges": [DateRange(start_date=prev_start, end_date=prev_end)],
+                    "metrics": [
+                        Metric(name="totalUsers"),
                         Metric(name="sessions"),
                         Metric(name="engagedSessions"),
                     ],
-                )
+                }
+                if dimension_filter:
+                    prev_totals_params["dimension_filter"] = dimension_filter
+                prev_totals_request = RunReportRequest(**prev_totals_params)
                 prev_totals_response = client.run_report(prev_totals_request)
                 
                 prev_totals = {
@@ -362,16 +366,20 @@ class GA4APIClient:
                     logger.info(f"[GA4 CLIENT] Previous period total users (totalUsers metric): {prev_totals['users']}")
                 
                 # Get previous period daily breakdown for weighted averages
-                prev_daily_request = RunReportRequest(
-                    property=f"properties/{property_id}",
-                    date_ranges=[DateRange(start_date=prev_start, end_date=prev_end)],
-                    dimensions=[Dimension(name="date")],
-                    metrics=[
+                # Apply same dimension_filter as current period when global_filters is set
+                prev_daily_params = {
+                    "property": f"properties/{property_id}",
+                    "date_ranges": [DateRange(start_date=prev_start, end_date=prev_end)],
+                    "dimensions": [Dimension(name="date")],
+                    "metrics": [
                         Metric(name="sessions"),
                         Metric(name="averageSessionDuration"),
                         Metric(name="engagementRate"),
                     ],
-                )
+                }
+                if dimension_filter:
+                    prev_daily_params["dimension_filter"] = dimension_filter
+                prev_daily_request = RunReportRequest(**prev_daily_params)
                 prev_response = client.run_report(prev_daily_request)
                 logger.info(f"[GA4 CLIENT] Previous period API response received")
                 
@@ -598,11 +606,14 @@ class GA4APIClient:
             
             client = self._get_data_client()
             
-            # Build dimension filter from global_filters.
-            # IMPORTANT: We do NOT exclude 'countries' here – if the user applies a
-            # Countries filter, GA4 should restrict results to those countries.
-            # This mirrors GA4 UI behavior (filter on country, then view Top Countries).
-            dimension_filter = GA4FilterBuilder.build_dimension_filter(global_filters)
+            # Build dimension filter from global_filters using the same dict -> FilterExpression
+            # conversion as other GA4 endpoints. GA4 Python client expects a FilterExpression
+            # object (with snake_case fields like and_group), not our intermediate dict with
+            # camelCase keys (andGroup). Without this conversion, filters may be ignored.
+            filter_dict = GA4FilterBuilder.build_dimension_filter(global_filters)
+            dimension_filter: Optional[FilterExpression] = None
+            if filter_dict:
+                dimension_filter = self._dict_to_filter_expression(filter_dict)
             if dimension_filter and global_filters:
                 logger.info(
                     f"[GA4 FILTER] Applying filters to get_geographic_breakdown: {GA4FilterBuilder.get_filter_summary(global_filters)}"
@@ -698,7 +709,6 @@ class GA4APIClient:
         global_filters: Optional[Dict[str, List[str]]] = None
     ) -> List[Dict]:
         """Get device and platform breakdown with optional global filters"""
-        from app.services.ga4_filter_builder import GA4FilterBuilder
         try:
             if not start_date:
                 start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -707,19 +717,21 @@ class GA4APIClient:
             
             client = self._get_data_client()
             
-            request = RunReportRequest(
-                property=f"properties/{property_id}",
-                date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
-                dimensions=[
+            request_params = {
+                "property": f"properties/{property_id}",
+                "date_ranges": [DateRange(start_date=start_date, end_date=end_date)],
+                "dimensions": [
                     Dimension(name="deviceCategory"),
                     Dimension(name="operatingSystem"),
                 ],
-                metrics=[
+                "metrics": [
                     Metric(name="activeUsers"),
                     Metric(name="sessions"),
                     Metric(name="bounceRate"),
                 ],
-            )
+            }
+            request_params = self._apply_filters_to_request(request_params, global_filters)
+            request = RunReportRequest(**request_params)
             
             response = client.run_report(request)
             
@@ -743,9 +755,11 @@ class GA4APIClient:
         self,
         property_id: str,
         start_date: Optional[str] = None,
-        end_date: Optional[str] = None
+        end_date: Optional[str] = None,
+        global_filters: Optional[Dict[str, List[str]]] = None
     ) -> List[Dict]:
-        """Get conversion events"""
+        """Get conversion events with optional global filters (e.g. country)."""
+        from app.services.ga4_filter_builder import GA4FilterBuilder
         try:
             if not start_date:
                 start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -753,6 +767,26 @@ class GA4APIClient:
                 end_date = datetime.now().strftime("%Y-%m-%d")
             
             client = self._get_data_client()
+            
+            event_name_filter = FilterExpression(
+                filter=Filter(
+                    field_name="eventName",
+                    string_filter=Filter.StringFilter(
+                        match_type=Filter.StringFilter.MatchType.CONTAINS,
+                        value="conversion"
+                    )
+                )
+            )
+            dimension_filter = event_name_filter
+            if global_filters:
+                filter_dict = GA4FilterBuilder.build_dimension_filter(global_filters)
+                if filter_dict:
+                    dim_filter_expr = self._dict_to_filter_expression(filter_dict)
+                    if dim_filter_expr:
+                        dimension_filter = FilterExpression(
+                            and_group=FilterExpressionList(expressions=[event_name_filter, dim_filter_expr])
+                        )
+                        logger.info(f"[GA4 FILTER] Applying filters to get_conversions: {GA4FilterBuilder.get_filter_summary(global_filters)}")
             
             request = RunReportRequest(
                 property=f"properties/{property_id}",
@@ -762,15 +796,7 @@ class GA4APIClient:
                     Metric(name="eventCount"),
                     Metric(name="totalUsers"),
                 ],
-                dimension_filter=FilterExpression(
-                    filter=Filter(
-                        field_name="eventName",
-                        string_filter=Filter.StringFilter(
-                            match_type=Filter.StringFilter.MatchType.CONTAINS,
-                            value="conversion"
-                        )
-                    )
-                ),
+                dimension_filter=dimension_filter,
             )
             
             response = client.run_report(request)

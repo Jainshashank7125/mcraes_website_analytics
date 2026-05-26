@@ -515,6 +515,7 @@ async def sync_ga4(
     client_id: Optional[int] = Query(None, description="Sync GA4 data for specific client ID (if not provided, syncs all clients with GA4 configured)"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD), defaults to 30 days ago if not provided"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD), defaults to today if not provided"),
+    days_back: Optional[int] = Query(None, description="Alternative to start_date: sync last N days (e.g. 90 for last 90 days). Ignored if start_date is set."),
     sync_realtime: bool = Query(True, description="Whether to sync realtime data"),
     cron: bool = Query(False, description="Set to true for cron jobs to bypass authentication"),
     request: Request = None,
@@ -526,12 +527,28 @@ async def sync_ga4(
     
     - **sync_mode**: 'new' (only clients without GA4 data) or 'complete' (all clients with GA4)
     - **client_id**: Optional specific client ID to sync. If not provided, syncs all clients with GA4 configured.
-    - **start_date**: Optional start date (YYYY-MM-DD). If not provided, defaults to 30 days ago.
-    - **end_date**: Optional end date (YYYY-MM-DD). If not provided, defaults to today.
+    - **start_date** / **end_date**: Date range (YYYY-MM-DD). If not provided, defaults to last 30 days.
+    - **days_back**: Optional. Sync last N days (e.g. 90). Used only when start_date is not set; end_date still defaults to today.
     - **sync_realtime**: Whether to sync realtime data
+    
+    Note: Synced data is unfiltered (all countries/channels). When users apply filters on the reporting
+    dashboard, data is fetched live from GA4 for the selected date range, so any date span works.
     """
     if sync_mode not in ["new", "complete"]:
         raise ValueError("sync_mode must be 'new' or 'complete'")
+    
+    # If days_back provided and start_date not set, compute start_date (and end_date if not set)
+    if start_date is None and days_back is not None:
+        try:
+            days_back_val = int(days_back)
+            if days_back_val < 1 or days_back_val > 366 * 2:
+                raise ValueError("days_back must be between 1 and 732")
+        except (TypeError, ValueError) as e:
+            raise ValueError("days_back must be a positive integer (e.g. 90)") from e
+        end_date = end_date or datetime.now().strftime("%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        start_dt = end_dt - timedelta(days=days_back_val - 1)
+        start_date = start_dt.strftime("%Y-%m-%d")
     
     # Validate date format if provided
     if start_date:
@@ -565,6 +582,7 @@ async def sync_ga4(
             "client_id": client_id,
             "start_date": start_date,
             "end_date": end_date,
+            "days_back": days_back,
             "sync_realtime": sync_realtime
         }
     )

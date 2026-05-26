@@ -49,6 +49,29 @@ npm install
    GA4_CREDENTIALS_PATH=service-key.json
    ```
 
+3. Optional OpenTelemetry + SigNoz configuration (disabled by default for safety):
+   ```
+   OTEL_ENABLED=false
+   OTEL_SERVICE_NAME=mcraes-backend
+   OTEL_SERVICE_VERSION=1.0.0
+   OTEL_DEPLOYMENT_ENVIRONMENT=staging
+   OTEL_RESOURCE_ATTRIBUTES=service.name=mcraes-backend,deployment.environment=staging
+   OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+   OTEL_EXPORTER_OTLP_INSECURE=true
+   OTEL_EXPORTER_OTLP_HEADERS=
+   OTEL_METRIC_EXPORT_INTERVAL_MS=15000
+   ```
+   With `OTEL_ENABLED=true`, backend now exports both traces and HTTP metrics via OTLP.
+   Frontend (Vite build-time variables):
+   ```
+   VITE_OTEL_ENABLED=false
+   VITE_OTEL_SERVICE_NAME=mcraes-frontend
+   VITE_OTEL_SERVICE_VERSION=1.0.0
+   VITE_OTEL_DEPLOYMENT_ENVIRONMENT=staging
+   VITE_OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318/v1/traces
+   VITE_OTEL_EXPORTER_OTLP_HEADERS=
+   ```
+
 ### 4. Set Up Supabase Database
 
 Run the following SQL scripts in your Supabase SQL Editor (in order):

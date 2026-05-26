@@ -320,13 +320,15 @@ export const syncAPI = {
     return response.data
   },
 
-  // Sync GA4 data (async - returns job_id) - now uses clientId instead of brandId
-  syncGA4: async (syncMode = 'complete', clientId = null, startDate = null, endDate = null, syncRealtime = false) => {
+  // Sync GA4 data (async - returns job_id). Use clientId for one client or omit to sync all clients with GA4.
+  // days_back: optional (e.g. 90) to sync last N days when startDate/endDate not set.
+  syncGA4: async (syncMode = 'complete', clientId = null, startDate = null, endDate = null, syncRealtime = false, daysBack = null) => {
     const params = new URLSearchParams()
     params.append('sync_mode', syncMode)
     if (clientId) params.append('client_id', clientId)
     if (startDate) params.append('start_date', startDate)
     if (endDate) params.append('end_date', endDate)
+    if (daysBack != null && daysBack !== '') params.append('days_back', String(daysBack))
     params.append('sync_realtime', syncRealtime)
     
     const response = await api.post(`/api/v1/sync/ga4?${params.toString()}`)
@@ -965,11 +967,16 @@ export const keywordsAPI = {
 // Reporting Dashboard API endpoints
 export const reportingAPI = {
   // Get consolidated reporting dashboard KPIs
-  getReportingDashboard: async (brandId, startDate = null, endDate = null) => {
+  getReportingDashboard: async (brandId, startDate = null, endDate = null, globalFilters = null) => {
     const params = new URLSearchParams()
     if (startDate) params.append('start_date', startDate)
     if (endDate) params.append('end_date', endDate)
-    
+    if (globalFilters && Object.keys(globalFilters).length > 0) {
+      params.append('global_filters', JSON.stringify(globalFilters))
+    }
+    // #region agent log
+    fetch('http://localhost:56209/ingest/e1b0c496-6e70-4e2c-b70e-3a1e7d6d75ea',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32561b'},body:JSON.stringify({sessionId:'32561b',runId:'pre-fix',hypothesisId:'C',location:'api.js:reportingAPI.getReportingDashboard',message:'Reporting dashboard request (brand)',data:{brandId,startDate,endDate,hasGlobalFilters:!!(globalFilters&&Object.keys(globalFilters).length>0),countryCount:(globalFilters&&Array.isArray(globalFilters.countries))?globalFilters.countries.length:0,qsLen:params.toString().length},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     const response = await api.get(`/api/v1/data/reporting-dashboard/${brandId}?${params.toString()}`)
     return response.data
   },
@@ -983,6 +990,9 @@ export const reportingAPI = {
     if (globalFilters && Object.keys(globalFilters).length > 0) {
       params.append('global_filters', JSON.stringify(globalFilters))
     }
+    // #region agent log
+    fetch('http://localhost:56209/ingest/e1b0c496-6e70-4e2c-b70e-3a1e7d6d75ea',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32561b'},body:JSON.stringify({sessionId:'32561b',runId:'pre-fix',hypothesisId:'C',location:'api.js:reportingAPI.getReportingDashboardByClient',message:'Reporting dashboard request (client)',data:{clientId,startDate,endDate,hasGlobalFilters:!!(globalFilters&&Object.keys(globalFilters).length>0),countryCount:(globalFilters&&Array.isArray(globalFilters.countries))?globalFilters.countries.length:0,qsLen:params.toString().length},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     
     const response = await api.get(`/api/v1/data/reporting-dashboard/client/${clientId}?${params.toString()}`)
     return response.data
@@ -997,6 +1007,9 @@ export const reportingAPI = {
     if (globalFilters && Object.keys(globalFilters).length > 0) {
       params.append('global_filters', JSON.stringify(globalFilters))
     }
+    // #region agent log
+    fetch('http://localhost:56209/ingest/e1b0c496-6e70-4e2c-b70e-3a1e7d6d75ea',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32561b'},body:JSON.stringify({sessionId:'32561b',runId:'pre-fix',hypothesisId:'C',location:'api.js:reportingAPI.getReportingDashboardBySlug',message:'Reporting dashboard request (slug)',data:{hasSlug:!!slug,startDate,endDate,hasGlobalFilters:!!(globalFilters&&Object.keys(globalFilters).length>0),countryCount:(globalFilters&&Array.isArray(globalFilters.countries))?globalFilters.countries.length:0,qsLen:params.toString().length},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     
     const response = await api.get(`/api/v1/data/reporting-dashboard/slug/${slug}?${params.toString()}`)
     return response.data

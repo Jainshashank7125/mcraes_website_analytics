@@ -3,9 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    container_name: mcraes-backend
+    container_name: mcraes-backend-staging
     ports:
-      - "8000:8000"
+      - "8200:8000"
     environment:
       # FastAPI Settings
       - HOST=0.0.0.0
@@ -18,8 +18,8 @@ services:
       # - SUPABASE_KEY=${SUPABASE_KEY}
       
       # Local PostgreSQL Database Settings
-      # Override Supabase DB connection to use local PostgreSQL
-      - SUPABASE_DB_HOST=postgres
+      # Connect to production PostgreSQL database (same as production)
+      - SUPABASE_DB_HOST=mcraes-postgres
       - SUPABASE_DB_PORT=5432
       - SUPABASE_DB_NAME=postgres
       - SUPABASE_DB_USER=postgres
@@ -36,6 +36,14 @@ services:
       - VITE_DEBUG_LOG=true
       # Google Analytics 4 Settings (optional)
       - GA4_CREDENTIALS_PATH=${GA4_CREDENTIALS_PATH}  # Path to service account JSON file
+      # OpenTelemetry / SigNoz (disabled by default for staging safety)
+      - OTEL_ENABLED=${OTEL_ENABLED:-false}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-mcraes-backend}
+      - OTEL_SERVICE_VERSION=${OTEL_SERVICE_VERSION:-1.0.0}
+      - OTEL_DEPLOYMENT_ENVIRONMENT=${OTEL_DEPLOYMENT_ENVIRONMENT:-staging}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      - OTEL_EXPORTER_OTLP_INSECURE=${OTEL_EXPORTER_OTLP_INSECURE:-true}
+      - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
     volumes:
       # Mount .env file if you have one
       # NOTE: Environment variables in docker-compose.yml take precedence over .env file
@@ -45,7 +53,7 @@ services:
       - ./service-key.json:/app/service-key.json:ro
       - ./ga4_token.json:/app/ga4_token.json
     networks:
-      - mcraes-network
+      - mcraes-production-network
     depends_on:
       - postgres
     restart: unless-stopped
@@ -56,9 +64,23 @@ services:
       retries: 3
       start_period: 40s
 
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.108.0
+    container_name: mcraes-otel-collector-staging
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    profiles: ["observability"]
+    volumes:
+      - ./infra/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    networks:
+      - mcraes-production-network
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
-    container_name: mcraes-postgres
+    container_name: mcraes-postgres-staging
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
@@ -66,7 +88,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - mcraes-network
+      - mcraes-staging-network
     ports:
       - "5432:5432"
     restart: unless-stopped
@@ -78,7 +100,7 @@ services:
 
   pgadmin:
     image: dpage/pgadmin4:latest
-    container_name: mcraes-pgadmin
+    container_name: mcraes-pgadmin-staging
     environment:
       - PGADMIN_DEFAULT_EMAIL=admin@mcraes.com
       - PGADMIN_DEFAULT_PASSWORD=admin
@@ -87,9 +109,9 @@ services:
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     networks:
-      - mcraes-network
+      - mcraes-production-network
     ports:
-      - "5050:80"
+      - "5150:80"
     depends_on:
       - postgres
     restart: unless-stopped
@@ -98,17 +120,24 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    container_name: mcraes-frontend
+      args:
+        VITE_OTEL_ENABLED: ${VITE_OTEL_ENABLED:-true}
+        VITE_OTEL_SERVICE_NAME: ${VITE_OTEL_SERVICE_NAME:-rat-frontend}
+        VITE_OTEL_DEPLOYMENT_ENVIRONMENT: ${VITE_OTEL_DEPLOYMENT_ENVIRONMENT:-staging}
+        VITE_OTEL_EXPORTER_OTLP_ENDPOINT: ${VITE_OTEL_EXPORTER_OTLP_ENDPOINT:-https://ingest.in2.signoz.cloud:443/v1/traces}
+        VITE_OTEL_EXPORTER_OTLP_HEADERS: ${VITE_OTEL_EXPORTER_OTLP_HEADERS:-}
+        VITE_OTEL_LOGS_ENABLED: ${VITE_OTEL_LOGS_ENABLED:-true}
+        VITE_OTEL_LOGS_EXPORTER_OTLP_ENDPOINT: ${VITE_OTEL_LOGS_EXPORTER_OTLP_ENDPOINT:-https://ingest.in2.signoz.cloud:443/v1/logs}
+    container_name: mcraes-frontend-staging
     ports:
-      - "3000:3000"
+      - "3200:3000"
     # Frontend API Base URL (defaults to backend service)
     # Uncomment environment section and set if backend is on different host
-    # environment:
-    #   - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://backend:8000}
+    # Vite env vars are injected at build-time via build.args above.
     depends_on:
       - backend
     networks:
-      - mcraes-network
+      - mcraes-production-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:3000/health || exit 0"]
@@ -117,7 +146,10 @@ services:
       retries: 3
 
 networks:
-  mcraes-network:
+  mcraes-production-network:
+    external: true
+    name: mcraes_website_analytics_mcraes-network
+  mcraes-staging-network:
     driver: bridge
 
 volumes:

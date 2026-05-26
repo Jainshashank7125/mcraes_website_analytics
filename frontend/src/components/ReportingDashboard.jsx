@@ -137,6 +137,22 @@ const DATE_PRESETS = [
   { label: "Last year", days: 365 },
 ];
 
+// GA4 Session default channel group options (matches GA4 API / Traffic acquisition report)
+const GA4_CHANNEL_OPTIONS = [
+  "Direct",
+  "Organic Search",
+  "Paid Search",
+  "Organic Social",
+  "Paid Social",
+  "Referral",
+  "Email",
+  "Affiliates",
+  "Video",
+  "Display",
+  "Cross-network",
+  "Unassigned",
+];
+
 // Helper function to get month name
 // getMonthName is now imported from utils
 
@@ -185,6 +201,7 @@ function ReportingDashboard({
   const chartsInitializedRef = useRef(false); // Track if charts have been initialized
   const prevGlobalFiltersRef = useRef(null); // Track previous global filters to detect changes
   const hasInitializedKPIsRef = useRef(false); // Track if KPIs have been initialized from data
+  const dashboardLoadSeqRef = useRef(0); // Prevent stale responses overwriting newer dashboard data
   const [clients, setClients] = useState([]);
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [clientSearchTerm, setClientSearchTerm] = useState("");
@@ -389,6 +406,9 @@ function ReportingDashboard({
       setError("Please select a client first");
       return;
     }
+    // #region agent log
+    fetch('http://localhost:56209/ingest/e1b0c496-6e70-4e2c-b70e-3a1e7d6d75ea',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32561b'},body:JSON.stringify({sessionId:'32561b',runId:'pre-fix',hypothesisId:'A',location:'ReportingDashboard.jsx:handleManualLoad',message:'Manual Load Data triggered',data:{selectedClientId,selectedBrandId,startDate,endDate,hasGlobalFilters:!!(globalFilters&&Object.keys(globalFilters).length>0),countryCount:(globalFilters&&Array.isArray(globalFilters.countries))?globalFilters.countries.length:0},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     // Increment trigger to force reload
     setManualLoadTrigger(prev => prev + 1);
   };
@@ -691,6 +711,26 @@ function ReportingDashboard({
       fetchClientData();
     }
   }, [location.state, isPublic, selectedClientId]);
+
+  // Restore saved country/filter from localStorage when client or brand changes (admin view)
+  const GLOBAL_FILTERS_STORAGE_KEY_PREFIX = "reporting_dashboard_global_filters_";
+  useEffect(() => {
+    if (isPublic) return;
+    const entityId = selectedClientId || selectedBrandId;
+    if (!entityId) return;
+    const key = `${GLOBAL_FILTERS_STORAGE_KEY_PREFIX}${selectedClientId ? `client_${selectedClientId}` : `brand_${selectedBrandId}`}`;
+    try {
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) {
+          setGlobalFilters(parsed);
+        }
+      }
+    } catch (_) {
+      // ignore invalid JSON
+    }
+  }, [selectedClientId, selectedBrandId, isPublic]);
 
   // KPI selections are NOT loaded on initial render - show all KPIs/charts by default
   // KPI selections are only loaded when a dashboard link is selected/edited (see handleEditLink)
@@ -1020,6 +1060,12 @@ function ReportingDashboard({
     const filtersChanged = JSON.stringify(prevGlobalFiltersRef.current) !== JSON.stringify(globalFilters);
     
     if (filtersChanged) {
+      // #region agent log
+      fetch('http://localhost:56209/ingest/e1b0c496-6e70-4e2c-b70e-3a1e7d6d75ea',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32561b'},body:JSON.stringify({sessionId:'32561b',runId:'pre-fix',hypothesisId:'D',location:'ReportingDashboard.jsx:useEffect(globalFilters)',message:'Global filters changed effect fired',data:{selectedClientId,selectedBrandId,isPublic,hasPublicSlug:!!publicSlug,prevKeys:prevGlobalFiltersRef.current?Object.keys(prevGlobalFiltersRef.current):null,nextKeys:globalFilters?Object.keys(globalFilters):null,countries:(globalFilters&&Array.isArray(globalFilters.countries))?globalFilters.countries.slice(0,3):null,countryCount:(globalFilters&&Array.isArray(globalFilters.countries))?globalFilters.countries.length:0,loadingBefore:loading},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      // #region agent log
+      fetch('http://localhost:56209/ingest/e1b0c496-6e70-4e2c-b70e-3a1e7d6d75ea',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e0f21b'},body:JSON.stringify({sessionId:'e0f21b',runId:'pre-fix',hypothesisId:'H2',location:'ReportingDashboard.jsx:useEffect(globalFilters):pre-load',message:'Global filters changed – triggering reload',data:{hasClient:!!selectedClientId,hasBrand:!!selectedBrandId,isPublic,hasPublicSlug:!!publicSlug,filters:globalFilters,loadingBefore:loading},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       debugLog("Global filters changed, reloading dashboard", {
         previous: prevGlobalFiltersRef.current,
         current: globalFilters,
@@ -1030,10 +1076,17 @@ function ReportingDashboard({
       
       // Only reload if we have a client/brand selected
       if (selectedClientId || selectedBrandId || (isPublic && publicSlug)) {
-        // Small delay to ensure state is stable
+        // Immediately show loader so we don't flash "no data" states while refetching
+        setLoading(true);
+        setError(null);
+
+        // Small delay to debounce rapid filter changes and ensure state is stable
         const timeoutId = setTimeout(async () => {
+          // #region agent log
+          fetch('http://localhost:56209/ingest/e1b0c496-6e70-4e2c-b70e-3a1e7d6d75ea',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32561b'},body:JSON.stringify({sessionId:'32561b',runId:'pre-fix',hypothesisId:'D',location:'ReportingDashboard.jsx:useEffect(globalFilters):timeout',message:'Global filters effect invoking loadDashboardData',data:{selectedClientId,selectedBrandId,isPublic,hasPublicSlug:!!publicSlug,hasGlobalFilters:!!(globalFilters&&Object.keys(globalFilters).length>0),countryCount:(globalFilters&&Array.isArray(globalFilters.countries))?globalFilters.countries.length:0},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
           await loadDashboardData();
-        }, 300);
+        }, 150);
         
         return () => clearTimeout(timeoutId);
       }
@@ -1668,7 +1721,11 @@ function ReportingDashboard({
     // For public view, use publicSlug
     if (!selectedClientId && !selectedBrandId && !publicSlug) return;
 
+    const requestSeq = ++dashboardLoadSeqRef.current;
     try {
+      // #region agent log
+      fetch('http://localhost:56209/ingest/e1b0c496-6e70-4e2c-b70e-3a1e7d6d75ea',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32561b'},body:JSON.stringify({sessionId:'32561b',runId:'pre-fix',hypothesisId:'C',location:'ReportingDashboard.jsx:loadDashboardData:entry',message:'loadDashboardData start',data:{requestSeq,selectedClientId,selectedBrandId,isPublic,hasPublicSlug:!!publicSlug,effectiveStart:(overrideRange?.startDate||startDate||null),effectiveEnd:(overrideRange?.endDate||endDate||null),hasGlobalFilters:!!(globalFilters&&Object.keys(globalFilters).length>0),countryCount:(globalFilters&&Array.isArray(globalFilters.countries))?globalFilters.countries.length:0,loadingBefore:loading},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       setLoading(true);
       setError(null);
 
@@ -1693,13 +1750,24 @@ function ReportingDashboard({
           globalFilters
         );
       } else {
-        // Fallback to brand-based endpoint
+        // Fallback to brand-based endpoint (pass globalFilters so country filter works)
         data = await reportingAPI.getReportingDashboard(
           selectedBrandId,
           effectiveStart,
-          effectiveEnd
+          effectiveEnd,
+          globalFilters
         );
       }
+
+      // #region agent log
+      fetch('http://localhost:56209/ingest/e1b0c496-6e70-4e2c-b70e-3a1e7d6d75ea',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32561b'},body:JSON.stringify({sessionId:'32561b',runId:'pre-fix',hypothesisId:'B',location:'ReportingDashboard.jsx:loadDashboardData:response',message:'loadDashboardData response received',data:{requestSeq,isStale:(requestSeq!==dashboardLoadSeqRef.current),noData:!!data?.no_data,ga4FilteredNoData:!!(data?.ga4_filtered_no_data||data?.ga4_filtered_no_data_message),kpiCount:data?.kpis?Object.keys(data.kpis).length:0,chartKeys:data?.chart_data?Object.keys(data.chart_data).slice(0,12):[],trafficSourcesLen:Array.isArray(data?.chart_data?.traffic_sources)?data.chart_data.traffic_sources.length:null,geoLen:Array.isArray(data?.chart_data?.geographic_breakdown)?data.chart_data.geographic_breakdown.length:null,topPagesLen:Array.isArray(data?.chart_data?.top_pages)?data.chart_data.top_pages.length:null},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      // #region agent log
+      fetch('http://localhost:56209/ingest/e1b0c496-6e70-4e2c-b70e-3a1e7d6d75ea',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e0f21b'},body:JSON.stringify({sessionId:'e0f21b',runId:'pre-fix',hypothesisId:'H1',location:'ReportingDashboard.jsx:loadDashboardData:response',message:'loadDashboardData response summary',data:{requestSeq,isStale:(requestSeq!==dashboardLoadSeqRef.current),noData:!!data?.no_data,ga4FilteredNoData:!!(data?.ga4_filtered_no_data||data?.ga4_filtered_no_data_message),hasKpis:!!data?.kpis,kpiCount:data?.kpis?Object.keys(data.kpis).length:0,hasChartData:!!data?.chart_data,chartKeys:data?.chart_data?Object.keys(data.chart_data).slice(0,12):[],trafficSourcesLen:Array.isArray(data?.chart_data?.traffic_sources)?data.chart_data.traffic_sources.length:null,geoLen:Array.isArray(data?.chart_data?.geographic_breakdown)?data.chart_data.geographic_breakdown.length:null,topPagesLen:Array.isArray(data?.chart_data?.top_pages)?data.chart_data.top_pages.length:null},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+
+      // Ignore stale responses (e.g., rapid filter changes / overlapping requests)
+      if (requestSeq !== dashboardLoadSeqRef.current) return;
 
       // Check if data has no_data flag (graceful degradation from backend)
       if (data && data.no_data) {
@@ -1779,10 +1847,17 @@ function ReportingDashboard({
       }
     } catch (err) {
       debugError("Error loading dashboard data:", err);
+      // Ignore stale errors from older requests
+      if (requestSeq !== dashboardLoadSeqRef.current) return;
       setDashboardData(null);
       // Don't set error here - let individual sections handle their own errors
     } finally {
-      setLoading(false);
+      if (requestSeq === dashboardLoadSeqRef.current) {
+        setLoading(false);
+        // #region agent log
+        fetch('http://localhost:56209/ingest/e1b0c496-6e70-4e2c-b70e-3a1e7d6d75ea',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32561b'},body:JSON.stringify({sessionId:'32561b',runId:'pre-fix',hypothesisId:'D',location:'ReportingDashboard.jsx:loadDashboardData:finally',message:'loadDashboardData finished (latest)',data:{requestSeq},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
+      }
     }
   };
 
@@ -2546,9 +2621,25 @@ function ReportingDashboard({
         : null;
     // Update global filters state
     const filtersChanged = JSON.stringify(globalFilters) !== JSON.stringify(nextGlobalFilters);
+    // #region agent log
+    fetch('http://localhost:56209/ingest/e1b0c496-6e70-4e2c-b70e-3a1e7d6d75ea',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32561b'},body:JSON.stringify({sessionId:'32561b',runId:'pre-fix',hypothesisId:'C',location:'ReportingDashboard.jsx:handleSaveKPISelection',message:'Config saved (KPI selector) with global filters',data:{filtersChanged,oldKeys:globalFilters?Object.keys(globalFilters):null,newKeys:nextGlobalFilters?Object.keys(nextGlobalFilters):null,newCountries:(nextGlobalFilters&&Array.isArray(nextGlobalFilters.countries))?nextGlobalFilters.countries.slice(0,3):null,newCountryCount:(nextGlobalFilters&&Array.isArray(nextGlobalFilters.countries))?nextGlobalFilters.countries.length:0},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     setGlobalFilters(nextGlobalFilters);
     setShowKPISelector(false);
     setError(null); // Clear any previous errors
+    // Persist global filters so they survive refresh (per client/brand)
+    const storageKey = selectedClientId
+      ? `${GLOBAL_FILTERS_STORAGE_KEY_PREFIX}client_${selectedClientId}`
+      : selectedBrandId
+        ? `${GLOBAL_FILTERS_STORAGE_KEY_PREFIX}brand_${selectedBrandId}`
+        : null;
+    if (storageKey) {
+      if (nextGlobalFilters && Object.keys(nextGlobalFilters).length > 0) {
+        localStorage.setItem(storageKey, JSON.stringify(nextGlobalFilters));
+      } else {
+        localStorage.removeItem(storageKey);
+      }
+    }
     debugLog("KPI, section, and chart selections updated in state", {
       kpiCount: tempSelectedKPIs.size,
       performanceMetricsKPICount: tempSelectedPerformanceMetricsKPIs.size,
@@ -2568,6 +2659,9 @@ function ReportingDashboard({
         newFilters: nextGlobalFilters 
       });
       setTimeout(async () => {
+        // #region agent log
+        fetch('http://localhost:56209/ingest/e1b0c496-6e70-4e2c-b70e-3a1e7d6d75ea',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32561b'},body:JSON.stringify({sessionId:'32561b',runId:'pre-fix',hypothesisId:'C',location:'ReportingDashboard.jsx:handleSaveKPISelection:timeout',message:'Config-save timeout invoking loadDashboardData',data:{hasGlobalFilters:!!(nextGlobalFilters&&Object.keys(nextGlobalFilters).length>0),newCountryCount:(nextGlobalFilters&&Array.isArray(nextGlobalFilters.countries))?nextGlobalFilters.countries.length:0},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
         await loadDashboardData();
       }, 200);
     }
@@ -2642,6 +2736,17 @@ function ReportingDashboard({
       }
     }
   };
+
+  const handleClearGlobalFilters = useCallback(async () => {
+    setGlobalFilters(null);
+    const storageKey = selectedClientId
+      ? `${GLOBAL_FILTERS_STORAGE_KEY_PREFIX}client_${selectedClientId}`
+      : selectedBrandId
+        ? `${GLOBAL_FILTERS_STORAGE_KEY_PREFIX}brand_${selectedBrandId}`
+        : null;
+    if (storageKey) localStorage.removeItem(storageKey);
+    await loadDashboardData();
+  }, [selectedClientId, selectedBrandId, loadDashboardData]);
 
   const handleOpenKPISelector = () => {
     // Initialize temp selection with current selection
@@ -3683,10 +3788,43 @@ function ReportingDashboard({
                     bgcolor: alpha(theme.palette.primary.main, 0.05),
                   },
                 }}
-                title="Configure KPIs for Public View"
+                title="Configure KPIs and filters (country, channel)"
               >
                 <SettingsIcon sx={{ fontSize: 20 }} />
               </IconButton>
+            )}
+            {/* Active filter chip(s) - show when country and/or channel filter applied */}
+            {!isPublic && globalFilters && Object.keys(globalFilters).length > 0 && (
+              <Chip
+                size="small"
+                label={
+                  (() => {
+                    const hasCountry = globalFilters.countries?.length > 0;
+                    const hasChannel = globalFilters.traffic_channels?.length > 0;
+                    const countryLabel = hasCountry
+                      ? (globalFilters.countries.length === 1
+                          ? `Country: ${globalFilters.countries[0]}`
+                          : `Countries: ${globalFilters.countries.slice(0, 2).join(", ")}${globalFilters.countries.length > 2 ? ` +${globalFilters.countries.length - 2}` : ""}`)
+                      : "";
+                    const channelLabel = hasChannel
+                      ? (globalFilters.traffic_channels.length === 1
+                          ? `Channel: ${globalFilters.traffic_channels[0]}`
+                          : `Channels: ${globalFilters.traffic_channels.slice(0, 2).join(", ")}${globalFilters.traffic_channels.length > 2 ? ` +${globalFilters.traffic_channels.length - 2}` : ""}`)
+                      : "";
+                    if (countryLabel && channelLabel) return `${countryLabel} · ${channelLabel}`;
+                    return countryLabel || channelLabel || "Filter active";
+                  })()
+                }
+                onDelete={handleClearGlobalFilters}
+                sx={{
+                  borderRadius: 2,
+                  fontWeight: 500,
+                  bgcolor: alpha(theme.palette.primary.main, 0.1),
+                  borderColor: theme.palette.primary.main,
+                  "& .MuiChip-deleteIcon": { color: "text.secondary" },
+                }}
+                title="Remove filter — show all countries and channels"
+              />
             )}
             {/* Sync client data - always visible, no conditional */}
             <Tooltip title={
@@ -4239,7 +4377,8 @@ function ReportingDashboard({
         </Box>
       )}
 
-      {loading ? (
+      {/* Initial load: full-page spinner. Refetch (filter/load): keep showing current data with loader overlay so we never flash zeros. */}
+      {loading && !dashboardData ? (
         <Box
           display="flex"
           justifyContent="center"
@@ -4248,8 +4387,27 @@ function ReportingDashboard({
         >
           <CircularProgress size={40} thickness={4} />
         </Box>
-      ) : dashboardData && !dashboardData.no_data ? (
+      ) : (dashboardData && (!dashboardData.no_data || loading)) ? (
         <>
+          {/* Loader overlay when refetching (e.g. after applying filter or Load Data) - keeps previous data visible until new data arrives */}
+          {loading && (
+            <Box
+              sx={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                bgcolor: 'rgba(255,255,255,0.75)',
+                zIndex: 1300,
+              }}
+            >
+              <CircularProgress size={40} thickness={4} />
+            </Box>
+          )}
           {/* Executive Summary Tab Content - Show in public view when tab 0 is active AND AI Overview is selected */}
           {isPublic && activeTab === 0 && isSectionVisible("ai_overview") && (
             <Box sx={{ px: 3 }}>
@@ -4311,6 +4469,16 @@ function ReportingDashboard({
                 description="Acquisition & User Behavior Insights"
                 loading={loading}
               >
+                {/* Hint when country/channel filter is on but GA4 returned no data */}
+                {(!loading) &&
+                  globalFilters &&
+                  Object.keys(globalFilters).length > 0 &&
+                  (dashboardData?.ga4_filtered_no_data ||
+                    dashboardData?.ga4_filtered_no_data_message) && (
+                  <Alert severity="info" sx={{ mb: 2, borderRadius: 2 }}>
+                    {dashboardData?.ga4_filtered_no_data_message || "No data for the selected country/channel or date range. Try removing filters (Configure KPIs → clear Countries/Channels → Save) or choose a past date range (e.g. last 30 days)."}
+                  </Alert>
+                )}
                 {/* GA4 Charts and Visualizations */}
                 <Box sx={{ mb: 4 }}>
                   {/* <Typography 
@@ -5332,10 +5500,9 @@ function ReportingDashboard({
                     </>
                   )}
 
-                  {/* GA4 Traffic Overview Cards - Additional Metrics */}
-                      {/* COMMENTED OUT: Traffic Overview cards moved to Performance Metrics section */}
-                      {false &&
-                        dashboardData?.chart_data?.ga4_traffic_overview &&
+                  {/* GA4 Traffic Overview - aggregate cards (Sessions, Engaged Sessions, Avg Duration, Engagement Rate)
+                      When filters are applied, values are recalculated live from GA4 (chart_data.ga4_traffic_overview). */}
+                  {dashboardData?.chart_data?.ga4_traffic_overview &&
                     isChartVisible("ga4_traffic_overview") && (
                       <Grid container spacing={2.5} sx={{ mb: 4 }}>
                         {/* Total Sessions - Only show if sessions KPI is selected */}
@@ -5781,8 +5948,10 @@ function ReportingDashboard({
                       </Grid>
                     )}
 
-                  {/* GA4 Performance Charts - Prominent Line Graphs */}
-                      {dashboardData.chart_data?.ga4_daily_comparison?.length > 0 && (
+                  {/* GA4 Performance Charts - Prominent Line Graphs
+                      Show the chart frame even when there are zero rows (e.g. when a country
+                      filter returns no data), as long as the dataset exists. */}
+                  {Array.isArray(dashboardData.chart_data?.ga4_daily_comparison) && (
                       <Box sx={{ mt: 4, mb: 4 }}>
                         <Grid container spacing={3}>
                           {/* Total Users Chart - Full Width (Primary Chart) */}
@@ -6024,8 +6193,9 @@ function ReportingDashboard({
                       </Box>
                     )}
 
-                  {/* Top Performing Pages - Horizontal Bar Chart */}
-                  {dashboardData.chart_data?.top_pages &&
+                  {/* Top Performing Pages - Horizontal Bar Chart
+                      Only render when dataset has rows to avoid empty charts. */}
+                  {Array.isArray(dashboardData.chart_data?.top_pages) &&
                     dashboardData.chart_data.top_pages.length > 0 &&
                     isChartVisible("ga4_top_pages") && (
                       <Box sx={{ mb: 4 }}>
@@ -6070,8 +6240,9 @@ function ReportingDashboard({
                       </Box>
                     )}
 
-                  {/* Sessions by Source - Donut Chart & Bar Chart */}
-                  {dashboardData.chart_data?.traffic_sources &&
+                  {/* Sessions by Source - Donut Chart & Bar Chart
+                      Only render when traffic sources dataset has rows to avoid empty charts. */}
+                  {Array.isArray(dashboardData.chart_data?.traffic_sources) &&
                     dashboardData.chart_data.traffic_sources.length > 0 && (
                       <Grid container spacing={3} sx={{ mb: 4 }}>
                         {/* Donut Chart */}
@@ -6289,8 +6460,9 @@ function ReportingDashboard({
                       </Grid>
                     )}
 
-                  {/* Stacked Bar Chart - Sessions vs Users by Channel */}
-                  {dashboardData.chart_data?.traffic_sources &&
+                  {/* Stacked Bar Chart - Sessions vs Users by Channel
+                      Only render when traffic_sources dataset has rows to avoid empty charts. */}
+                  {Array.isArray(dashboardData.chart_data?.traffic_sources) &&
                     dashboardData.chart_data.traffic_sources.length > 0 &&
                     isChartVisible("ga4_channel_performance") && (
                       <motion.div
@@ -6385,10 +6557,10 @@ function ReportingDashboard({
                       </motion.div>
                     )}
 
-                  {/* Geographic Breakdown - Bar Chart & Pie Chart */}
-                  {dashboardData.chart_data?.geographic_breakdown &&
-                        dashboardData.chart_data.geographic_breakdown.length >
-                          0 && (
+                  {/* Geographic Breakdown - Bar Chart & Pie Chart
+                      Only render when geographic_breakdown dataset has rows to avoid empty charts. */}
+                  {Array.isArray(dashboardData.chart_data?.geographic_breakdown) &&
+                    dashboardData.chart_data.geographic_breakdown.length > 0 && (
                       <Grid container spacing={3} sx={{ mb: 3 }}>
                         {/* Bar Chart */}
                         {isChartVisible("ga4_geographic_distribution") && (
@@ -8423,9 +8595,10 @@ function ReportingDashboard({
                   mb={2}
                   sx={{ fontSize: "0.875rem" }}
                 >
-                  These filters apply to all GA4-based KPIs and charts for this
-                  dashboard link. Start with a small filter (for example, new
-                  users in a single country) to verify impact.
+                  Filter GA4 data by country and/or channel (Session default channel group).
+                  When set, KPIs and charts show only the selected countries/channels. Leave empty to show all.
+                  Data is loaded from GA4 for the selected date range, so any client and any date span works with filters.
+                  Save changes to apply.
                 </Typography>
 
                 <Grid container spacing={2}>
@@ -8570,7 +8743,56 @@ function ReportingDashboard({
                           {...params}
                           variant="outlined"
                           placeholder="Select countries"
-                          helperText="Select one or more countries. Leave empty for all countries."
+                          helperText="Leave empty to show all countries. Save changes to apply filter."
+                        />
+                      )}
+                    />
+                  </Grid>
+
+                  {/* Channel filter (Session default channel group) */}
+                  <Grid item xs={12} sm={6}>
+                    <Typography
+                      variant="body2"
+                      fontWeight={600}
+                      sx={{ mb: 0.5, fontSize: "0.875rem" }}
+                    >
+                      Channels
+                    </Typography>
+                    <Autocomplete
+                      multiple
+                      size="small"
+                      options={GA4_CHANNEL_OPTIONS}
+                      value={tempGlobalFilters?.traffic_channels || []}
+                      onChange={(_, newValue) => {
+                        setTempGlobalFilters((prev) => {
+                          const next = { ...(prev || {}) };
+                          const cleaned = (newValue || [])
+                            .map((v) => (typeof v === "string" ? v.trim() : ""))
+                            .filter((v) => v.length > 0);
+                          if (cleaned.length === 0) {
+                            delete next.traffic_channels;
+                          } else {
+                            next.traffic_channels = cleaned;
+                          }
+                          return next;
+                        });
+                      }}
+                      renderTags={(value, getTagProps) =>
+                        value.map((option, index) => (
+                          <Chip
+                            {...getTagProps({ index })}
+                            key={option}
+                            label={option}
+                            size="small"
+                          />
+                        ))
+                      }
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          variant="outlined"
+                          placeholder="Select channels"
+                          helperText="Leave empty for all channels. Matches GA4 Traffic acquisition report."
                         />
                       )}
                     />

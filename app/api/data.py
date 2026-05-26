@@ -20,6 +20,11 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+
+class _SkipDailyDBFetch(Exception):
+    """Raised when daily metrics were already built from GA4 API (global_filters path)."""
+
+
 router = APIRouter()
 ga4_client = GA4APIClient()
 
@@ -1290,10 +1295,8 @@ async def get_reporting_dashboard(
     to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
     client_id: Optional[int] = None,
     db: Session = Depends(get_db),
-    # NOTE: global_filters is currently intended for internal use when calling this
-    # endpoint from other route handlers (client/slug). We don't expose it as a
-    # public query parameter on this route to keep the external API stable.
-    global_filters: Optional[Dict[str, List[str]]] = None,
+    # JSON-encoded global filters e.g. {"countries": ["United States"]}. When set, KPIs and charts show only that selection.
+    global_filters: Optional[str] = Query(None, description="JSON global filters (countries, user_type, etc.)"),
 ):
     """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard"""
     import time
@@ -1401,6 +1404,32 @@ async def get_reporting_dashboard(
                 else:
                     logger.info("global_filters provided but all values were empty/None, treating as no filters")
                     global_filters = None
+
+        # #region agent log
+        try:
+            import json as _json, time as _time
+            _debug_payload = {
+                "sessionId": "e0f21b",
+                "runId": "pre-fix",
+                "hypothesisId": "H1",
+                "location": "data.py:get_reporting_dashboard:entry",
+                "message": "get_reporting_dashboard entry with filters",
+                "data": {
+                    "brand_id": brand_id,
+                    "client_id": client_id,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "has_global_filters": bool(global_filters),
+                    "filter_keys": list(global_filters.keys()) if isinstance(global_filters, dict) else None,
+                    "countries_sample": (global_filters or {}).get("countries", [])[:3] if isinstance(global_filters, dict) else None,
+                },
+                "timestamp": int(_time.time() * 1000),
+            }
+            with open("/root/mcraes_website_analytics_staging/.cursor/debug-e0f21b.log", "a", encoding="utf-8") as _f:
+                _f.write(_json.dumps(_debug_payload) + "\n")
+        except Exception:
+            pass
+        # #endregion
         
         # ========== GA4 KPIs ==========
         ga4_start = time.time()
@@ -1475,8 +1504,9 @@ async def get_reporting_dashboard(
                                 use_stored_snapshot = True
                                 logger.info(f"[GA4 KPI] Using latest stored KPI snapshot for brand {brand_id}, period_end_date: {kpi_snapshot['period_end_date']} (within tolerance)")
                 
-                # When global filters are applied, bypass stored snapshot logic and fetch
-                # filtered data directly from GA4 for maximum accuracy.
+                # When global filters are applied (e.g. country selected), bypass stored snapshot
+                # and fetch filtered data from GA4. All KPIs and charts (users, sessions, new users,
+                # geo distribution, devices, traffic sources, etc.) show only the selected country.
                 if global_filters:
                     logger.info(
                         f"[GA4 KPI] global_filters detected, fetching filtered traffic overview from GA4 for client_id={client_id}, property_id={property_id}, filters={global_filters}"
@@ -1551,6 +1581,26 @@ async def get_reporting_dashboard(
                                 if prev_engagement_rate > 0:
                                     engagement_rate_change = ((engagement_rate - prev_engagement_rate) / prev_engagement_rate) * 100
 
+                            # Conversions and revenue for selected filter (country-only)
+                            total_conversions_filtered = 0
+                            prev_conversions_filtered = 0
+                            conversions_change_filtered = 0.0
+                            try:
+                                conv_list = await ga4_client.get_conversions(
+                                    property_id, start_date=start_date, end_date=end_date, global_filters=global_filters
+                                )
+                                total_conversions_filtered = sum(c.get("count", 0) for c in (conv_list or []))
+                                prev_conv_list = await ga4_client.get_conversions(
+                                    property_id, start_date=prev_start, end_date=prev_end, global_filters=global_filters
+                                )
+                                prev_conversions_filtered = sum(c.get("count", 0) for c in (prev_conv_list or []))
+                                if prev_conversions_filtered > 0:
+                                    conversions_change_filtered = ((total_conversions_filtered - prev_conversions_filtered) / prev_conversions_filtered) * 100
+                                elif prev_conversions_filtered == 0 and total_conversions_filtered > 0:
+                                    conversions_change_filtered = 100.0
+                            except Exception as conv_err:
+                                logger.warning(f"[GA4 KPI] Could not fetch filtered conversions: {conv_err}")
+
                             ga4_kpis = {
                                 "users": {
                                     "value": users,
@@ -1604,10 +1654,25 @@ async def get_reporting_dashboard(
                                     "label": "Engaged Sessions",
                                     "icon": "People",
                                 },
+                                "conversions": {
+                                    "value": total_conversions_filtered,
+                                    "change": round(conversions_change_filtered, 2),
+                                    "source": "GA4",
+                                    "label": "Conversions",
+                                    "icon": "TrendingUp",
+                                },
+                                "revenue": {
+                                    "value": 0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Revenue",
+                                    "icon": "TrendingUp",
+                                    "format": "currency",
+                                },
                             }
 
                             logger.info(
-                                f"[GA4 KPI] Successfully loaded filtered KPIs for client_id={client_id} with global_filters={global_filters}, users={users}, sessions={sessions}"
+                                f"[GA4 KPI] Successfully loaded filtered KPIs for client_id={client_id} with global_filters={global_filters}, users={users}, sessions={sessions}, conversions={total_conversions_filtered}"
                             )
                             section_times["ga4"] = time.time() - ga4_start
                         else:
@@ -1669,6 +1734,21 @@ async def get_reporting_dashboard(
                                     "label": "Engagement Rate",
                                     "icon": "TrendingUp",
                                     "format": "percentage",
+                                },
+                                "conversions": {
+                                    "value": 0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Conversions",
+                                    "icon": "TrendingUp",
+                                },
+                                "revenue": {
+                                    "value": 0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Revenue",
+                                    "icon": "TrendingUp",
+                                    "format": "currency",
                                 },
                             }
                             section_times["ga4"] = time.time() - ga4_start
@@ -1732,6 +1812,21 @@ async def get_reporting_dashboard(
                                 "label": "Engagement Rate",
                                 "icon": "TrendingUp",
                                 "format": "percentage",
+                            },
+                            "conversions": {
+                                "value": 0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Conversions",
+                                "icon": "TrendingUp",
+                            },
+                            "revenue": {
+                                "value": 0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Revenue",
+                                "icon": "TrendingUp",
+                                "format": "currency",
                             },
                         }
                         section_times["ga4"] = time.time() - ga4_start
@@ -2370,8 +2465,9 @@ async def get_reporting_dashboard(
                 # This ensures chart data matches table data and GA4 dashboard
                 logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
                 
-                # Use GA4 API directly to avoid aggregation issues
-                # IMPORTANT: Pass global_filters so charts stay consistent with KPI filters
+                # Use GA4 API directly to avoid aggregation issues.
+                # When global_filters (e.g. country) is set: KPIs and all charts (geo, devices,
+                # traffic sources, top pages) show only the selected country.
                 top_pages = await ga4_client.get_top_pages(
                     property_id,
                     start_date,
@@ -2409,69 +2505,107 @@ async def get_reporting_dashboard(
                 
                 logger.info(f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} (filtered from {len(geographic or [])}), devices: {len(devices)}")
                 
-                # Get GA4 traffic overview for detailed metrics from stored data
                 query_brand_id = scrunch_brand_id if client_id else brand_id
-                traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
-                if traffic_overview:
-                    # Calculate previous period for change comparison based on selected date range duration
-                    if traffic_overview:
-                        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-                        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-                        period_duration = (end_dt - start_dt).days + 1
-                        prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-                        prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
-                        prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, prev_start, prev_end, client_id=client_id)
-                        
-                        # Calculate changes
-                        sessions_change = traffic_overview.get("sessionsChange", 0)
-                        engaged_sessions_change = 0
-                        avg_session_duration_change = 0
-                        engagement_rate_change = 0
-                        
-                        if prev_traffic_overview:
-                            prev_engaged_sessions = prev_traffic_overview.get("engagedSessions", 0)
-                            current_engaged_sessions = traffic_overview.get("engagedSessions", 0)
-                            if prev_engaged_sessions > 0:
-                                engaged_sessions_change = ((current_engaged_sessions - prev_engaged_sessions) / prev_engaged_sessions) * 100
-                            
-                            prev_avg_duration = prev_traffic_overview.get("averageSessionDuration", 0)
-                            current_avg_duration = traffic_overview.get("averageSessionDuration", 0)
-                            if prev_avg_duration > 0:
-                                avg_session_duration_change = ((current_avg_duration - prev_avg_duration) / prev_avg_duration) * 100
-                            
-                            prev_engagement_rate = prev_traffic_overview.get("engagementRate", 0)
-                            current_engagement_rate = traffic_overview.get("engagementRate", 0)
-                            if prev_engagement_rate > 0:
-                                engagement_rate_change = ((current_engagement_rate - prev_engagement_rate) / prev_engagement_rate) * 100
-                        
-                        chart_data["ga4_traffic_overview"] = {
-                            "sessions": traffic_overview.get("sessions", 0),
-                            "sessionsChange": sessions_change,
-                            "engagedSessions": traffic_overview.get("engagedSessions", 0),
-                            "engagedSessionsChange": engaged_sessions_change,
-                            "averageSessionDuration": traffic_overview.get("averageSessionDuration", 0),
-                            "avgSessionDurationChange": avg_session_duration_change,
-                            "engagementRate": traffic_overview.get("engagementRate", 0),
-                            "engagementRateChange": engagement_rate_change
-                        }
-                    else:
-                        logger.warning(f"[GA4 STORED DATA] No traffic overview data found in database for date range {start_date} to {end_date}")
-                
-                # Get daily metrics over time from stored data (NO live API calls)
-                logger.info(f"[GA4 STORED DATA] Fetching daily metrics from stored records")
-                daily_metrics = {}
-                prev_daily_metrics = {}
-                
-                # Calculate previous period dates
                 start_dt = datetime.strptime(start_date, "%Y-%m-%d")
                 end_dt = datetime.strptime(end_date, "%Y-%m-%d")
                 period_duration = (end_dt - start_dt).days + 1
                 prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
                 prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
                 
+                # When global_filters is set, use GA4 API for traffic overview and daily data (not stored data)
+                if global_filters:
+                    try:
+                        traffic_overview = await ga4_client.get_traffic_overview(property_id, start_date, end_date, global_filters=global_filters)
+                        prev_traffic_overview = await ga4_client.get_traffic_overview(property_id, prev_start, prev_end, global_filters=global_filters)
+                    except Exception as e:
+                        logger.warning(f"[GA4 FILTER] Error fetching filtered traffic overview for chart: {e}")
+                        traffic_overview = prev_traffic_overview = None
+                else:
+                    traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
+                    prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, prev_start, prev_end, client_id=client_id) if traffic_overview else None
+                
+                if traffic_overview:
+                    sessions_change = traffic_overview.get("sessionsChange", 0)
+                    engaged_sessions_change = 0
+                    avg_session_duration_change = 0
+                    engagement_rate_change = 0
+                    if prev_traffic_overview:
+                        prev_engaged_sessions = prev_traffic_overview.get("engagedSessions", 0)
+                        current_engaged_sessions = traffic_overview.get("engagedSessions", 0)
+                        if prev_engaged_sessions > 0:
+                            engaged_sessions_change = ((current_engaged_sessions - prev_engaged_sessions) / prev_engaged_sessions) * 100
+                        prev_avg_duration = prev_traffic_overview.get("averageSessionDuration", 0)
+                        current_avg_duration = traffic_overview.get("averageSessionDuration", 0)
+                        if prev_avg_duration > 0:
+                            avg_session_duration_change = ((current_avg_duration - prev_avg_duration) / prev_avg_duration) * 100
+                        prev_engagement_rate = prev_traffic_overview.get("engagementRate", 0)
+                        current_engagement_rate = traffic_overview.get("engagementRate", 0)
+                        if prev_engagement_rate > 0:
+                            engagement_rate_change = ((current_engagement_rate - prev_engagement_rate) / prev_engagement_rate) * 100
+                    chart_data["ga4_traffic_overview"] = {
+                        "sessions": traffic_overview.get("sessions", 0),
+                        "sessionsChange": sessions_change,
+                        "engagedSessions": traffic_overview.get("engagedSessions", 0),
+                        "engagedSessionsChange": engaged_sessions_change,
+                        "averageSessionDuration": traffic_overview.get("averageSessionDuration", 0),
+                        "avgSessionDurationChange": avg_session_duration_change,
+                        "engagementRate": traffic_overview.get("engagementRate", 0),
+                        "engagementRateChange": engagement_rate_change
+                    }
+                
+                # Get daily metrics: from GA4 API when global_filters set, else from stored data
+                if global_filters and traffic_overview and traffic_overview.get("daily_data"):
+                    logger.info(f"[GA4 FILTER] Building daily metrics from GA4 API daily_data (filtered)")
+                    daily_metrics = {}
+                    prev_daily_metrics = {}
+                    current_date = start_dt
+                    while current_date <= end_dt:
+                        date_str = current_date.strftime("%Y-%m-%d")
+                        date_formatted = current_date.strftime("%Y%m%d")
+                        daily_metrics[date_str] = {"date": date_formatted, "users": 0, "sessions": 0, "new_users": 0, "conversions": 0, "revenue": 0}
+                        current_date += timedelta(days=1)
+                    for rec in traffic_overview.get("daily_data", []):
+                        date_str = rec.get("date")
+                        if date_str and len(date_str) == 8:
+                            date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                        if date_str in daily_metrics:
+                            daily_metrics[date_str]["users"] = rec.get("users", 0)
+                            daily_metrics[date_str]["sessions"] = rec.get("sessions", 0)
+                            daily_metrics[date_str]["new_users"] = rec.get("newUsers", 0)
+                    prev_to = prev_traffic_overview or {}
+                    prev_start_dt = datetime.strptime(prev_start, "%Y-%m-%d")
+                    prev_end_dt = datetime.strptime(prev_end, "%Y-%m-%d")
+                    current_date = prev_start_dt
+                    while current_date <= prev_end_dt:
+                        date_str = current_date.strftime("%Y-%m-%d")
+                        date_formatted = current_date.strftime("%Y%m%d")
+                        prev_daily_metrics[date_str] = {"date": date_formatted, "users": 0, "sessions": 0, "new_users": 0, "conversions": 0, "revenue": 0}
+                        current_date += timedelta(days=1)
+                    for rec in prev_to.get("daily_data", []):
+                        date_str = rec.get("date")
+                        if date_str and len(date_str) == 8:
+                            date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                        if date_str in prev_daily_metrics:
+                            prev_daily_metrics[date_str]["users"] = rec.get("users", 0)
+                            prev_daily_metrics[date_str]["sessions"] = rec.get("sessions", 0)
+                            prev_daily_metrics[date_str]["new_users"] = rec.get("newUsers", 0)
+                else:
+                    daily_metrics = {}
+                    prev_daily_metrics = {}
+                
+                if not global_filters:
+                    logger.info(f"[GA4 STORED DATA] Fetching daily metrics from stored records")
+                else:
+                    daily_metrics = daily_metrics if daily_metrics else {}
+                    prev_daily_metrics = prev_daily_metrics if prev_daily_metrics else {}
+                
                 try:
+                    if global_filters:
+                        raise _SkipDailyDBFetch()
                     # First, generate all dates in the range to ensure we have entries for all days
                     all_dates_map = {}
+                    daily_metrics = {}
+                    prev_daily_metrics = {}
                     current_date = start_dt
                     while current_date <= end_dt:
                         date_str = current_date.strftime("%Y-%m-%d")
@@ -3015,9 +3149,41 @@ async def get_reporting_dashboard(
                         chart_data["ga4_daily_comparison"] = ga4_daily_comparison
                         chart_data["users_over_time"] = users_over_time
                         logger.info(f"[GA4 DAILY DATA] Generated zero-filled chart data: {len(ga4_daily_comparison)} entries")
+                except _SkipDailyDBFetch:
+                    # daily_metrics and prev_daily_metrics were built from GA4 API above; build ga4_daily_comparison same as normal path
+                    if daily_metrics:
+                        ga4_daily_comparison = []
+                        prev_data_dict = {d: data for d, data in prev_daily_metrics.items()}
+                        current_dates = sorted(daily_metrics.keys())
+                        current_start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                        period_duration = (end_dt - start_dt).days + 1
+                        for date_str in current_dates:
+                            current = daily_metrics[date_str]
+                            current_date_dt = datetime.strptime(date_str, "%Y-%m-%d")
+                            prev_date_dt = current_date_dt - timedelta(days=period_duration)
+                            prev_date_str = prev_date_dt.strftime("%Y-%m-%d")
+                            previous = prev_data_dict.get(prev_date_str, {})
+                            ga4_daily_comparison.append({
+                                "date": current["date"],
+                                "current_users": current["users"],
+                                "previous_users": previous.get("users", 0),
+                                "current_sessions": current["sessions"],
+                                "previous_sessions": previous.get("sessions", 0),
+                                "current_new_users": current["new_users"],
+                                "previous_new_users": previous.get("new_users", 0),
+                                "current_conversions": current.get("conversions", 0),
+                                "previous_conversions": previous.get("conversions", 0),
+                                "current_revenue": current.get("revenue", 0),
+                                "previous_revenue": previous.get("revenue", 0),
+                            })
+                        chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                        users_over_time = [{"date": daily_metrics[d]["date"], "users": daily_metrics[d]["users"]} for d in sorted(daily_metrics.keys())]
+                        chart_data["users_over_time"] = users_over_time
+                    else:
+                        chart_data["ga4_daily_comparison"] = []
+                        chart_data["users_over_time"] = []
                 except Exception as e:
                     logger.warning(f"[GA4 STORED DATA] Could not fetch daily metrics from stored data: {str(e)}")
-                    # Generate empty chart data with zeros for all dates even on error
                     ga4_daily_comparison = []
                     users_over_time = []
                     try:
@@ -3037,12 +3203,9 @@ async def get_reporting_dashboard(
                                 "current_revenue": 0,
                                 "previous_revenue": 0
                             })
-                            users_over_time.append({
-                                "date": date_formatted,
-                                "users": 0
-                            })
+                            users_over_time.append({"date": date_formatted, "users": 0})
                             current_date += timedelta(days=1)
-                    except:
+                    except Exception:
                         pass
                     chart_data["ga4_daily_comparison"] = ga4_daily_comparison
                     chart_data["users_over_time"] = users_over_time
@@ -3360,13 +3523,15 @@ async def get_reporting_dashboard(
                 # This ensures chart data matches table data and GA4 dashboard
                 logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
                 
-                # Use GA4 API directly to avoid aggregation issues
-                # IMPORTANT: Pass global_filters so charts stay consistent with KPI filters
+                # Use GA4 API directly to avoid aggregation issues.
+                # When global_filters (e.g. country) is set: KPIs and all charts (geo, devices,
+                # traffic sources, top pages) show only the selected country.
                 top_pages = await ga4_client.get_top_pages(
                     property_id,
                     start_date,
                     end_date,
                     limit=10,
+                    global_filters=global_filters,
                 )
                 traffic_sources = await ga4_client.get_traffic_sources(
                     property_id,
@@ -3386,6 +3551,7 @@ async def get_reporting_dashboard(
                     property_id,
                     start_date,
                     end_date,
+                    global_filters=global_filters,
                 )
                 
                 chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
@@ -3397,53 +3563,58 @@ async def get_reporting_dashboard(
                 
                 logger.info(f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} (filtered from {len(geographic or [])}), devices: {len(devices)}")
                 
-                # Get GA4 traffic overview for detailed metrics from stored data
                 query_brand_id = scrunch_brand_id if client_id else brand_id
-                traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                period_duration = (end_dt - start_dt).days + 1
+                prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                if global_filters:
+                    try:
+                        traffic_overview = await ga4_client.get_traffic_overview(property_id, start_date, end_date, global_filters=global_filters)
+                        prev_traffic_overview = await ga4_client.get_traffic_overview(property_id, prev_start, prev_end, global_filters=global_filters)
+                    except Exception as e:
+                        logger.warning(f"[GA4 FILTER] Error fetching filtered traffic overview for chart: {e}")
+                        traffic_overview = prev_traffic_overview = None
+                else:
+                    traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
+                    prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, prev_start, prev_end, client_id=client_id) if traffic_overview else None
+                
                 if traffic_overview:
-                    # Calculate previous period for change comparison based on selected date range duration
-                    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-                    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-                    period_duration = (end_dt - start_dt).days + 1
-                    prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-                    prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
-                    prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, prev_start, prev_end, client_id=client_id)
+                    # Calculate changes
+                    sessions_change = traffic_overview.get("sessionsChange", 0)
+                    engaged_sessions_change = 0
+                    avg_session_duration_change = 0
+                    engagement_rate_change = 0
                     
-                    if traffic_overview:
-                        # Calculate changes
-                        sessions_change = traffic_overview.get("sessionsChange", 0)
-                        engaged_sessions_change = 0
-                        avg_session_duration_change = 0
-                        engagement_rate_change = 0
+                    if prev_traffic_overview:
+                        prev_engaged_sessions = prev_traffic_overview.get("engagedSessions", 0)
+                        current_engaged_sessions = traffic_overview.get("engagedSessions", 0)
+                        if prev_engaged_sessions > 0:
+                            engaged_sessions_change = ((current_engaged_sessions - prev_engaged_sessions) / prev_engaged_sessions) * 100
                         
-                        if prev_traffic_overview:
-                            prev_engaged_sessions = prev_traffic_overview.get("engagedSessions", 0)
-                            current_engaged_sessions = traffic_overview.get("engagedSessions", 0)
-                            if prev_engaged_sessions > 0:
-                                engaged_sessions_change = ((current_engaged_sessions - prev_engaged_sessions) / prev_engaged_sessions) * 100
-                            
-                            prev_avg_duration = prev_traffic_overview.get("averageSessionDuration", 0)
-                            current_avg_duration = traffic_overview.get("averageSessionDuration", 0)
-                            if prev_avg_duration > 0:
-                                avg_session_duration_change = ((current_avg_duration - prev_avg_duration) / prev_avg_duration) * 100
-                            
-                            prev_engagement_rate = prev_traffic_overview.get("engagementRate", 0)
-                            current_engagement_rate = traffic_overview.get("engagementRate", 0)
-                            if prev_engagement_rate > 0:
-                                engagement_rate_change = ((current_engagement_rate - prev_engagement_rate) / prev_engagement_rate) * 100
+                        prev_avg_duration = prev_traffic_overview.get("averageSessionDuration", 0)
+                        current_avg_duration = traffic_overview.get("averageSessionDuration", 0)
+                        if prev_avg_duration > 0:
+                            avg_session_duration_change = ((current_avg_duration - prev_avg_duration) / prev_avg_duration) * 100
                         
-                        chart_data["ga4_traffic_overview"] = {
-                            "sessions": traffic_overview.get("sessions", 0),
-                            "sessionsChange": sessions_change,
-                            "engagedSessions": traffic_overview.get("engagedSessions", 0),
-                            "engagedSessionsChange": engaged_sessions_change,
-                            "averageSessionDuration": traffic_overview.get("averageSessionDuration", 0),
-                            "avgSessionDurationChange": avg_session_duration_change,
-                            "engagementRate": traffic_overview.get("engagementRate", 0),
-                            "engagementRateChange": engagement_rate_change
-                        }
-                    else:
-                        logger.warning(f"[GA4 STORED DATA] No traffic overview data found in database for date range {start_date} to {end_date}")
+                        prev_engagement_rate = prev_traffic_overview.get("engagementRate", 0)
+                        current_engagement_rate = traffic_overview.get("engagementRate", 0)
+                        if prev_engagement_rate > 0:
+                            engagement_rate_change = ((current_engagement_rate - prev_engagement_rate) / prev_engagement_rate) * 100
+                    
+                    chart_data["ga4_traffic_overview"] = {
+                        "sessions": traffic_overview.get("sessions", 0),
+                        "sessionsChange": sessions_change,
+                        "engagedSessions": traffic_overview.get("engagedSessions", 0),
+                        "engagedSessionsChange": engaged_sessions_change,
+                        "averageSessionDuration": traffic_overview.get("averageSessionDuration", 0),
+                        "avgSessionDurationChange": avg_session_duration_change,
+                        "engagementRate": traffic_overview.get("engagementRate", 0),
+                        "engagementRateChange": engagement_rate_change
+                    }
+                else:
+                    logger.warning(f"[GA4 STORED DATA] No traffic overview data found in database for date range {start_date} to {end_date}")
                 
                 # Get daily metrics over time from stored data (NO live API calls)
                 logger.info(f"[GA4 STORED DATA] Fetching daily metrics from stored records")
@@ -4141,6 +4312,14 @@ async def get_reporting_dashboard(
         # When client_id is provided, use scrunch_brand_id from client, otherwise use path parameter brand_id
         actual_brand_id = scrunch_brand_id if client_id and scrunch_brand_id else brand_id
         
+        # Hint when country (or other) filter is on but GA4 returned no data — so UI can suggest removing filter or changing date range
+        ga4_filtered_no_data = False
+        if global_filters and ga4_kpis:
+            users_val = ga4_kpis.get("users", {}).get("value", 0) if isinstance(ga4_kpis.get("users"), dict) else 0
+            sessions_val = ga4_kpis.get("sessions", {}).get("value", 0) if isinstance(ga4_kpis.get("sessions"), dict) else 0
+            if users_val == 0 and sessions_val == 0:
+                ga4_filtered_no_data = True
+
         response_payload = {
             "brand_id": actual_brand_id,
             "client_id": client_id if client_id else None,
@@ -4170,6 +4349,11 @@ async def get_reporting_dashboard(
                 }
             }
         }
+        if ga4_filtered_no_data:
+            response_payload["ga4_filtered_no_data"] = True
+            response_payload["ga4_filtered_no_data_message"] = (
+                "No GA4 data for the selected country/channel or date range. Try removing filters (Configure KPIs → clear Countries/Channels → Save) or choose a past date range (e.g. last 30 days)."
+            )
         # If nothing matched the requested date range, return graceful empty payload
         has_kpis = kpis and len(kpis) > 0
         has_chart_data = chart_data and any(
@@ -4182,6 +4366,37 @@ async def get_reporting_dashboard(
         if not has_kpis and not has_chart_data:
             response_payload["no_data"] = True
             response_payload["message"] = "No data available for the selected date range."
+
+        # #region agent log
+        try:
+            import json as _json, time as _time
+            _users_val = ga4_kpis.get("users", {}).get("value", 0) if isinstance(ga4_kpis.get("users"), dict) else 0
+            _sessions_val = ga4_kpis.get("sessions", {}).get("value", 0) if isinstance(ga4_kpis.get("sessions"), dict) else 0
+            _debug_payload = {
+                "sessionId": "e0f21b",
+                "runId": "pre-fix",
+                "hypothesisId": "H3",
+                "location": "data.py:get_reporting_dashboard:response",
+                "message": "get_reporting_dashboard response summary",
+                "data": {
+                    "brand_id": response_payload.get("brand_id"),
+                    "client_id": response_payload.get("client_id"),
+                    "has_global_filters": bool(global_filters),
+                    "ga4_filtered_no_data": bool(ga4_filtered_no_data),
+                    "no_data": bool(response_payload.get("no_data")),
+                    "ga4_users": _users_val,
+                    "ga4_sessions": _sessions_val,
+                    "kpi_counts": response_payload.get("diagnostics", {}).get("kpi_counts"),
+                    "available_sources": response_payload.get("available_sources"),
+                },
+                "timestamp": int(_time.time() * 1000),
+            }
+            with open("/root/mcraes_website_analytics_staging/.cursor/debug-e0f21b.log", "a", encoding="utf-8") as _f:
+                _f.write(_json.dumps(_debug_payload) + "\n")
+        except Exception:
+            pass
+        # #endregion
+
         return response_payload
         
     except Exception as e:

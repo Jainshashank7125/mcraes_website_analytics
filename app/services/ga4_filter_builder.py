@@ -29,16 +29,71 @@ logger = logging.getLogger(__name__)
 class GA4FilterBuilder:
     """Utility class for building GA4 API dimension filters from global filter configurations"""
     
-    # Mapping from our filter keys to GA4 dimension names
+    # Mapping from our filter keys to GA4 dimension names.
+    # GA4 Data API schema: https://developers.google.com/analytics/devguides/reporting/data/v1/api-schema
+    # sessionDefaultChannelGroup = Session default channel group (Direct, Organic Search, etc.)
     DIMENSION_MAP = {
         'user_type': 'newVsReturning',
-        'traffic_channels': 'sessionDefaultChannelGrouping',
+        'traffic_channels': 'sessionDefaultChannelGroup',  # GA4 Data API dimension name
         'traffic_sources': 'sessionSource',
-        'countries': 'country',
+        'countries': 'countryId',  # API expects countryId with ISO codes for dimension_filter
         'regions': 'region',
         'cities': 'city',
         'page_urls': 'pagePath',
         'device_categories': 'deviceCategory',
+    }
+    
+    # Display name -> ISO 3166-1 alpha-2 for countryId filter (GA4 Data API standard).
+    COUNTRY_NAME_TO_ISO: Dict[str, str] = {
+        "United States": "US",
+        "Canada": "CA",
+        "United Kingdom": "GB",
+        "Australia": "AU",
+        "Germany": "DE",
+        "France": "FR",
+        "Italy": "IT",
+        "Spain": "ES",
+        "Netherlands": "NL",
+        "Belgium": "BE",
+        "Switzerland": "CH",
+        "Austria": "AT",
+        "Sweden": "SE",
+        "Norway": "NO",
+        "Denmark": "DK",
+        "Finland": "FI",
+        "Poland": "PL",
+        "Ireland": "IE",
+        "Portugal": "PT",
+        "Greece": "GR",
+        "Czech Republic": "CZ",
+        "Romania": "RO",
+        "Hungary": "HU",
+        "China": "CN",
+        "Japan": "JP",
+        "South Korea": "KR",
+        "India": "IN",
+        "Singapore": "SG",
+        "Malaysia": "MY",
+        "Thailand": "TH",
+        "Indonesia": "ID",
+        "Philippines": "PH",
+        "Vietnam": "VN",
+        "Taiwan": "TW",
+        "Hong Kong": "HK",
+        "New Zealand": "NZ",
+        "Brazil": "BR",
+        "Mexico": "MX",
+        "Argentina": "AR",
+        "Chile": "CL",
+        "Colombia": "CO",
+        "Peru": "PE",
+        "South Africa": "ZA",
+        "Egypt": "EG",
+        "United Arab Emirates": "AE",
+        "Saudi Arabia": "SA",
+        "Israel": "IL",
+        "Turkey": "TR",
+        "Russia": "RU",
     }
     
     @staticmethod
@@ -70,8 +125,8 @@ class GA4FilterBuilder:
                         },
                         {
                             "filter": {
-                                "fieldName": "country",
-                                "inListFilter": {"values": ["USA", "Canada"]}
+                                "fieldName": "countryId",
+                                "inListFilter": {"values": ["US", "CA"]}
                             }
                         }
                     ]
@@ -83,6 +138,27 @@ class GA4FilterBuilder:
         
         exclude_dimensions = exclude_dimensions or []
         expressions = []
+        
+        # #region agent log
+        try:
+            import json, time
+            debug_payload = {
+                "sessionId": "ae9ab7",
+                "runId": "pre-fix",
+                "hypothesisId": "H2",
+                "location": "ga4_filter_builder.py:build_dimension_filter:before_loop",
+                "message": "Entering build_dimension_filter",
+                "data": {
+                    "global_filters": global_filters,
+                    "exclude_dimensions": exclude_dimensions,
+                },
+                "timestamp": int(time.time() * 1000),
+            }
+            with open("/root/mcraes_website_analytics_staging/.cursor/debug-ae9ab7.log", "a", encoding="utf-8") as _f:
+                _f.write(json.dumps(debug_payload) + "\n")
+        except Exception:
+            pass
+        # #endregion
         
         for filter_key, filter_values in global_filters.items():
             # Skip if no values or if dimension is excluded
@@ -102,19 +178,49 @@ class GA4FilterBuilder:
             
             normalized_values = filter_values
             if filter_key == 'countries':
-                # GA4 country dimension uses exact country names as they appear in GA4
-                # From GA4 URL: expressionList: ["United States"] (case-sensitive exact match)
-                # Strip whitespace but preserve case - GA4 is case-sensitive
-                normalized_values = [v.strip() for v in filter_values if v and v.strip()]
+                # GA4 Data API: filter by countryId with ISO 3166-1 alpha-2 codes only.
+                iso_codes = []
+                for v in filter_values:
+                    if not v or not v.strip():
+                        continue
+                    name = v.strip()
+                    if name in GA4FilterBuilder.COUNTRY_NAME_TO_ISO:
+                        iso_codes.append(GA4FilterBuilder.COUNTRY_NAME_TO_ISO[name])
+                    elif len(name) == 2 and name.isupper():
+                        iso_codes.append(name)
+                    else:
+                        iso_codes.append(name)
+                normalized_values = list(dict.fromkeys(iso_codes))
                 logger.info(
-                    f"[GA4 FILTER] Country filter (exact match, case-sensitive): {normalized_values}"
+                    f"[GA4 FILTER] Country filter (countryId + ISO): {normalized_values}"
                 )
+                # #region agent log
+                try:
+                    import json, time
+                    debug_payload = {
+                        "sessionId": "ae9ab7",
+                        "runId": "pre-fix",
+                        "hypothesisId": "H3",
+                        "location": "ga4_filter_builder.py:build_dimension_filter:countries",
+                        "message": "Normalized country filters",
+                        "data": {
+                            "raw_values": filter_values,
+                            "normalized_values": normalized_values,
+                        },
+                        "timestamp": int(time.time() * 1000),
+                    }
+                    with open("/root/mcraes_website_analytics_staging/.cursor/debug-ae9ab7.log", "a", encoding="utf-8") as _f:
+                        _f.write(json.dumps(debug_payload) + "\n")
+                except Exception:
+                    pass
+                # #endregion
             else:
-                # For other dimensions, also preserve case and use exact match
+                # For other dimensions, preserve case and use exact match
                 normalized_values = [v.strip() for v in filter_values if v and v.strip()]
-            
+            if not normalized_values:
+                continue
             # Build filter expression matching GA4's structure
-            # GA4 uses: type: 1 (dimension filter), fieldName: "country", inListFilter
+            # GA4 uses: type: 1 (dimension filter), fieldName: "countryId", inListFilter (ISO codes)
             expressions.append({
                 "filter": {
                     "fieldName": ga4_dimension,
@@ -128,12 +234,32 @@ class GA4FilterBuilder:
         if not expressions:
             return None
         
-        # Return andGroup structure (all filters must match)
-        return {
+        result = {
             "andGroup": {
                 "expressions": expressions
             }
         }
+        # #region agent log
+        try:
+            import json, time
+            debug_payload = {
+                "sessionId": "ae9ab7",
+                "runId": "pre-fix",
+                "hypothesisId": "H3",
+                "location": "ga4_filter_builder.py:build_dimension_filter:return",
+                "message": "Built GA4 dimension filter dict",
+                "data": {
+                    "result": result,
+                },
+                "timestamp": int(time.time() * 1000),
+            }
+            with open("/root/mcraes_website_analytics_staging/.cursor/debug-ae9ab7.log", "a", encoding="utf-8") as _f:
+                _f.write(json.dumps(debug_payload) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        # Return andGroup structure (all filters must match)
+        return result
     
     @staticmethod
     def get_filter_summary(global_filters: Optional[Dict[str, List[str]]]) -> str:
