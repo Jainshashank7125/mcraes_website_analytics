@@ -1,0 +1,4488 @@
+from fastapi import APIRouter, Query, HTTPException, Depends
+from typing import Optional, List, Dict, Any
+import logging
+import time
+import json
+from datetime import datetime, timedelta, date as date_type, timezone
+from app.services.supabase_service import SupabaseService
+from app.services.ga4_client import GA4APIClient
+from app.core.error_utils import handle_api_errors
+from app.api.auth_v2 import get_current_user_v2
+from app.db.database import get_db
+from sqlalchemy.orm import Session
+from sqlalchemy import select, func, and_, or_
+from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+ga4_client = GA4APIClient()
+
+class KPISelectionRequest(BaseModel):
+    selected_kpis: List[str]
+    visible_sections: Optional[List[str]] = None  # Optional for backward compatibility
+    selected_charts: Optional[List[str]] = None  # Optional chart selections
+    selected_performance_metrics_kpis: Optional[List[str]] = None  # Optional performance metrics KPIs (independent from selected_kpis)
+    version: Optional[int] = None  # Version for optimistic locking
+
+@router.get("/data/reporting-dashboard/{brand_id}/diagnostics")
+async def get_reporting_dashboard_diagnostics(brand_id: int, db: Session = Depends(get_db)):
+    """Get diagnostic information about brand configuration for reporting dashboard"""
+    try:
+        supabase = SupabaseService(db=db)
+        
+        # Get brand info using SQLAlchemy
+        brand = supabase.get_brand_by_id(brand_id)
+        
+        if not brand:
+            raise HTTPException(status_code=404, detail="Brand not found")
+        
+        diagnostics = {
+            "brand_id": brand_id,
+            "brand_name": brand.get("name"),
+            "ga4": {
+                "configured": bool(brand.get("ga4_property_id")),
+                "property_id": brand.get("ga4_property_id"),
+                "message": "GA4 property ID configured" if brand.get("ga4_property_id") else "No GA4 property ID configured. Please configure GA4 property ID in brands table."
+            },
+            "agency_analytics": {
+                "configured": False,
+                "campaigns_linked": 0,
+                "campaigns": [],
+                "message": ""
+            },
+            "scrunch": {
+                "configured": False,
+                "prompts_count": 0,
+                "responses_count": 0,
+                "message": ""
+            }
+        }
+        
+        # Check Agency Analytics using SQLAlchemy Core
+        try:
+            campaign_links = supabase.get_campaign_brand_links(brand_id=brand_id)
+            
+            if campaign_links:
+                campaign_ids = [link["campaign_id"] for link in campaign_links]
+                # Get campaigns using SQLAlchemy Core
+                campaigns_table = supabase._get_table("agency_analytics_campaigns")
+                query = select(campaigns_table).where(campaigns_table.c.id.in_(campaign_ids))
+                result = supabase.db.execute(query)
+                campaigns = [dict(row._mapping) for row in result]
+                
+                diagnostics["agency_analytics"]["configured"] = True
+                diagnostics["agency_analytics"]["campaigns_linked"] = len(campaign_links)
+                diagnostics["agency_analytics"]["campaigns"] = [{"id": c.get("id"), "company": c.get("company"), "url": c.get("url")} for c in campaigns]
+                diagnostics["agency_analytics"]["message"] = f"{len(campaign_links)} campaign(s) linked to this brand"
+            else:
+                diagnostics["agency_analytics"]["message"] = "No campaigns linked to this brand. Please sync Agency Analytics and link campaigns to brands."
+        except Exception as e:
+            diagnostics["agency_analytics"]["message"] = f"Error checking Agency Analytics: {str(e)}"
+        
+        # Check Scrunch using SQLAlchemy
+        try:
+            prompts_result = supabase.get_prompts(brand_id=brand_id, limit=None, offset=None)
+            prompts = prompts_result.get("items", [])
+            
+            responses_result = supabase.get_responses(brand_id=brand_id, limit=None, offset=None)
+            responses = responses_result.get("items", [])
+            
+            if prompts or responses:
+                diagnostics["scrunch"]["configured"] = True
+                diagnostics["scrunch"]["prompts_count"] = len(prompts)
+                diagnostics["scrunch"]["responses_count"] = len(responses)
+                diagnostics["scrunch"]["message"] = f"Scrunch data available: {len(prompts)} prompts, {len(responses)} responses"
+            else:
+                diagnostics["scrunch"]["message"] = "No Scrunch data found. Please sync Scrunch data for this brand."
+        except Exception as e:
+            diagnostics["scrunch"]["message"] = f"Error checking Scrunch: {str(e)}"
+        
+        return diagnostics
+    except Exception as e:
+        logger.error(f"Error fetching diagnostics: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/data/reporting-dashboard/{brand_id}")
+async def get_reporting_dashboard(
+    brand_id: int,
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
+    client_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    # NOTE: global_filters is currently intended for internal use when calling this
+    # endpoint from other route handlers (client/slug). We don't expose it as a
+    # public query parameter on this route to keep the external API stable.
+    global_filters: Optional[Dict[str, List[str]]] = None,
+):
+    """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard"""
+    import time
+    total_start = time.time()
+    section_times = {}
+    
+    try:
+        init_start = time.time()
+        supabase = SupabaseService(db=db)
+        section_times["init"] = time.time() - init_start
+        
+        # CLIENT-CENTRIC APPROACH: All data queries use client_id
+        # Brand is only used as a reference (scrunch_brand_id) for Scrunch queries
+        brand_start = time.time()
+        client = None
+        brand = None
+        scrunch_brand_id = None
+        
+        if client_id:
+            # Get client directly - this is the primary entity
+            client = supabase.get_client_by_id(client_id)
+            if not client:
+                raise HTTPException(status_code=404, detail=f"Client {client_id} not found")
+            
+            # Get scrunch_brand_id from client for Scrunch queries only
+            scrunch_brand_id = client.get("scrunch_brand_id")
+            logger.info(f"Using client-centric approach: client_id={client_id}, scrunch_brand_id={scrunch_brand_id}, ga4_property_id={client.get('ga4_property_id')}")
+        else:
+            # Fallback: if no client_id, try to get brand (for backward compatibility)
+            brand = supabase.get_brand_by_id(brand_id)
+            if not brand:
+                raise HTTPException(status_code=404, detail="Brand not found")
+            # For backward compatibility, we still need brand_id for some queries
+            # But ideally, all endpoints should provide client_id
+            logger.warning(f"Using brand_id={brand_id} without client_id. Consider migrating to client-centric endpoints.")
+        
+        section_times["get_brand"] = time.time() - brand_start
+        
+        # Map alias params (`from`/`to`) to canonical start/end
+        start_date = start_date or from_date
+        end_date = end_date or to_date
+        # Set default date range
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        if not end_date:
+            end_date = datetime.now().strftime("%Y-%m-%d")
+        
+        # Validate date range
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+            
+            if start_dt > end_dt:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Invalid date range: start_date ({start_date}) must be before or equal to end_date ({end_date})"
+                )
+            
+            # Log date range being used
+            if client_id:
+                logger.info(f"Fetching reporting dashboard for client {client_id} with date range: {start_date} to {end_date}")
+            else:
+                logger.info(f"Fetching reporting dashboard for brand {brand_id} with date range: {start_date} to {end_date}")
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date format. Use YYYY-MM-DD format. Error: {str(e)}"
+            )
+        
+        kpis = {}
+        # Normalize global_filters to a dict if provided; otherwise keep as None
+        # This allows internal callers (client/slug routes) to pass filters through
+        if global_filters is not None and not isinstance(global_filters, dict):
+            try:
+                # In case a JSON string or other type is passed accidentally
+                import json
+
+                global_filters = json.loads(global_filters)
+            except Exception:
+                logger.warning(
+                    f"global_filters provided to get_reporting_dashboard but could not be parsed; value type={type(global_filters)}"
+                )
+                global_filters = None
+        
+        # Validate global_filters structure if provided
+        if global_filters is not None:
+            if not isinstance(global_filters, dict):
+                logger.warning(f"global_filters must be a dict, got {type(global_filters)}, ignoring")
+                global_filters = None
+            else:
+                # Validate that all values are lists
+                validated_filters = {}
+                for key, value in global_filters.items():
+                    if isinstance(value, list):
+                        # Filter out None values and ensure all items are strings
+                        validated_filters[key] = [str(v) for v in value if v is not None]
+                    elif value is not None:
+                        # Convert single value to list
+                        validated_filters[key] = [str(value)]
+                    # If value is None or empty, skip this filter
+                
+                if validated_filters:
+                    global_filters = validated_filters
+                    logger.info(f"Validated global_filters: {global_filters}")
+                else:
+                    logger.info("global_filters provided but all values were empty/None, treating as no filters")
+                    global_filters = None
+        
+        # ========== GA4 KPIs ==========
+        ga4_start = time.time()
+        ga4_kpis = {}
+        ga4_errors = []
+        prev_traffic_overview = None  # Initialize to avoid scope issues
+        
+        # Get GA4 property ID from client (primary) or brand (fallback)
+        # CRITICAL: Must use the same property ID that has the data in GA4 UI
+        # From GA4 URL: property ID is in format p321249063 (numeric part: 321249063)
+        if client_id and client:
+            ga4_property_id = client.get("ga4_property_id")
+            logger.info(
+                f"[GA4 PROPERTY] Using client's property ID: client_id={client_id}, "
+                f"ga4_property_id={ga4_property_id}, global_filters={global_filters}"
+            )
+        else:
+            ga4_property_id = brand.get("ga4_property_id") if brand else None
+            logger.info(
+                f"[GA4 PROPERTY] Using brand's property ID: brand_id={brand_id}, "
+                f"ga4_property_id={ga4_property_id}, global_filters={global_filters}"
+            )
+        
+        if ga4_property_id:
+            try:
+                property_id = ga4_property_id
+                
+                # First, try to get stored KPI snapshot (for 30-day periods)
+                # Check if the requested date range is approximately 30 days
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                period_duration = (end_dt - start_dt).days + 1
+                
+                # If it's approximately 30 days, try to find a matching stored snapshot
+                use_stored_snapshot = False
+                if 28 <= period_duration <= 32:  # Allow some flexibility for 30-day periods
+                    # Try to get snapshot that matches the requested date range
+                    # Use client_id if available, otherwise use brand_id for backward compatibility
+                    query_brand_id = scrunch_brand_id if client_id else brand_id
+                    kpi_snapshot = supabase.get_ga4_kpi_snapshot_by_date_range(query_brand_id, start_date, end_date, client_id=client_id)
+                    if kpi_snapshot:
+                        # Ensure dates are strings (convert if they're date objects)
+                        # Use date_type to avoid conflict with local 'date' variables later in function
+                        if isinstance(kpi_snapshot.get("period_start_date"), date_type):
+                            kpi_snapshot["period_start_date"] = kpi_snapshot["period_start_date"].strftime("%Y-%m-%d")
+                        if isinstance(kpi_snapshot.get("period_end_date"), date_type):
+                            kpi_snapshot["period_end_date"] = kpi_snapshot["period_end_date"].strftime("%Y-%m-%d")
+                        use_stored_snapshot = True
+                        logger.info(f"[GA4 KPI] Using stored KPI snapshot for brand {brand_id}, period_end_date: {kpi_snapshot['period_end_date']}, period_start_date: {kpi_snapshot['period_start_date']}")
+                    else:
+                        # Fallback: try to get latest snapshot if no exact match found
+                        # This handles cases where data might be slightly out of sync
+                        query_brand_id = scrunch_brand_id if client_id else brand_id
+                        kpi_snapshot = supabase.get_latest_ga4_kpi_snapshot(query_brand_id, client_id=client_id)
+                        if kpi_snapshot:
+                            # Ensure dates are strings (convert if they're date objects)
+                            # Use date_type to avoid conflict with local 'date' variables later in function
+                            period_start_date = kpi_snapshot["period_start_date"]
+                            period_end_date = kpi_snapshot["period_end_date"]
+                            if isinstance(period_start_date, date_type):
+                                period_start_date = period_start_date.strftime("%Y-%m-%d")
+                            if isinstance(period_end_date, date_type):
+                                period_end_date = period_end_date.strftime("%Y-%m-%d")
+                            period_start_str = str(period_start_date)
+                            period_end_str = str(period_end_date)
+                            snapshot_start_dt = datetime.strptime(period_start_str, "%Y-%m-%d")
+                            snapshot_end_dt = datetime.strptime(period_end_str, "%Y-%m-%d")
+                            # Check if the snapshot's date range matches the requested range (within 2 days tolerance)
+                            start_diff = abs((snapshot_start_dt - start_dt).days)
+                            end_diff = abs((snapshot_end_dt - end_dt).days)
+                            if start_diff <= 2 and end_diff <= 2:
+                                use_stored_snapshot = True
+                                logger.info(f"[GA4 KPI] Using latest stored KPI snapshot for brand {brand_id}, period_end_date: {kpi_snapshot['period_end_date']} (within tolerance)")
+                
+                # When global filters are applied, bypass stored snapshot logic and fetch
+                # filtered data directly from GA4 for maximum accuracy.
+                if global_filters:
+                    logger.info(
+                        f"[GA4 KPI] global_filters detected, fetching filtered traffic overview from GA4 for client_id={client_id}, property_id={property_id}, filters={global_filters}"
+                    )
+                    try:
+                        traffic_overview = await ga4_client.get_traffic_overview(
+                            property_id,
+                            start_date=start_date,
+                            end_date=end_date,
+                            global_filters=global_filters,
+                        )
+
+                        # Build KPI objects directly from filtered traffic_overview
+                        if traffic_overview:
+                            users = traffic_overview.get("users", 0)
+                            sessions = traffic_overview.get("sessions", 0)
+                            new_users = traffic_overview.get("newUsers", 0)
+                            bounce_rate = traffic_overview.get("bounceRate", 0)
+                            avg_session_duration = traffic_overview.get(
+                                "averageSessionDuration", 0
+                            )
+                            engagement_rate = traffic_overview.get("engagementRate", 0)
+                            engaged_sessions = traffic_overview.get("engagedSessions", 0)
+
+                            # Calculate previous period for change percentages (with same filters)
+                            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                            period_duration = (end_dt - start_dt).days + 1
+                            prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                            prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                            
+                            # Get previous period with same filters for comparison
+                            prev_traffic_overview = None
+                            try:
+                                prev_traffic_overview = await ga4_client.get_traffic_overview(
+                                    property_id,
+                                    start_date=prev_start,
+                                    end_date=prev_end,
+                                    global_filters=global_filters,
+                                )
+                            except Exception as prev_err:
+                                logger.warning(f"Could not fetch previous period with filters for comparison: {str(prev_err)}")
+                            
+                            # Calculate changes if previous period data available
+                            users_change = 0.0
+                            sessions_change = 0.0
+                            new_users_change = 0.0
+                            bounce_rate_change = 0.0
+                            avg_session_duration_change = 0.0
+                            engagement_rate_change = 0.0
+                            
+                            if prev_traffic_overview:
+                                prev_users = prev_traffic_overview.get("users", 0)
+                                prev_sessions = prev_traffic_overview.get("sessions", 0)
+                                prev_new_users = prev_traffic_overview.get("newUsers", 0)
+                                prev_bounce_rate = prev_traffic_overview.get("bounceRate", 0)
+                                prev_avg_duration = prev_traffic_overview.get("averageSessionDuration", 0)
+                                prev_engagement_rate = prev_traffic_overview.get("engagementRate", 0)
+                                
+                                if prev_users > 0:
+                                    users_change = ((users - prev_users) / prev_users) * 100
+                                if prev_sessions > 0:
+                                    sessions_change = ((sessions - prev_sessions) / prev_sessions) * 100
+                                if prev_new_users > 0:
+                                    new_users_change = ((new_users - prev_new_users) / prev_new_users) * 100
+                                elif prev_new_users == 0 and new_users > 0:
+                                    new_users_change = 100.0
+                                if prev_bounce_rate > 0:
+                                    bounce_rate_change = ((bounce_rate - prev_bounce_rate) / prev_bounce_rate) * 100
+                                if prev_avg_duration > 0:
+                                    avg_session_duration_change = ((avg_session_duration - prev_avg_duration) / prev_avg_duration) * 100
+                                if prev_engagement_rate > 0:
+                                    engagement_rate_change = ((engagement_rate - prev_engagement_rate) / prev_engagement_rate) * 100
+
+                            ga4_kpis = {
+                                "users": {
+                                    "value": users,
+                                    "change": round(users_change, 2),
+                                    "source": "GA4",
+                                    "label": "Total Users",
+                                    "icon": "People",
+                                },
+                                "sessions": {
+                                    "value": sessions,
+                                    "change": round(sessions_change, 2),
+                                    "source": "GA4",
+                                    "label": "Sessions",
+                                    "icon": "BarChart",
+                                },
+                                "new_users": {
+                                    "value": new_users,
+                                    "change": round(new_users_change, 2),
+                                    "source": "GA4",
+                                    "label": "New Users",
+                                    "icon": "PersonAdd",
+                                },
+                                "bounce_rate": {
+                                    "value": round(float(bounce_rate) * 100, 2),
+                                    "change": round(bounce_rate_change, 2),
+                                    "source": "GA4",
+                                    "label": "Bounce Rate",
+                                    "icon": "TrendingDown",
+                                    "format": "percentage",
+                                },
+                                "avg_session_duration": {
+                                    "value": round(float(avg_session_duration), 1),
+                                    "change": round(avg_session_duration_change, 2),
+                                    "source": "GA4",
+                                    "label": "Avg Session Duration",
+                                    "icon": "AccessTime",
+                                    "format": "duration",
+                                },
+                                "ga4_engagement_rate": {
+                                    "value": round(float(engagement_rate) * 100, 2),
+                                    "change": round(engagement_rate_change, 2),
+                                    "source": "GA4",
+                                    "label": "Engagement Rate",
+                                    "icon": "TrendingUp",
+                                    "format": "percentage",
+                                },
+                                "engaged_sessions": {
+                                    "value": engaged_sessions,
+                                    "change": 0.0,  # Could calculate if needed
+                                    "source": "GA4",
+                                    "label": "Engaged Sessions",
+                                    "icon": "People",
+                                },
+                            }
+
+                            logger.info(
+                                f"[GA4 KPI] Successfully loaded filtered KPIs for client_id={client_id} with global_filters={global_filters}, users={users}, sessions={sessions}"
+                            )
+                            section_times["ga4"] = time.time() - ga4_start
+                        else:
+                            # Even if traffic_overview is None or empty, create KPIs with zero values
+                            # This ensures the section stays visible even when filters return no data
+                            # IMPORTANT: Include ALL KPIs to prevent them from disappearing in the UI
+                            logger.warning(
+                                "[GA4 KPI] No traffic_overview returned when global_filters applied; creating KPIs with zero values"
+                            )
+                            ga4_kpis = {
+                                "users": {
+                                    "value": 0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Total Users",
+                                    "icon": "People",
+                                },
+                                "sessions": {
+                                    "value": 0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Sessions",
+                                    "icon": "BarChart",
+                                },
+                                "new_users": {
+                                    "value": 0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "New Users",
+                                    "icon": "PersonAdd",
+                                },
+                                "engaged_sessions": {
+                                    "value": 0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Engaged Sessions",
+                                    "icon": "People",
+                                },
+                                "bounce_rate": {
+                                    "value": 0.0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Bounce Rate",
+                                    "icon": "TrendingDown",
+                                    "format": "percentage",
+                                },
+                                "avg_session_duration": {
+                                    "value": 0.0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Avg Session Duration",
+                                    "icon": "AccessTime",
+                                    "format": "duration",
+                                },
+                                "ga4_engagement_rate": {
+                                    "value": 0.0,
+                                    "change": 0.0,
+                                    "source": "GA4",
+                                    "label": "Engagement Rate",
+                                    "icon": "TrendingUp",
+                                    "format": "percentage",
+                                },
+                            }
+                            section_times["ga4"] = time.time() - ga4_start
+                    except Exception as filter_err:
+                        logger.error(
+                            f"[GA4 KPI] Error fetching filtered traffic overview: {str(filter_err)}",
+                            exc_info=True
+                        )
+                        ga4_errors.append(f"Error with global_filters: {str(filter_err)}")
+                        # Create KPIs with zero values even on error, so section stays visible
+                        # IMPORTANT: Include ALL KPIs to prevent them from disappearing in the UI
+                        ga4_kpis = {
+                            "users": {
+                                "value": 0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Total Users",
+                                "icon": "People",
+                            },
+                            "sessions": {
+                                "value": 0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Sessions",
+                                "icon": "BarChart",
+                            },
+                            "new_users": {
+                                "value": 0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "New Users",
+                                "icon": "PersonAdd",
+                            },
+                            "engaged_sessions": {
+                                "value": 0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Engaged Sessions",
+                                "icon": "People",
+                            },
+                            "bounce_rate": {
+                                "value": 0.0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Bounce Rate",
+                                "icon": "TrendingDown",
+                                "format": "percentage",
+                            },
+                            "avg_session_duration": {
+                                "value": 0.0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Avg Session Duration",
+                                "icon": "AccessTime",
+                                "format": "duration",
+                            },
+                            "ga4_engagement_rate": {
+                                "value": 0.0,
+                                "change": 0.0,
+                                "source": "GA4",
+                                "label": "Engagement Rate",
+                                "icon": "TrendingUp",
+                                "format": "percentage",
+                            },
+                        }
+                        section_times["ga4"] = time.time() - ga4_start
+
+                elif use_stored_snapshot:
+                    # Use stored KPI snapshot
+                    snapshot = kpi_snapshot
+                    
+                    # Convert stored values to KPI format
+                    bounce_rate_value = round(float(snapshot.get("bounce_rate", 0)) * 100, 2) if snapshot.get("bounce_rate") else 0
+                    engagement_rate_value = round(float(snapshot.get("engagement_rate", 0)) * 100, 2) if snapshot.get("engagement_rate") else 0
+                    
+                    ga4_kpis = {
+                        "users": {
+                            "value": snapshot.get("users", 0),
+                            "change": float(snapshot.get("users_change", 0)),
+                            "source": "GA4",
+                            "label": "Total Users",
+                            "icon": "People"
+                        },
+                        "sessions": {
+                            "value": snapshot.get("sessions", 0),
+                            "change": float(snapshot.get("sessions_change", 0)),
+                            "source": "GA4",
+                            "label": "Sessions",
+                            "icon": "BarChart"
+                        },
+                        "new_users": {
+                            "value": snapshot.get("new_users", 0),
+                            "change": float(snapshot.get("new_users_change", 0)),
+                            "source": "GA4",
+                            "label": "New Users",
+                            "icon": "PersonAdd"
+                        },
+                        "bounce_rate": {
+                            "value": bounce_rate_value,
+                            "change": float(snapshot.get("bounce_rate_change", 0)),
+                            "source": "GA4",
+                            "label": "Bounce Rate",
+                            "icon": "TrendingDown",
+                            "format": "percentage"
+                        },
+                        "avg_session_duration": {
+                            "value": round(float(snapshot.get("avg_session_duration", 0)), 1),
+                            "change": float(snapshot.get("avg_session_duration_change", 0)),
+                            "source": "GA4",
+                            "label": "Avg Session Duration",
+                            "icon": "AccessTime",
+                            "format": "duration"
+                        },
+                        "ga4_engagement_rate": {
+                            "value": engagement_rate_value,
+                            "change": float(snapshot.get("engagement_rate_change", 0)),
+                            "source": "GA4",
+                            "label": "Engagement Rate",
+                            "icon": "TrendingUp",
+                            "format": "percentage"
+                        },
+                        "conversions": {
+                            "value": float(snapshot.get("conversions", 0)),
+                            "change": float(snapshot.get("conversions_change", 0)),
+                            "source": "GA4",
+                            "label": "Conversions",
+                            "icon": "TrendingUp"
+                        },
+                        "revenue": {
+                            "value": float(snapshot.get("revenue", 0)),
+                            "change": float(snapshot.get("revenue_change", 0)),
+                            "source": "GA4",
+                            "label": "Revenue",
+                            "icon": "TrendingUp",
+                            "format": "currency"
+                        },
+                        "engaged_sessions": {
+                            "value": snapshot.get("engaged_sessions", 0),
+                            "change": float(snapshot.get("engaged_sessions_change", 0)),
+                            "source": "GA4",
+                            "label": "Engaged Sessions",
+                            "icon": "People"
+                        }
+                    }
+                    logger.info(f"[GA4 KPI] Successfully loaded stored KPIs for brand {brand_id}")
+                    section_times["ga4"] = time.time() - ga4_start
+                else:
+                    # Try to get data from stored daily records first (for any date range)
+                    logger.info(f"[GA4 STORED DATA] Attempting to fetch from stored daily records for date range: {start_date} to {end_date}")
+                    # Use client_id for queries - brand_id is only used as fallback for Scrunch
+                    query_brand_id = scrunch_brand_id if client_id else brand_id
+                    traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
+                    # prev_traffic_overview already initialized at the start of GA4 section
+                    
+                    if traffic_overview:
+                        logger.info(f"[GA4 STORED DATA] Successfully loaded aggregated data from stored daily records")
+                        # Get previous period from stored data
+                        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                        period_duration = (end_dt - start_dt).days + 1
+                        prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                        prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                        query_brand_id = scrunch_brand_id if client_id else brand_id
+                        prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, prev_start, prev_end, client_id=client_id)
+                        if prev_traffic_overview:
+                            logger.info(f"[GA4 STORED DATA] Successfully loaded previous period from stored daily records")
+                        else:
+                            logger.info(f"[GA4 STORED DATA] No previous period data found in database")
+                            prev_traffic_overview = None
+                        
+                        # Get conversions and revenue from stored data
+                        total_conversions = traffic_overview.get("conversions", 0)
+                        revenue = traffic_overview.get("revenue", 0)
+                        prev_total_conversions = prev_traffic_overview.get("conversions", 0) if prev_traffic_overview else 0
+                        prev_revenue = prev_traffic_overview.get("revenue", 0) if prev_traffic_overview else 0
+                    else:
+                        # No stored data available - return empty KPIs (data should be synced first)
+                        logger.warning(f"[GA4 STORED DATA] No stored data found for date range {start_date} to {end_date}. Please sync GA4 data first.")
+                        traffic_overview = None
+                        prev_traffic_overview = None
+                        total_conversions = 0
+                        revenue = 0
+                        prev_total_conversions = 0
+                        prev_revenue = 0
+                    
+                    users_change = 0
+                    # NOTE: sessionsChange from API uses 60-day lookback, but we recalculate using same-duration period
+                    sessions_change_from_api = traffic_overview.get("sessionsChange", 0) if traffic_overview else 0
+                    logger.info(f"[GA4 CHANGE CALCULATION] sessionsChange from API (60-day lookback): {sessions_change_from_api}")
+                    
+                    # Recalculate sessions_change using same-duration period
+                    sessions_change = 0
+                    conversions_change = 0
+                    revenue_change = 0
+                    
+                    # Calculate revenue change
+                    if prev_revenue > 0:
+                        revenue_change = ((revenue - prev_revenue) / prev_revenue) * 100
+                        logger.info(f"[GA4 CHANGE CALCULATION] revenue_change calculated: {revenue_change}%")
+                    elif prev_revenue == 0 and revenue > 0:
+                        revenue_change = 100.0  # 100% increase from 0
+                        logger.info(f"[GA4 CHANGE CALCULATION] revenue_change: 100% (from 0 to {revenue})")
+                    elif prev_revenue == 0 and revenue == 0:
+                        revenue_change = 0.0
+                    
+                    # Calculate changes using prev_traffic_overview (now guaranteed to be initialized)
+                    if prev_traffic_overview:
+                        prev_users = prev_traffic_overview.get("users", 0)
+                        current_users = traffic_overview.get("users", 0) if traffic_overview else 0
+                        logger.info(f"[GA4 CHANGE CALCULATION] Users - Current: {current_users}, Previous: {prev_users}")
+                        if prev_users > 0:
+                            users_change = ((current_users - prev_users) / prev_users) * 100
+                            logger.info(f"[GA4 CHANGE CALCULATION] users_change calculated: {users_change}%")
+                        
+                        prev_sessions = prev_traffic_overview.get("sessions", 0)
+                        current_sessions = traffic_overview.get("sessions", 0) if traffic_overview else 0
+                        logger.info(f"[GA4 CHANGE CALCULATION] Sessions - Current: {current_sessions}, Previous: {prev_sessions}")
+                        if prev_sessions > 0:
+                            sessions_change = ((current_sessions - prev_sessions) / prev_sessions) * 100
+                            logger.info(f"[GA4 CHANGE CALCULATION] sessions_change recalculated (same-duration period): {sessions_change}%")
+                            logger.info(f"[GA4 CHANGE CALCULATION] Difference from API: {sessions_change - sessions_change_from_api}%")
+                        
+                        if prev_total_conversions > 0:
+                            conversions_change = ((total_conversions - prev_total_conversions) / prev_total_conversions) * 100
+                            logger.info(f"[GA4 CHANGE CALCULATION] conversions_change calculated: {conversions_change}%")
+                        elif prev_total_conversions == 0 and total_conversions > 0:
+                            conversions_change = 100.0  # 100% increase from 0
+                            logger.info(f"[GA4 CHANGE CALCULATION] conversions_change: 100% (from 0 to {total_conversions})")
+                        elif prev_total_conversions == 0 and total_conversions == 0:
+                            conversions_change = 0.0
+                    
+                    if traffic_overview:
+                        # Calculate additional GA4 metrics
+                        bounce_rate = traffic_overview.get("bounceRate", 0)
+                        avg_session_duration = traffic_overview.get("averageSessionDuration", 0)
+                        engagement_rate = traffic_overview.get("engagementRate", 0)
+                        new_users = traffic_overview.get("newUsers", 0)
+                        engaged_sessions = traffic_overview.get("engagedSessions", 0)
+                        
+                        # Calculate previous period metrics for change comparison
+                        prev_bounce_rate = prev_traffic_overview.get("bounceRate", 0) if prev_traffic_overview else 0
+                        prev_avg_session_duration = prev_traffic_overview.get("averageSessionDuration", 0) if prev_traffic_overview else 0
+                        prev_engagement_rate = prev_traffic_overview.get("engagementRate", 0) if prev_traffic_overview else 0
+                        prev_new_users = prev_traffic_overview.get("newUsers", 0) if prev_traffic_overview else 0
+                        prev_engaged_sessions = prev_traffic_overview.get("engagedSessions", 0) if prev_traffic_overview else 0
+                        
+                        # Calculate percentage changes
+                        logger.info(f"[GA4 CHANGE CALCULATION] Calculating additional metric changes...")
+                        bounce_rate_change = ((bounce_rate - prev_bounce_rate) / prev_bounce_rate * 100) if prev_bounce_rate > 0 else 0
+                        logger.info(f"[GA4 CHANGE CALCULATION] bounce_rate_change: {bounce_rate_change}% (Current: {bounce_rate}, Previous: {prev_bounce_rate})")
+                        
+                        avg_session_duration_change = ((avg_session_duration - prev_avg_session_duration) / prev_avg_session_duration * 100) if prev_avg_session_duration > 0 else 0
+                        logger.info(f"[GA4 CHANGE CALCULATION] avg_session_duration_change: {avg_session_duration_change}% (Current: {avg_session_duration}, Previous: {prev_avg_session_duration})")
+                        
+                        engagement_rate_change = ((engagement_rate - prev_engagement_rate) / prev_engagement_rate * 100) if prev_engagement_rate > 0 else 0
+                        logger.info(f"[GA4 CHANGE CALCULATION] engagement_rate_change: {engagement_rate_change}% (Current: {engagement_rate}, Previous: {prev_engagement_rate})")
+                        
+                        new_users_change = ((new_users - prev_new_users) / prev_new_users * 100) if prev_new_users > 0 else 0
+                        logger.info(f"[GA4 CHANGE CALCULATION] new_users_change: {new_users_change}% (Current: {new_users}, Previous: {prev_new_users})")
+                        
+                        engaged_sessions_change = ((engaged_sessions - prev_engaged_sessions) / prev_engaged_sessions * 100) if prev_engaged_sessions > 0 else 0
+                        logger.info(f"[GA4 CHANGE CALCULATION] engaged_sessions_change: {engaged_sessions_change}% (Current: {engaged_sessions}, Previous: {prev_engaged_sessions})")
+                        
+                        logger.info(f"[GA4 FINAL KPIs] Summary of all GA4 KPIs being returned:")
+                        logger.info(f"[GA4 FINAL KPIs] users: value={traffic_overview.get('users', 0)}, change={users_change}%")
+                        logger.info(f"[GA4 FINAL KPIs] sessions: value={traffic_overview.get('sessions', 0)}, change={sessions_change}% (RECALCULATED using same-duration period)")
+                        logger.info(f"[GA4 FINAL KPIs] new_users: value={new_users}, change={new_users_change}%")
+                        
+                        ga4_kpis = {
+                        "users": {
+                            "value": traffic_overview.get("users", 0),
+                            "change": users_change,
+                            "source": "GA4",
+                            "label": "Total Users",
+                            "icon": "People"
+                        },
+                        "sessions": {
+                            "value": traffic_overview.get("sessions", 0),
+                            "change": sessions_change,  # Using recalculated value (same-duration period)
+                            "source": "GA4",
+                            "label": "Sessions",
+                            "icon": "BarChart"
+                        },
+                        "new_users": {
+                            "value": new_users,
+                            "change": new_users_change,
+                            "source": "GA4",
+                            "label": "New Users",
+                            "icon": "PersonAdd"
+                        },
+                        "bounce_rate": {
+                            "value": round(bounce_rate * 100, 2),  # Convert to percentage
+                            "change": bounce_rate_change,
+                            "source": "GA4",
+                            "label": "Bounce Rate",
+                            "icon": "TrendingDown",
+                            "format": "percentage"
+                        },
+                        "avg_session_duration": {
+                            "value": round(avg_session_duration, 1),
+                            "change": avg_session_duration_change,
+                            "source": "GA4",
+                            "label": "Avg Session Duration",
+                            "icon": "AccessTime",
+                            "format": "duration"  # seconds
+                        },
+                        "ga4_engagement_rate": {
+                            "value": round(engagement_rate * 100, 2),  # Convert to percentage
+                            "change": engagement_rate_change,
+                            "source": "GA4",
+                            "label": "Engagement Rate",
+                            "icon": "TrendingUp",
+                            "format": "percentage"
+                        },
+                        "conversions": {
+                            "value": total_conversions,
+                            "change": conversions_change,
+                            "source": "GA4",
+                            "label": "Conversions",
+                            "icon": "TrendingUp"
+                        },
+                        "revenue": {
+                            "value": revenue,
+                            "change": revenue_change,
+                            "source": "GA4",
+                            "label": "Revenue",
+                            "icon": "TrendingUp",
+                            "format": "currency"
+                        },
+                        "engaged_sessions": {
+                            "value": engaged_sessions,
+                            "change": engaged_sessions_change,
+                            "source": "GA4",
+                            "label": "Engaged Sessions",
+                            "icon": "People"
+                        }
+                    }
+            except Exception as e:
+                error_msg = f"Error fetching GA4 KPIs: {str(e)}"
+                logger.error(error_msg)
+                ga4_errors.append(error_msg)
+        else:
+            logger.warning(f"Brand {brand_id} does not have GA4 property ID configured")
+        section_times["ga4"] = time.time() - ga4_start
+        
+        # ========== Agency Analytics KPIs ==========
+        agency_start = time.time()
+        agency_kpis = {}
+        agency_errors = []
+        campaign_links = []  # Initialize to avoid scope issues
+        try:
+            # CLIENT-CENTRIC: Get campaigns linked to client, not brand
+            if client_id:
+                # Get campaigns directly linked to client
+                client_campaigns = supabase.get_client_campaigns(client_id)
+                # Convert to same format as brand links for compatibility
+                campaign_links = [{"campaign_id": c["id"]} for c in client_campaigns]
+                logger.info(f"Found {len(campaign_links)} campaigns linked to client {client_id}")
+            else:
+                # Fallback: get campaigns linked to brand (for backward compatibility)
+                campaign_links = supabase.get_campaign_brand_links(brand_id=brand_id)
+                logger.info(f"Found {len(campaign_links)} campaign links for brand {brand_id} (fallback)")
+            
+            if campaign_links:
+                campaign_ids = [link["campaign_id"] for link in campaign_links]
+                logger.info(f"Processing {len(campaign_ids)} campaigns: {campaign_ids} for date range: {start_date} to {end_date}")
+                
+                # Use daily keyword rankings table with date range filtering (same approach as chart data)
+                # NOTE: Only using 100% accurate data from Agency Analytics source - no estimations
+                rankings_table = supabase._get_table("agency_analytics_keyword_rankings")
+                keywords_table = supabase._get_table("agency_analytics_keywords")
+                
+                # Build conditions for current period with date range filtering
+                ranking_conditions = [
+                    rankings_table.c.date >= start_date,
+                    rankings_table.c.date <= end_date,
+                    rankings_table.c.campaign_id.in_(campaign_ids),
+                    rankings_table.c.google_ranking != None,
+                    rankings_table.c.google_ranking > 0,
+                    rankings_table.c.google_ranking <= 100,  # Only top 100
+                    rankings_table.c.volume != None,
+                    rankings_table.c.volume > 0
+                ]
+                
+                # Aggregate rankings and volumes for current period
+                rankings_agg_query = (
+                    select(
+                        rankings_table.c.keyword_id.label("keyword_id"),
+                        func.avg(rankings_table.c.google_ranking).label("avg_ranking"),
+                        func.avg(rankings_table.c.volume).label("avg_volume"),
+                        func.count(rankings_table.c.id).label("row_count")
+                    )
+                    .where(and_(*ranking_conditions))
+                    .group_by(rankings_table.c.keyword_id)
+                )
+                rankings_agg = [dict(row._mapping) for row in db.execute(rankings_agg_query)]
+                
+                # Calculate totals for current period
+                total_rankings = 0
+                ranking_sum = 0
+                total_search_volume = 0
+                keyword_rankings_map = {}  # Track rankings per keyword for change calculation
+                
+                for row in rankings_agg:
+                    avg_rank = row.get("avg_ranking")
+                    if avg_rank is None or avg_rank <= 0:
+                        continue
+                    keyword_id = row.get("keyword_id")
+                    avg_volume = row.get("avg_volume") or 0
+                    row_count = row.get("row_count", 0)
+                    
+                    ranking_sum += avg_rank * row_count  # Weighted sum for average calculation
+                    total_rankings += row_count
+                    # For search volume, use the average volume (since it's the same for all rows of a keyword)
+                    # We'll sum unique keyword volumes, not multiply by row_count
+                    total_search_volume += avg_volume
+                    keyword_rankings_map[keyword_id] = {
+                        "avg_ranking": float(avg_rank),
+                        "avg_volume": float(avg_volume),
+                        "row_count": row_count
+                    }
+                
+                # Calculate average keyword rank
+                avg_keyword_rank = (ranking_sum / total_rankings) if total_rankings > 0 else 0
+                
+                logger.info(f"[Agency Analytics KPI] Current period ({start_date} to {end_date}): total_rankings={total_rankings}, avg_keyword_rank={avg_keyword_rank}, total_search_volume={total_search_volume}")
+                
+                # Calculate previous period (same duration as current period)
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                period_duration = (end_dt - start_dt).days + 1
+                prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                
+                logger.info(f"[Agency Analytics KPI] Previous period: {prev_start} to {prev_end} (same duration: {period_duration} days)")
+                
+                # Build conditions for previous period
+                prev_ranking_conditions = [
+                    rankings_table.c.date >= prev_start,
+                    rankings_table.c.date <= prev_end,
+                    rankings_table.c.campaign_id.in_(campaign_ids),
+                    rankings_table.c.google_ranking != None,
+                    rankings_table.c.google_ranking > 0,
+                    rankings_table.c.google_ranking <= 100,
+                    rankings_table.c.volume != None,
+                    rankings_table.c.volume > 0
+                ]
+                
+                # Aggregate rankings for previous period
+                prev_rankings_agg_query = (
+                    select(
+                        rankings_table.c.keyword_id.label("keyword_id"),
+                        func.avg(rankings_table.c.google_ranking).label("avg_ranking"),
+                        func.avg(rankings_table.c.volume).label("avg_volume"),
+                        func.count(rankings_table.c.id).label("row_count")
+                    )
+                    .where(and_(*prev_ranking_conditions))
+                    .group_by(rankings_table.c.keyword_id)
+                )
+                prev_rankings_agg = [dict(row._mapping) for row in db.execute(prev_rankings_agg_query)]
+                
+                # Calculate totals for previous period
+                prev_total_rankings = 0
+                prev_ranking_sum = 0
+                prev_total_search_volume = 0
+                prev_keyword_rankings_map = {}
+                
+                for row in prev_rankings_agg:
+                    avg_rank = row.get("avg_ranking")
+                    if avg_rank is None or avg_rank <= 0:
+                        continue
+                    keyword_id = row.get("keyword_id")
+                    avg_volume = row.get("avg_volume") or 0
+                    row_count = row.get("row_count", 0)
+                    
+                    prev_ranking_sum += avg_rank * row_count
+                    prev_total_rankings += row_count
+                    # For search volume, use the average volume (since it's the same for all rows of a keyword)
+                    prev_total_search_volume += avg_volume
+                    prev_keyword_rankings_map[keyword_id] = {
+                        "avg_ranking": float(avg_rank),
+                        "avg_volume": float(avg_volume),
+                        "row_count": row_count
+                    }
+                
+                prev_avg_rank = (prev_ranking_sum / prev_total_rankings) if prev_total_rankings > 0 else 0
+                
+                logger.info(f"[Agency Analytics KPI] Previous period: total_rankings={prev_total_rankings}, avg_keyword_rank={prev_avg_rank}, total_search_volume={prev_total_search_volume}")
+                
+                # Calculate ranking change per keyword (for keywords present in both periods)
+                total_ranking_change = 0
+                ranking_change_count = 0
+                for keyword_id in set(keyword_rankings_map.keys()) & set(prev_keyword_rankings_map.keys()):
+                    current_rank = keyword_rankings_map[keyword_id]["avg_ranking"]
+                    prev_rank = prev_keyword_rankings_map[keyword_id]["avg_ranking"]
+                    ranking_change = prev_rank - current_rank  # Positive means improvement
+                    total_ranking_change += ranking_change
+                    ranking_change_count += 1
+                
+                avg_ranking_change = (total_ranking_change / ranking_change_count) if ranking_change_count > 0 else 0
+                
+                # Calculate changes
+                def calculate_change(current, previous):
+                    if previous == 0 and current > 0:
+                        return 100.0
+                    if current == 0 and previous > 0:
+                        return -100.0
+                    if previous > 0:
+                        return ((current - previous) / previous) * 100
+                    return 0.0
+                
+                # Calculate changes for 100% accurate source data KPIs only
+                avg_rank_change = calculate_change(avg_keyword_rank, prev_avg_rank)
+                search_volume_change = calculate_change(total_search_volume, prev_total_search_volume)
+                ranking_count_change = calculate_change(total_rankings, prev_total_rankings)
+                ranking_change_change = calculate_change(avg_ranking_change, 0) if ranking_change_count > 0 else 0
+                
+                logger.info(f"[Agency Analytics KPI] Changes: avg_rank_change={avg_rank_change}%, search_volume_change={search_volume_change}%, ranking_count_change={ranking_count_change}%")
+                
+                # Collect all keywords with their rankings for "All Keywords ranking" KPI (from current period)
+                all_keywords_rankings = []
+                keyword_ids = list(keyword_rankings_map.keys())
+                keyword_phrase_map = {}
+                if keyword_ids:
+                    keywords_query = select(
+                        keywords_table.c.id,
+                        keywords_table.c.keyword_phrase
+                    ).where(keywords_table.c.id.in_(keyword_ids))
+                    for row in db.execute(keywords_query):
+                        keyword_phrase_map[row.id] = row.keyword_phrase
+                
+                for keyword_id, data in keyword_rankings_map.items():
+                    phrase = keyword_phrase_map.get(keyword_id) or f"Keyword {keyword_id}"
+                    avg_rank = data["avg_ranking"]
+                    avg_volume = data["avg_volume"]
+                    
+                    # Calculate ranking change if available in previous period
+                    ranking_change = None
+                    if keyword_id in prev_keyword_rankings_map:
+                        prev_rank = prev_keyword_rankings_map[keyword_id]["avg_ranking"]
+                        ranking_change = prev_rank - avg_rank  # Positive means improvement
+                    
+                    all_keywords_rankings.append({
+                        "keyword": phrase,
+                        "ranking": round(avg_rank, 1),
+                        "search_volume": int(avg_volume),
+                        "ranking_change": round(ranking_change, 1) if ranking_change is not None else None,
+                        "keyword_id": keyword_id
+                    })
+                
+                # Sort by ranking (best first)
+                all_keywords_rankings.sort(key=lambda x: x["ranking"] if x["ranking"] else 999)
+                
+                # NOTE: impressions, clicks, and CTR are NOT included as they require estimations
+                # Only KPIs with 100% accurate source data are included
+                agency_kpis = {
+                        "search_volume": {
+                            "value": int(total_search_volume),
+                            "change": search_volume_change,
+                            "source": "AgencyAnalytics",
+                            "label": "Search Volume",
+                            "icon": "Search",
+                            "format": "number"
+                        },
+                        "avg_keyword_rank": {
+                            "value": round(avg_keyword_rank, 1),
+                            "change": avg_rank_change,
+                            "source": "AgencyAnalytics",
+                            "label": "Avg Keyword Rank",
+                            "icon": "Search",
+                            "format": "number"
+                        },
+                        "ranking_change": {
+                            "value": round(avg_ranking_change, 1),
+                            "change": ranking_change_change,
+                            "source": "AgencyAnalytics",
+                            "label": "Avg Ranking Change",
+                            "icon": "TrendingUp",
+                            "format": "number"
+                        },
+                        # New/Updated Google Ranking KPIs
+                        "google_ranking_count": {
+                            "value": total_rankings,
+                            "change": ranking_count_change,
+                            "source": "AgencyAnalytics",
+                            "label": "Google Ranking Count",
+                            "icon": "Search",
+                            "format": "number",
+                            "display": f"Total keywords ranking: {total_rankings}"
+                        },
+                        "google_ranking": {
+                            "value": round(avg_keyword_rank, 1),
+                            "change": avg_rank_change,
+                            "source": "AgencyAnalytics",
+                            "label": "Google Ranking",
+                            "icon": "Search",
+                            "format": "number",
+                            "display": f"Average position: {round(avg_keyword_rank, 1)}"
+                        },
+                        "google_ranking_change": {
+                            "value": round(avg_ranking_change, 1),
+                            "change": ranking_change_change,
+                            "source": "AgencyAnalytics",
+                            "label": "Google Ranking Change",
+                            "icon": "TrendingUp",
+                            "format": "number",
+                            "display": f"Average change: {round(avg_ranking_change, 1)} positions"
+                        },
+                        "all_keywords_ranking": {
+                            "value": all_keywords_rankings,
+                            "change": None,
+                            "source": "AgencyAnalytics",
+                            "label": "All Keywords Ranking",
+                            "icon": "List",
+                            "format": "custom",
+                            "display": f"{len(all_keywords_rankings)} keywords tracked"
+                        },
+                        "keyword_ranking_change_and_volume": {
+                            "value": {
+                                "avg_ranking_change": round(avg_ranking_change, 1),
+                                "total_search_volume": int(total_search_volume),
+                                "keywords_count": total_rankings
+                            },
+                            "change": {
+                                "ranking_change": ranking_change_change,
+                                "search_volume": search_volume_change
+                            },
+                            "source": "AgencyAnalytics",
+                            "label": "Keyword Ranking Change and Volume",
+                            "icon": "BarChart",
+                            "format": "custom",
+                            "display": f"Ranking change: {round(avg_ranking_change, 1)} positions | Search volume: {total_search_volume:,}"
+                        }
+                    }
+        except Exception as e:
+            error_msg = f"Error fetching Agency Analytics KPIs: {str(e)}"
+            logger.error(error_msg)
+            agency_errors.append(error_msg)
+        
+        if not campaign_links:
+            logger.warning(f"Brand {brand_id} does not have any Agency Analytics campaigns linked")
+        section_times["agency"] = time.time() - agency_start
+        
+        # ========== Chart Data ==========
+        # Initialize chart_data early so it can be used in Scrunch AI section
+        chart_data = {
+            "users_over_time": [],
+            "impressions_vs_clicks": [],
+            "traffic_sources": [],
+            "top_campaigns": [],
+            "top_pages": [],
+            "ga4_traffic_overview": None,
+            "geographic_breakdown": [],
+            "top_performing_prompts": [],
+            "scrunch_ai_insights": []
+        }
+        
+        # ========== Scrunch AI KPIs ==========
+        # NOTE: Scrunch data is now loaded via separate endpoint /data/reporting-dashboard/{brand_id}/scrunch
+        # This allows the main dashboard to load quickly while Scrunch data loads in parallel
+        scrunch_kpis = {}
+        scrunch_chart_data = {
+            "top_performing_prompts": [],
+            "scrunch_ai_insights": []
+        }
+        
+        # Skip Scrunch processing in main endpoint - it's handled by separate endpoint
+        # This significantly improves main dashboard load time from ~15s to ~3-4s
+        logger.info(f"[PERFORMANCE] Skipping Scrunch processing in main endpoint - use /data/reporting-dashboard/{brand_id}/scrunch for Scrunch data")
+        
+        # Original Scrunch processing code moved to separate endpoint
+        # See /data/reporting-dashboard/{brand_id}/scrunch endpoint for implementation
+        # Scrunch data is now loaded separately to improve main dashboard load time
+        
+        # Combine all KPIs (Scrunch KPIs loaded via separate endpoint)
+        kpis = {**ga4_kpis, **agency_kpis, **scrunch_kpis}
+        
+        # Log KPI counts for debugging
+        logger.info(f"Combined KPIs for brand {brand_id}: GA4={len(ga4_kpis)}, AgencyAnalytics={len(agency_kpis)}, Scrunch={len(scrunch_kpis)}, Total={len(kpis)}")
+        
+        # Chart data is already initialized above (before Scrunch AI section)
+        # Continue populating chart_data with GA4 and Agency Analytics data
+        
+        # NOTE: Scrunch data is now loaded via separate endpoint /data/reporting-dashboard/{brand_id}/scrunch
+        # This section is kept for backward compatibility but is skipped in the main endpoint
+        # The Scrunch section below is only executed if we're not using the separate endpoint
+        
+        # Chart data is already initialized above (before Scrunch AI section)
+        # Continue populating chart_data with GA4 and Agency Analytics data
+        
+        # Get users over time (GA4)
+        # Use client's ga4_property_id if available, otherwise brand's
+        chart_ga4_property_id = client.get("ga4_property_id") if client_id and client else (brand.get("ga4_property_id") if brand else None)
+        if chart_ga4_property_id:
+            try:
+                property_id = chart_ga4_property_id
+                
+                # FIX: Use GA4 API directly for accurate totals (avoids double-counting from daily aggregation)
+                # This ensures chart data matches table data and GA4 dashboard
+                logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
+                
+                # Use GA4 API directly to avoid aggregation issues
+                # IMPORTANT: Pass global_filters so charts stay consistent with KPI filters
+                top_pages = await ga4_client.get_top_pages(
+                    property_id,
+                    start_date,
+                    end_date,
+                    limit=10,
+                    global_filters=global_filters,
+                )
+                traffic_sources = await ga4_client.get_traffic_sources(
+                    property_id,
+                    start_date,
+                    end_date,
+                    global_filters=global_filters,
+                )
+                geographic = await ga4_client.get_geographic_breakdown(
+                    property_id,
+                    start_date,
+                    end_date,
+                    limit=10,
+                    include_daily_breakdown=False,
+                    global_filters=global_filters,
+                )
+                devices = await ga4_client.get_device_breakdown(
+                    property_id,
+                    start_date,
+                    end_date,
+                    global_filters=global_filters,
+                )
+                
+                chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
+                chart_data["top_pages"] = top_pages if top_pages else []
+                # Filter out blank or "(not set)" country names
+                geographic_filtered = [g for g in (geographic or []) if g.get("country") and g.get("country").strip() and g.get("country").strip().lower() not in ['(not set)', 'not set', '']]
+                chart_data["geographic_breakdown"] = geographic_filtered
+                chart_data["device_breakdown"] = devices if devices else []
+                
+                logger.info(f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} (filtered from {len(geographic or [])}), devices: {len(devices)}")
+                
+                # Get GA4 traffic overview for detailed metrics from stored data
+                query_brand_id = scrunch_brand_id if client_id else brand_id
+                traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
+                if traffic_overview:
+                    # Calculate previous period for change comparison based on selected date range duration
+                    if traffic_overview:
+                        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                        period_duration = (end_dt - start_dt).days + 1
+                        prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                        prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                        prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, prev_start, prev_end, client_id=client_id)
+                        
+                        # Calculate changes
+                        sessions_change = traffic_overview.get("sessionsChange", 0)
+                        engaged_sessions_change = 0
+                        avg_session_duration_change = 0
+                        engagement_rate_change = 0
+                        
+                        if prev_traffic_overview:
+                            prev_engaged_sessions = prev_traffic_overview.get("engagedSessions", 0)
+                            current_engaged_sessions = traffic_overview.get("engagedSessions", 0)
+                            if prev_engaged_sessions > 0:
+                                engaged_sessions_change = ((current_engaged_sessions - prev_engaged_sessions) / prev_engaged_sessions) * 100
+                            
+                            prev_avg_duration = prev_traffic_overview.get("averageSessionDuration", 0)
+                            current_avg_duration = traffic_overview.get("averageSessionDuration", 0)
+                            if prev_avg_duration > 0:
+                                avg_session_duration_change = ((current_avg_duration - prev_avg_duration) / prev_avg_duration) * 100
+                            
+                            prev_engagement_rate = prev_traffic_overview.get("engagementRate", 0)
+                            current_engagement_rate = traffic_overview.get("engagementRate", 0)
+                            if prev_engagement_rate > 0:
+                                engagement_rate_change = ((current_engagement_rate - prev_engagement_rate) / prev_engagement_rate) * 100
+                        
+                        chart_data["ga4_traffic_overview"] = {
+                            "sessions": traffic_overview.get("sessions", 0),
+                            "sessionsChange": sessions_change,
+                            "engagedSessions": traffic_overview.get("engagedSessions", 0),
+                            "engagedSessionsChange": engaged_sessions_change,
+                            "averageSessionDuration": traffic_overview.get("averageSessionDuration", 0),
+                            "avgSessionDurationChange": avg_session_duration_change,
+                            "engagementRate": traffic_overview.get("engagementRate", 0),
+                            "engagementRateChange": engagement_rate_change
+                        }
+                    else:
+                        logger.warning(f"[GA4 STORED DATA] No traffic overview data found in database for date range {start_date} to {end_date}")
+                
+                # Get daily metrics over time from stored data (NO live API calls)
+                logger.info(f"[GA4 STORED DATA] Fetching daily metrics from stored records")
+                daily_metrics = {}
+                prev_daily_metrics = {}
+                
+                # Calculate previous period dates
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                period_duration = (end_dt - start_dt).days + 1
+                prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                
+                try:
+                    # First, generate all dates in the range to ensure we have entries for all days
+                    all_dates_map = {}
+                    current_date = start_dt
+                    while current_date <= end_dt:
+                        date_str = current_date.strftime("%Y-%m-%d")
+                        date_formatted = current_date.strftime("%Y%m%d")  # YYYYMMDD format for chart
+                        all_dates_map[date_str] = date_formatted
+                        # Initialize with zeros - will be filled from actual data
+                        daily_metrics[date_str] = {
+                            "date": date_formatted,
+                            "users": 0,
+                            "sessions": 0,
+                            "new_users": 0,
+                            "conversions": 0,
+                            "revenue": 0
+                        }
+                        current_date += timedelta(days=1)
+                    
+                    # Get daily traffic overview records for current period using SQLAlchemy Core
+                    # CLIENT-CENTRIC: Use client_id when available, otherwise use brand_id
+                    from sqlalchemy import text
+                    
+                    traffic_table = supabase._get_table("ga4_traffic_overview")
+                    
+                    # First, run a debug query to see what's actually in the database
+                    if client_id:
+                        debug_query = text("""
+                            SELECT COUNT(*) as count, MIN(date) as min_date, MAX(date) as max_date, 
+                                   COUNT(DISTINCT client_id) as client_count, COUNT(DISTINCT property_id) as property_count,
+                                   COUNT(CASE WHEN client_id = :client_id THEN 1 END) as matching_client_count
+                            FROM ga4_traffic_overview 
+                            WHERE property_id = :property_id 
+                              AND date >= CAST(:start_date AS DATE)
+                              AND date <= CAST(:end_date AS DATE)
+                        """)
+                        debug_result = db.execute(debug_query, {
+                            "property_id": property_id,
+                            "client_id": client_id,
+                            "start_date": start_date,
+                            "end_date": end_date
+                        })
+                        debug_row = debug_result.fetchone()
+                        total_available_by_property = 0
+                        matching_client_count = 0
+                        if debug_row:
+                            total_available_by_property = debug_row[0]
+                            matching_client_count = debug_row[5]
+                            logger.info(f"[GA4 DAILY DATA] Debug query result: total_count={debug_row[0]}, min_date={debug_row[1]}, max_date={debug_row[2]}, client_count={debug_row[3]}, property_count={debug_row[4]}, matching_client_count={debug_row[5]}")
+                    
+                    # Use proper date comparison - convert string dates to date objects
+                    from sqlalchemy import cast, Date
+                    start_date_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+                    end_date_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+                    
+                    # Decide whether to query by client_id or use property_id directly
+                    # If there are significantly more records by property_id than by client_id, use property_id query
+                    # This handles cases where data is stored without client_id or multiple clients share the property
+                    use_property_id_query = False
+                    if client_id and total_available_by_property > 0:
+                        # If we have debug info and there are more records by property_id, use property_id query
+                        if total_available_by_property > matching_client_count * 2:  # Threshold: if property has >2x records
+                            logger.info(f"[GA4 DAILY DATA] Using property_id query: {total_available_by_property} records available by property_id vs {matching_client_count} by client_id")
+                            use_property_id_query = True
+                    
+                    query_conditions = [
+                        traffic_table.c.property_id == property_id,
+                        cast(traffic_table.c.date, Date) >= start_date_dt,
+                        cast(traffic_table.c.date, Date) <= end_date_dt
+                    ]
+                    
+                    if use_property_id_query:
+                        # Query by property_id only (no client_id filter)
+                        logger.info(f"[GA4 DAILY DATA] Querying daily traffic records by property_id={property_id} (date_range={start_date} to {end_date})")
+                    elif client_id:
+                        query_conditions.append(traffic_table.c.client_id == client_id)
+                        logger.info(f"[GA4 DAILY DATA] Querying daily traffic records for client_id={client_id}, property_id={property_id}, date_range={start_date} to {end_date}")
+                    else:
+                        query_conditions.append(traffic_table.c.brand_id == brand_id)
+                        logger.info(f"[GA4 DAILY DATA] Querying daily traffic records for brand_id={brand_id}, property_id={property_id}, date_range={start_date} to {end_date}")
+                    
+                    daily_traffic_query = select(traffic_table).where(and_(*query_conditions)).order_by(traffic_table.c.date.asc())
+                    daily_traffic_result = db.execute(daily_traffic_query)
+                    daily_traffic_records = [dict(row._mapping) for row in daily_traffic_result]
+                    logger.info(f"[GA4 DAILY DATA] Found {len(daily_traffic_records)} daily traffic records from database")
+                    
+                    # Log sample records if found
+                    if daily_traffic_records:
+                        sample = daily_traffic_records[0]
+                        logger.info(f"[GA4 DAILY DATA] Sample record: date={sample.get('date')} (type: {type(sample.get('date'))}), users={sample.get('users')}, sessions={sample.get('sessions')}, client_id={sample.get('client_id')}, property_id={sample.get('property_id')}")
+                        # Log a few more samples
+                        for i, rec in enumerate(daily_traffic_records[:5]):
+                            logger.debug(f"[GA4 DAILY DATA] Record {i+1}: date={rec.get('date')}, users={rec.get('users')}, sessions={rec.get('sessions')}")
+                    
+                    # Fallback: If no records found for client_id OR if debug query shows more records available by property_id, use property_id query
+                    # This is because multiple clients can share the same GA4 property, and data might be stored without client_id
+                    use_fallback = False
+                    if client_id:
+                        if not daily_traffic_records:
+                            logger.info(f"[GA4 DAILY DATA] No GA4 daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
+                            use_fallback = True
+                        else:
+                            # Check if debug query showed more records available
+                            debug_query = text("""
+                                SELECT COUNT(*) as count
+                                FROM ga4_traffic_overview 
+                                WHERE property_id = :property_id 
+                                  AND date >= CAST(:start_date AS DATE)
+                                  AND date <= CAST(:end_date AS DATE)
+                            """)
+                            debug_result = db.execute(debug_query, {
+                                "property_id": property_id,
+                                "start_date": start_date,
+                                "end_date": end_date
+                            })
+                            debug_row = debug_result.fetchone()
+                            total_available = debug_row[0] if debug_row else 0
+                            
+                            if total_available > len(daily_traffic_records):
+                                logger.info(f"[GA4 DAILY DATA] Found {len(daily_traffic_records)} records for client_id={client_id}, but {total_available} records available for property_id={property_id}. Using property_id query to get all data.")
+                                use_fallback = True
+                    
+                    if use_fallback:
+                        fallback_query_conditions = [
+                            traffic_table.c.property_id == property_id,
+                            cast(traffic_table.c.date, Date) >= start_date_dt,
+                            cast(traffic_table.c.date, Date) <= end_date_dt
+                        ]
+                        fallback_query = select(traffic_table).where(and_(*fallback_query_conditions)).order_by(traffic_table.c.date.asc())
+                        fallback_result = db.execute(fallback_query)
+                        daily_traffic_records = [dict(row._mapping) for row in fallback_result]
+                        logger.info(f"[GA4 DAILY DATA] Fallback query found {len(daily_traffic_records)} daily traffic records")
+                        
+                        # Log sample from fallback
+                        if daily_traffic_records:
+                            sample = daily_traffic_records[0]
+                            logger.info(f"[GA4 DAILY DATA] Fallback sample record: date={sample.get('date')} (type: {type(sample.get('date'))}), users={sample.get('users')}, sessions={sample.get('sessions')}, client_id={sample.get('client_id')}, property_id={sample.get('property_id')}")
+                    
+                    matched_count = 0
+                    unmatched_dates = []
+                    for record in daily_traffic_records:
+                        date = record.get("date")
+                        if date:
+                            # Convert date to string format if it's a date object
+                            original_date = date
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                                logger.debug(f"[GA4 DAILY DATA] Converted date object {date} to string {date_str}")
+                            else:
+                                date_str = str(date)
+                                # Remove time component if present
+                                if ' ' in date_str:
+                                    date_str = date_str.split(' ')[0]
+                                    logger.debug(f"[GA4 DAILY DATA] Removed time component from date string: {date_str}")
+                                # Ensure it's in YYYY-MM-DD format
+                                if len(date_str) == 8 and '-' not in date_str:
+                                    # Assume YYYYMMDD format, convert to YYYY-MM-DD
+                                    date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                                    logger.debug(f"[GA4 DAILY DATA] Converted YYYYMMDD format to YYYY-MM-DD: {date_str}")
+                            
+                            if date_str in daily_metrics:
+                                users_val = record.get("users", 0)
+                                sessions_val = record.get("sessions", 0)
+                                new_users_val = record.get("new_users", 0)
+                                daily_metrics[date_str]["users"] = users_val
+                                daily_metrics[date_str]["sessions"] = sessions_val
+                                daily_metrics[date_str]["new_users"] = new_users_val
+                                matched_count += 1
+                                logger.debug(f"[GA4 DAILY DATA] Matched date {date_str}: users={users_val}, sessions={sessions_val}, new_users={new_users_val}")
+                            else:
+                                unmatched_dates.append((original_date, date_str))
+                                logger.warning(f"[GA4 DAILY DATA] Date {date_str} (from {original_date}) not found in daily_metrics keys. Available keys: {list(daily_metrics.keys())[:5]}...")
+                    
+                    logger.info(f"[GA4 DAILY DATA] Successfully matched {matched_count}/{len(daily_traffic_records)} daily traffic records to daily_metrics")
+                    if unmatched_dates:
+                        logger.warning(f"[GA4 DAILY DATA] {len(unmatched_dates)} dates could not be matched: {unmatched_dates[:3]}...")
+                    
+                    # Get daily conversions - match to existing dates or create new entries
+                    from sqlalchemy import cast, Date
+                    start_date_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+                    end_date_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+                    
+                    conversions_table = supabase._get_table("ga4_daily_conversions")
+                    conv_query_conditions = [
+                        conversions_table.c.property_id == property_id,
+                        cast(conversions_table.c.date, Date) >= start_date_dt,
+                        cast(conversions_table.c.date, Date) <= end_date_dt
+                    ]
+                    if client_id:
+                        conv_query_conditions.append(conversions_table.c.client_id == client_id)
+                    else:
+                        conv_query_conditions.append(conversions_table.c.brand_id == brand_id)
+                    daily_conversions_query = select(conversions_table).where(and_(*conv_query_conditions))
+                    daily_conversions_result = db.execute(daily_conversions_query)
+                    daily_conversions_records = [dict(row._mapping) for row in daily_conversions_result]
+                    
+                    # If no records found for specific client_id, fall back to property_id only
+                    if not daily_conversions_records and client_id:
+                        logger.info(f"No GA4 daily conversions records found for client_id={client_id}, falling back to property_id={property_id} query")
+                        fallback_conv_conditions = [
+                            conversions_table.c.property_id == property_id,
+                            cast(conversions_table.c.date, Date) >= start_date_dt,
+                            cast(conversions_table.c.date, Date) <= end_date_dt
+                        ]
+                        fallback_conv_query = select(conversions_table).where(and_(*fallback_conv_conditions))
+                        fallback_conv_result = db.execute(fallback_conv_query)
+                        daily_conversions_records = [dict(row._mapping) for row in fallback_conv_result]
+                    
+                    for record in daily_conversions_records:
+                        date = record.get("date")
+                        if date:
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str not in daily_metrics:
+                                # Create entry if it doesn't exist (shouldn't happen, but just in case)
+                                date_formatted = date_str.replace("-", "") if "-" in date_str else date_str
+                                daily_metrics[date_str] = {
+                                    "date": date_formatted,
+                                    "users": 0,
+                                    "sessions": 0,
+                                    "new_users": 0,
+                                    "conversions": 0,
+                                    "revenue": 0
+                                }
+                            daily_metrics[date_str]["conversions"] = record.get("total_conversions", 0)
+                    
+                    # Get daily revenue
+                    revenue_table = supabase._get_table("ga4_revenue")
+                    rev_query_conditions = [
+                        revenue_table.c.property_id == property_id,
+                        revenue_table.c.date >= start_date,
+                        revenue_table.c.date <= end_date
+                    ]
+                    if client_id:
+                        rev_query_conditions.append(revenue_table.c.client_id == client_id)
+                    else:
+                        rev_query_conditions.append(revenue_table.c.brand_id == brand_id)
+                    daily_revenue_query = select(revenue_table).where(and_(*rev_query_conditions))
+                    daily_revenue_result = db.execute(daily_revenue_query)
+                    daily_revenue_records = [dict(row._mapping) for row in daily_revenue_result]
+                    
+                    # If no records found for specific client_id, fall back to property_id only
+                    if not daily_revenue_records and client_id:
+                        logger.info(f"No GA4 daily revenue records found for client_id={client_id}, falling back to property_id={property_id} query")
+                        fallback_rev_conditions = [
+                            revenue_table.c.property_id == property_id,
+                            revenue_table.c.date >= start_date,
+                            revenue_table.c.date <= end_date
+                        ]
+                        fallback_rev_query = select(revenue_table).where(and_(*fallback_rev_conditions))
+                        fallback_rev_result = db.execute(fallback_rev_query)
+                        daily_revenue_records = [dict(row._mapping) for row in fallback_rev_result]
+                    
+                    for record in daily_revenue_records:
+                        date = record.get("date")
+                        if date:
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str not in daily_metrics:
+                                date_formatted = date_str.replace("-", "") if "-" in date_str else date_str
+                                daily_metrics[date_str] = {
+                                    "date": date_formatted,
+                                    "users": 0,
+                                    "sessions": 0,
+                                    "new_users": 0,
+                                    "conversions": 0,
+                                    "revenue": 0
+                                }
+                            daily_metrics[date_str]["revenue"] = float(record.get("total_revenue", 0))
+                    
+                    # Generate all dates for previous period first
+                    prev_all_dates_map = {}
+                    prev_current_date = datetime.strptime(prev_start, "%Y-%m-%d")
+                    prev_end_dt = datetime.strptime(prev_end, "%Y-%m-%d")
+                    while prev_current_date <= prev_end_dt:
+                        date_str = prev_current_date.strftime("%Y-%m-%d")
+                        date_formatted = prev_current_date.strftime("%Y%m%d")
+                        prev_all_dates_map[date_str] = date_formatted
+                        # Initialize with zeros
+                        prev_daily_metrics[date_str] = {
+                            "date": date_formatted,
+                            "users": 0,
+                            "sessions": 0,
+                            "new_users": 0,
+                            "conversions": 0,
+                            "revenue": 0
+                        }
+                        prev_current_date += timedelta(days=1)
+                    
+                    # Get previous period daily metrics using SQLAlchemy Core
+                    # CLIENT-CENTRIC: Use client_id when available, otherwise use brand_id
+                    prev_start_dt = datetime.strptime(prev_start, "%Y-%m-%d").date()
+                    prev_end_dt = datetime.strptime(prev_end, "%Y-%m-%d").date()
+                    
+                    prev_query_conditions = [
+                        traffic_table.c.property_id == property_id,
+                        cast(traffic_table.c.date, Date) >= prev_start_dt,
+                        cast(traffic_table.c.date, Date) <= prev_end_dt
+                    ]
+                    if client_id:
+                        prev_query_conditions.append(traffic_table.c.client_id == client_id)
+                    else:
+                        prev_query_conditions.append(traffic_table.c.brand_id == brand_id)
+                    prev_daily_traffic_query = select(traffic_table).where(and_(*prev_query_conditions)).order_by(traffic_table.c.date.asc())
+                    prev_daily_traffic_result = db.execute(prev_daily_traffic_query)
+                    prev_daily_traffic_records = [dict(row._mapping) for row in prev_daily_traffic_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id only
+                    if not prev_daily_traffic_records and client_id:
+                        logger.info(f"No GA4 previous period daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
+                        fallback_prev_query_conditions = [
+                            traffic_table.c.property_id == property_id,
+                            cast(traffic_table.c.date, Date) >= prev_start_dt,
+                            cast(traffic_table.c.date, Date) <= prev_end_dt
+                        ]
+                        fallback_prev_daily_traffic_query = select(traffic_table).where(and_(*fallback_prev_query_conditions)).order_by(traffic_table.c.date.asc())
+                        fallback_prev_daily_traffic_result = db.execute(fallback_prev_daily_traffic_query)
+                        prev_daily_traffic_records = [dict(row._mapping) for row in fallback_prev_daily_traffic_result]
+                    
+                    for record in prev_daily_traffic_records:
+                        date = record.get("date")
+                        if date:
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str in prev_daily_metrics:
+                                prev_daily_metrics[date_str]["users"] = record.get("users", 0)
+                                prev_daily_metrics[date_str]["sessions"] = record.get("sessions", 0)
+                                prev_daily_metrics[date_str]["new_users"] = record.get("new_users", 0)
+                    
+                    # Get previous period conversions and revenue
+                    prev_conv_query_conditions = [
+                        conversions_table.c.property_id == property_id,
+                        cast(conversions_table.c.date, Date) >= prev_start_dt,
+                        cast(conversions_table.c.date, Date) <= prev_end_dt
+                    ]
+                    if client_id:
+                        prev_conv_query_conditions.append(conversions_table.c.client_id == client_id)
+                    else:
+                        prev_conv_query_conditions.append(conversions_table.c.brand_id == brand_id)
+                    prev_daily_conversions_query = select(conversions_table).where(and_(*prev_conv_query_conditions))
+                    prev_daily_conversions_result = db.execute(prev_daily_conversions_query)
+                    prev_daily_conversions_records = [dict(row._mapping) for row in prev_daily_conversions_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id and brand_id only
+                    if not prev_daily_conversions_records and client_id:
+                        logger.info(f"No GA4 previous period daily conversions records found for client_id={client_id}, falling back to property_id={property_id} and brand_id={brand_id} query")
+                        fallback_prev_conv_query_conditions = [
+                            conversions_table.c.property_id == property_id,
+                            conversions_table.c.brand_id == brand_id,
+                            cast(conversions_table.c.date, Date) >= prev_start_dt,
+                            cast(conversions_table.c.date, Date) <= prev_end_dt
+                        ]
+                        fallback_prev_daily_conversions_query = select(conversions_table).where(and_(*fallback_prev_conv_query_conditions))
+                        fallback_prev_daily_conversions_result = db.execute(fallback_prev_daily_conversions_query)
+                        prev_daily_conversions_records = [dict(row._mapping) for row in fallback_prev_daily_conversions_result]
+                    
+                    for record in prev_daily_conversions_records:
+                        date = record.get("date")
+                        if date:
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str not in prev_daily_metrics:
+                                date_formatted = date_str.replace("-", "") if "-" in date_str else date_str
+                                prev_daily_metrics[date_str] = {
+                                    "date": date_formatted,
+                                    "users": 0,
+                                    "sessions": 0,
+                                    "new_users": 0,
+                                    "conversions": 0,
+                                    "revenue": 0
+                                }
+                            prev_daily_metrics[date_str]["conversions"] = record.get("total_conversions", 0)
+                    
+                    prev_rev_query_conditions = [
+                        revenue_table.c.property_id == property_id,
+                        cast(revenue_table.c.date, Date) >= prev_start_dt,
+                        cast(revenue_table.c.date, Date) <= prev_end_dt
+                    ]
+                    if client_id:
+                        prev_rev_query_conditions.append(revenue_table.c.client_id == client_id)
+                    else:
+                        prev_rev_query_conditions.append(revenue_table.c.brand_id == brand_id)
+                    prev_daily_revenue_query = select(revenue_table).where(and_(*prev_rev_query_conditions))
+                    prev_daily_revenue_result = db.execute(prev_daily_revenue_query)
+                    prev_daily_revenue_records = [dict(row._mapping) for row in prev_daily_revenue_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id and brand_id only
+                    if not prev_daily_revenue_records and client_id:
+                        logger.info(f"No GA4 previous period daily revenue records found for client_id={client_id}, falling back to property_id={property_id} and brand_id={brand_id} query")
+                        fallback_prev_rev_query_conditions = [
+                            revenue_table.c.property_id == property_id,
+                            revenue_table.c.brand_id == brand_id,
+                            cast(revenue_table.c.date, Date) >= prev_start_dt,
+                            cast(revenue_table.c.date, Date) <= prev_end_dt
+                        ]
+                        fallback_prev_daily_revenue_query = select(revenue_table).where(and_(*fallback_prev_rev_query_conditions))
+                        fallback_prev_daily_revenue_result = db.execute(fallback_prev_daily_revenue_query)
+                        prev_daily_revenue_records = [dict(row._mapping) for row in fallback_prev_daily_revenue_result]
+                    
+                    for record in prev_daily_revenue_records:
+                        date = record.get("date")
+                        if date:
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str not in prev_daily_metrics:
+                                date_formatted = date_str.replace("-", "") if "-" in date_str else date_str
+                                prev_daily_metrics[date_str] = {
+                                    "date": date_formatted,
+                                    "users": 0,
+                                    "sessions": 0,
+                                    "new_users": 0,
+                                    "conversions": 0,
+                                    "revenue": 0
+                                }
+                            prev_daily_metrics[date_str]["revenue"] = float(record.get("total_revenue", 0))
+                    
+                    logger.info(f"[GA4 STORED DATA] Loaded {len(daily_metrics)} daily metrics records for current period, {len(prev_daily_metrics)} for previous period")
+                    
+                    # Log summary of daily_metrics data before building chart
+                    non_zero_dates = [date for date, data in daily_metrics.items() if data.get("users", 0) > 0 or data.get("sessions", 0) > 0]
+                    total_users_in_metrics = sum(data.get("users", 0) for data in daily_metrics.values())
+                    total_sessions_in_metrics = sum(data.get("sessions", 0) for data in daily_metrics.values())
+                    logger.info(f"[GA4 DAILY DATA] Summary before building chart: {len(non_zero_dates)} dates with non-zero data out of {len(daily_metrics)} total dates")
+                    logger.info(f"[GA4 DAILY DATA] Total users in daily_metrics: {total_users_in_metrics}, Total sessions: {total_sessions_in_metrics}")
+                    if non_zero_dates:
+                        sample_data = daily_metrics[non_zero_dates[0]]
+                        logger.info(f"[GA4 DAILY DATA] Sample data for {non_zero_dates[0]}: users={sample_data.get('users')}, sessions={sample_data.get('sessions')}, new_users={sample_data.get('new_users')}")
+                    
+                    # Combine current and previous period data
+                    if daily_metrics:
+                        ga4_daily_comparison = []
+                        # Convert prev_daily_metrics to a dict for O(1) lookup by date string
+                        prev_data_dict = {date_str: data for date_str, data in prev_daily_metrics.items()}
+                        current_dates = sorted(daily_metrics.keys())
+                        
+                        # Calculate the date offset between current and previous periods
+                        # Previous period ends the day before current period starts
+                        current_start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                        prev_end_dt = current_start_dt - timedelta(days=1)
+                        period_duration = (end_dt - start_dt).days + 1
+                        date_offset_days = period_duration  # Days to go back to find corresponding previous date
+                        
+                        logger.info(f"[GA4 DAILY DATA] Building ga4_daily_comparison with {len(current_dates)} current dates and {len(prev_data_dict)} previous period dates")
+                        logger.info(f"[GA4 DAILY DATA] Date offset: {date_offset_days} days (current date - {date_offset_days} days = previous period date)")
+                        
+                        for date_str in current_dates:
+                            current = daily_metrics[date_str]
+                            
+                            # Calculate the corresponding previous period date for this current date
+                            current_date_dt = datetime.strptime(date_str, "%Y-%m-%d")
+                            prev_date_dt = current_date_dt - timedelta(days=date_offset_days)
+                            prev_date_str = prev_date_dt.strftime("%Y-%m-%d")
+                            
+                            # Look up the previous period data for this specific date
+                            previous = prev_data_dict.get(prev_date_str, {})
+                            
+                            comparison_entry = {
+                                "date": current["date"],  # Already in YYYYMMDD format
+                                "current_users": current["users"],
+                                "previous_users": previous.get("users", 0),
+                                "current_sessions": current["sessions"],
+                                "previous_sessions": previous.get("sessions", 0),
+                                "current_new_users": current["new_users"],
+                                "previous_new_users": previous.get("new_users", 0),
+                                "current_conversions": current["conversions"],
+                                "previous_conversions": previous.get("conversions", 0),
+                                "current_revenue": current["revenue"],
+                                "previous_revenue": previous.get("revenue", 0)
+                            }
+                            ga4_daily_comparison.append(comparison_entry)
+                            
+                            # Log first few entries and any entries with data for debugging
+                            if len(ga4_daily_comparison) <= 3 or current["users"] > 0 or current["sessions"] > 0:
+                                logger.debug(f"[GA4 DAILY DATA] Comparison entry for {date_str} ({current['date']}): current_users={current['users']}, current_new_users={current.get('new_users', 0)}, previous_date={prev_date_str}, previous_users={previous.get('users', 0)}, previous_new_users={previous.get('new_users', 0)}")
+                        
+                        chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                        logger.info(f"[GA4 DAILY DATA] Created ga4_daily_comparison with {len(ga4_daily_comparison)} entries")
+                        
+                        # Log summary of comparison data
+                        entries_with_data = [e for e in ga4_daily_comparison if e.get("current_users", 0) > 0 or e.get("current_sessions", 0) > 0]
+                        total_chart_users = sum(e.get("current_users", 0) for e in ga4_daily_comparison)
+                        total_chart_sessions = sum(e.get("current_sessions", 0) for e in ga4_daily_comparison)
+                        total_chart_new_users = sum(e.get("current_new_users", 0) for e in ga4_daily_comparison)
+                        logger.info(f"[GA4 DAILY DATA] {len(entries_with_data)}/{len(ga4_daily_comparison)} comparison entries have non-zero data")
+                        logger.info(f"[GA4 DAILY DATA] Total users in chart: {total_chart_users}, Total sessions: {total_chart_sessions}, Total new users: {total_chart_new_users}")
+                        
+                        # Keep backward compatibility - users_over_time (all days in range)
+                        users_over_time = []
+                        for date_str in sorted(daily_metrics.keys()):
+                            users_over_time.append({
+                                "date": daily_metrics[date_str]["date"],  # Already in YYYYMMDD format
+                                "users": daily_metrics[date_str]["users"]
+                            })
+                        chart_data["users_over_time"] = users_over_time
+                        logger.info(f"[GA4 DAILY DATA] Created users_over_time with {len(users_over_time)} entries")
+                        
+                        # Log summary of users_over_time
+                        users_with_data = [e for e in users_over_time if e.get("users", 0) > 0]
+                        total_users_over_time = sum(e.get("users", 0) for e in users_over_time)
+                        logger.info(f"[GA4 DAILY DATA] {len(users_with_data)}/{len(users_over_time)} users_over_time entries have non-zero users. Total: {total_users_over_time}")
+                    else:
+                        # Even if no data found, generate chart data with zeros for all dates in range
+                        # This ensures charts show up even when no data is synced yet
+                        logger.warning(f"[GA4 DAILY DATA] daily_metrics is empty, generating zero-filled chart data for {start_date} to {end_date}")
+                        ga4_daily_comparison = []
+                        users_over_time = []
+                        current_date = start_dt
+                        while current_date <= end_dt:
+                            date_str = current_date.strftime("%Y-%m-%d")
+                            date_formatted = current_date.strftime("%Y%m%d")
+                            ga4_daily_comparison.append({
+                                "date": date_formatted,
+                                "current_users": 0,
+                                "previous_users": 0,
+                                "current_sessions": 0,
+                                "previous_sessions": 0,
+                                "current_new_users": 0,
+                                "previous_new_users": 0,
+                                "current_conversions": 0,
+                                "previous_conversions": 0,
+                                "current_revenue": 0,
+                                "previous_revenue": 0
+                            })
+                            users_over_time.append({
+                                "date": date_formatted,
+                                "users": 0
+                            })
+                            current_date += timedelta(days=1)
+                        chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                        chart_data["users_over_time"] = users_over_time
+                        logger.info(f"[GA4 DAILY DATA] Generated zero-filled chart data: {len(ga4_daily_comparison)} entries")
+                except Exception as e:
+                    logger.warning(f"[GA4 STORED DATA] Could not fetch daily metrics from stored data: {str(e)}")
+                    # Generate empty chart data with zeros for all dates even on error
+                    ga4_daily_comparison = []
+                    users_over_time = []
+                    try:
+                        current_date = start_dt
+                        while current_date <= end_dt:
+                            date_formatted = current_date.strftime("%Y%m%d")
+                            ga4_daily_comparison.append({
+                                "date": date_formatted,
+                                "current_users": 0,
+                                "previous_users": 0,
+                                "current_sessions": 0,
+                                "previous_sessions": 0,
+                                "current_new_users": 0,
+                                "previous_new_users": 0,
+                                "current_conversions": 0,
+                                "previous_conversions": 0,
+                                "current_revenue": 0,
+                                "previous_revenue": 0
+                            })
+                            users_over_time.append({
+                                "date": date_formatted,
+                                "users": 0
+                            })
+                            current_date += timedelta(days=1)
+                    except:
+                        pass
+                    chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                    chart_data["users_over_time"] = users_over_time
+                    logger.warning(f"[GA4 DAILY DATA] Generated zero-filled chart data due to error: {len(ga4_daily_comparison)} entries")
+            except Exception as e:
+                logger.warning(f"Error fetching GA4 chart data: {str(e)}")
+        
+        # Get impressions vs clicks and top campaigns (Agency Analytics) using SQLAlchemy Core
+        # NOTE: Do NOT overwrite campaign_links here - it's already set correctly above (client-based if client_id, brand-based otherwise)
+        # The campaign_links variable is already populated in the Agency Analytics KPIs section above
+        # This section was incorrectly overwriting it with brand-based links, causing wrong data to be returned
+        # Keep the existing campaign_links that were set based on client_id or brand_id above
+        
+        # Note: campaign_links is checked but not used here
+        # The actual Scrunch metrics calculation happens later in the function
+        
+            # # Calculate Scrunch KPIs if brand has any Scrunch data (prompts or responses)
+            # # This ensures all brands with Scrunch data show the section (with zero values if no data in date range)
+            # logger.info(f"Brand {brand_id} Scrunch KPI calculation: has_any_scrunch_data={has_any_scrunch_data}")
+            # if has_any_scrunch_data:
+            #     # Calculate current period metrics (will be zero if no responses)
+            #     current_metrics = calculate_scrunch_metrics(responses, prompts, brand_id)
+                
+            #     # Extract citations_by_prompt for use in chart data
+            #     citations_by_prompt = current_metrics.get("citations_by_prompt", {})
+                
+            #     # Calculate previous period metrics (will be zero if no responses)
+            #     prev_metrics = calculate_scrunch_metrics(prev_responses, prompts, brand_id)
+                
+            #     # Calculate percentage changes
+            #     # Each KPI is compared to its own previous value
+            #     def calculate_change(current, previous, metric_name=""):
+            #         # If both are zero, no change
+            #         if current == 0 and previous == 0:
+            #             return 0.0
+                    
+            #         # If previous is zero but current has value
+            #         # This means the metric appeared for the first time
+            #         if previous == 0 and current > 0:
+            #             # Return a large positive change to indicate new metric
+            #             # But use a consistent value so all new metrics show the same
+            #             return 100.0  # Indicates new metric appeared
+                    
+            #         # If current is zero but previous had value, show 100% decrease
+            #         if current == 0 and previous > 0:
+            #             return -100.0
+                    
+            #         # Normal calculation when both have values
+            #         # This is where each KPI gets its unique change percentage
+            #         if previous > 0:
+            #             change = ((current - previous) / previous) * 100
+            #             return change
+                    
+            #         return 0.0
+                
+            #     # NOTE: influencer_reach, engagement_rate, total_interactions, cost_per_engagement are NOT calculated
+            #     # as they require assumptions. Only 100% accurate source data KPIs are calculated.
+            #     total_citations_change = calculate_change(current_metrics["total_citations"], prev_metrics["total_citations"], "total_citations")
+            #     brand_presence_rate_change = calculate_change(current_metrics["brand_presence_rate"], prev_metrics["brand_presence_rate"], "brand_presence_rate")
+            #     sentiment_score_change = calculate_change(current_metrics["sentiment_score"], prev_metrics["sentiment_score"], "sentiment_score")
+            #     top10_prompt_change = calculate_change(current_metrics["top10_prompt_percentage"], prev_metrics["top10_prompt_percentage"], "top10_prompt_percentage")
+            #     prompt_search_volume_change = calculate_change(current_metrics["prompt_search_volume"], prev_metrics["prompt_search_volume"], "prompt_search_volume")
+                
+            #     # Calculate changes for new KPIs
+            #     competitive_current = current_metrics.get("competitive_benchmarking", {})
+            #     competitive_prev = prev_metrics.get("competitive_benchmarking", {})
+            #     brand_visibility_change = calculate_change(
+            #         competitive_current.get("brand_visibility_percent", 0),
+            #         competitive_prev.get("brand_visibility_percent", 0),
+            #         "brand_visibility"
+            #     )
+            #     competitor_avg_change = calculate_change(
+            #         competitive_current.get("competitor_avg_visibility_percent", 0),
+            #         competitive_prev.get("competitor_avg_visibility_percent", 0),
+            #         "competitor_avg_visibility"
+            #     )
+                
+            #     # NOTE: influencer_reach, total_interactions, engagement_rate, cost_per_engagement
+            #     # are NOT included as they require assumptions. Only 100% accurate source data KPIs are included.
+            #     scrunch_kpis = {
+            #         "total_citations": {
+            #             "value": int(current_metrics["total_citations"]),
+            #             "change": round(total_citations_change, 2),
+            #             "source": "Scrunch",
+            #             "label": "Total Citations",
+            #             "icon": "Link",
+            #             "format": "number"
+            #         },
+            #         "brand_presence_rate": {
+            #             "value": round(current_metrics["brand_presence_rate"], 1),
+            #             "change": round(brand_presence_rate_change, 2),
+            #             "source": "Scrunch",
+            #             "label": "Brand Presence Rate",
+            #             "icon": "CheckCircle",
+            #             "format": "percentage"
+            #         },
+            #         "brand_sentiment_score": {
+            #             "value": round(current_metrics["sentiment_score"], 1),
+            #             "change": round(sentiment_score_change, 2),
+            #             "source": "Scrunch",
+            #             "label": "Brand Sentiment Score",
+            #             "icon": "SentimentSatisfied",
+            #             "format": "number"
+            #         },
+            #         # NOTE: scrunch_engagement_rate, total_interactions, cost_per_engagement are NOT included
+            #         # as they require assumptions. Only 100% accurate source data KPIs are included.
+            #         "top10_prompt_percentage": {
+            #             "value": round(current_metrics["top10_prompt_percentage"], 1),
+            #             "change": round(top10_prompt_change, 2),
+            #             "source": "Scrunch",
+            #             "label": "Top 10 Prompt",
+            #             "icon": "Article",
+            #             "format": "percentage"
+            #         },
+            #         "prompt_search_volume": {
+            #             "value": current_metrics["prompt_search_volume"],
+            #             "change": round(prompt_search_volume_change, 2),
+            #             "source": "Scrunch",
+            #             "label": "Prompt Search Volume",
+            #             "icon": "TrendingUp",
+            #             "format": "number"
+            #         },
+            #         # New KPIs
+            #         "competitive_benchmarking": {
+            #             "value": {
+            #                 "brand_visibility_percent": round(competitive_current.get("brand_visibility_percent", 0), 1),
+            #                 "competitor_avg_visibility_percent": round(competitive_current.get("competitor_avg_visibility_percent", 0), 1)
+            #             },
+            #             "change": {
+            #                 "brand_visibility": round(brand_visibility_change, 2),
+            #                 "competitor_avg_visibility": round(competitor_avg_change, 2)
+            #             },
+            #             "source": "Scrunch",
+            #             "label": "Competitive Benchmarking",
+            #             "icon": "BarChart",
+            #             "format": "custom",
+            #             "display": f"Your brand's AI visibility: {round(competitive_current.get('brand_visibility_percent', 0), 1)}% vs competitor average: {round(competitive_current.get('competitor_avg_visibility_percent', 0), 1)}%"
+            #         },
+            #         "prompt_reach": {
+            #             "value": current_metrics.get("prompt_reach", {}),
+            #             "change": None,  # Not calculating change for this metric
+            #             "source": "Scrunch",
+            #             "label": "Prompt Reach",
+            #             "icon": "Article",
+            #             "format": "custom"
+            #         }
+            #     }
+                
+            #     # Calculate Top Performing Prompts
+            #     # Filter by brand_id: only count responses for this brand_id and match with prompts for this brand_id
+            #     if prompts and responses:
+            #         # Create a set of valid prompt IDs for this brand_id for quick lookup
+            #         valid_prompt_ids = {prompt.get("id") for prompt in prompts if prompt.get("id")}
+                    
+            #         # Count responses per prompt_id, but only for responses that:
+            #         # 1. Have a prompt_id
+            #         # 2. The prompt_id belongs to a prompt for this brand_id
+            #         # 3. The response already belongs to this brand_id (from the query filter)
+            #         prompt_counts = {}
+            #         total_responses_for_brand = 0
+            #         for r in responses:
+            #             # Double-check brand_id matches (defensive programming)
+            #             response_brand_id = r.get("brand_id")
+            #             if response_brand_id != brand_id:
+            #                 continue  # Skip responses that don't match brand_id
+                        
+            #             total_responses_for_brand += 1
+            #             prompt_id = r.get("prompt_id")
+            #             if prompt_id and prompt_id in valid_prompt_ids:
+            #                 prompt_counts[prompt_id] = prompt_counts.get(prompt_id, 0) + 1
+                    
+            #         # Map prompts with response counts and unique platform variants (only prompts for this brand_id)
+            #         # First, collect platform variants for each prompt
+            #         prompt_variants = {}
+            #         for r in responses:
+            #             # Double-check brand_id matches
+            #             response_brand_id = r.get("brand_id")
+            #             if response_brand_id != brand_id:
+            #                 continue
+                        
+            #             prompt_id = r.get("prompt_id")
+            #             if prompt_id and prompt_id in valid_prompt_ids:
+            #                 if prompt_id not in prompt_variants:
+            #                     prompt_variants[prompt_id] = set()
+            #                 platform = r.get("platform")
+            #                 if platform:
+            #                     prompt_variants[prompt_id].add(platform)
+                    
+            #         top_prompts_data = []
+            #         for prompt in prompts:
+            #             # Ensure prompt belongs to this brand_id
+            #             prompt_brand_id = prompt.get("brand_id")
+            #             if prompt_brand_id != brand_id:
+            #                 continue  # Skip prompts that don't match brand_id
+                        
+            #             prompt_id = prompt.get("id")
+            #             response_count = prompt_counts.get(prompt_id, 0)
+            #             if response_count > 0:
+            #                 # Count unique platforms (variants) for this prompt
+            #                 unique_variants = len(prompt_variants.get(prompt_id, set()))
+            #                 # If no platforms found, default to 1 (at least one variant exists)
+            #                 variants_count = unique_variants if unique_variants > 0 else 1
+                            
+            #                 top_prompts_data.append({
+            #                     "id": prompt_id,
+            #                     "text": prompt.get("text") or prompt.get("prompt_text") or "N/A",
+            #                     "responseCount": response_count,
+            #                     "variants": variants_count,  # Count of unique platforms (ChatGPT, Perplexity, Claude, etc.)
+            #                     "citations": citations_by_prompt.get(prompt_id, 0),  # New: Citations per prompt
+            #                     "totalResponsesForBrand": total_responses_for_brand  # Total responses for this brand_id
+            #                 })
+                    
+            #         # Sort by response count and get top 10
+            #         top_prompts_data.sort(key=lambda x: x["responseCount"], reverse=True)
+            #         top_performing_prompts = []
+            #         for idx, prompt_data in enumerate(top_prompts_data[:10], 1):
+            #             top_performing_prompts.append({
+            #                 **prompt_data,
+            #                 "rank": idx
+            #             })
+            #         chart_data["top_performing_prompts"] = top_performing_prompts
+                
+            #     # Calculate Scrunch AI Insights
+            #     if prompts and responses:
+            #         # Group responses by prompt
+            #         prompt_data_map = {}
+            #         for prompt in prompts:
+            #             prompt_data_map[prompt.get("id")] = {
+            #                 "prompt": prompt,
+            #                 "responses": [],
+            #                 "variants": set(),
+            #                 "citations": 0,
+            #                 "competitors": set()
+            #             }
+                    
+            #         for r in responses:
+            #             prompt_id = r.get("prompt_id")
+            #             if prompt_id and prompt_id in prompt_data_map:
+            #                 prompt_data_map[prompt_id]["responses"].append(r)
+            #                 if r.get("platform"):
+            #                     prompt_data_map[prompt_id]["variants"].add(r.get("platform"))
+                            
+            #                 # Count citations
+            #                 citations = r.get("citations")
+            #                 if citations:
+            #                     if isinstance(citations, list):
+            #                         prompt_data_map[prompt_id]["citations"] += len(citations)
+            #                     elif isinstance(citations, str):
+            #                         try:
+            #                             import json
+            #                             parsed = json.loads(citations)
+            #                             if isinstance(parsed, list):
+            #                                 prompt_data_map[prompt_id]["citations"] += len(parsed)
+            #                         except:
+            #                             pass
+                            
+            #                 # Track competitors
+            #                 competitors_present = r.get("competitors_present", [])
+            #                 if isinstance(competitors_present, list):
+            #                     for comp in competitors_present:
+            #                         prompt_data_map[prompt_id]["competitors"].add(comp)
+                    
+            #         # Calculate insights for each prompt
+            #         insights = []
+            #         for prompt_id, data in prompt_data_map.items():
+            #             if len(data["responses"]) > 0:
+            #                 prompt = data["prompt"]
+            #                 response_count = len(data["responses"])
+            #                 presence_count = sum(1 for r in data["responses"] if r.get("brand_present") == True)
+            #                 presence = (presence_count / response_count * 100) if response_count > 0 else 0
+                            
+            #                 # Get category from topics or prompt text
+            #                 category = (
+            #                     prompt.get("topics", [None])[0] if prompt.get("topics") else None
+            #                 ) or (
+            #                     (prompt.get("text") or prompt.get("prompt_text") or "").split(" ")[:3]
+            #                 ) or prompt.get("stage") or "General"
+                            
+            #                 if isinstance(category, list):
+            #                     category = " ".join(category)
+                            
+            #                 insights.append({
+            #                     "id": prompt_id,
+            #                     "seedPrompt": prompt.get("text") or prompt.get("prompt_text") or "N/A",
+            #                     "stage": prompt.get("stage") or "Unknown",
+            #                     "variants": len(data["variants"]) or 1,
+            #                     "responses": response_count,
+            #                     "presence": round(presence, 1),
+            #                     "presenceChange": 0,  # Would need historical comparison
+            #                     "citations": data["citations"],
+            #                     "citationsChange": 0,  # Would need historical comparison
+            #                     "competitors": len(data["competitors"]),
+            #                     "competitorsChange": 0,  # Would need historical comparison
+            #                     "category": category
+            #                 })
+                    
+        
+        # Log KPI counts for debugging
+        if client_id:
+            logger.info(f"Combined KPIs for client {client_id}: GA4={len(ga4_kpis)}, AgencyAnalytics={len(agency_kpis)}, Scrunch={len(scrunch_kpis)}, Total={len(kpis)}")
+        else:
+            logger.info(f"Combined KPIs for brand {brand_id}: GA4={len(ga4_kpis)}, AgencyAnalytics={len(agency_kpis)}, Scrunch={len(scrunch_kpis)}, Total={len(kpis)}")
+        
+        # Chart data is already initialized above (before Scrunch AI section)
+        # Continue populating chart_data with GA4 and Agency Analytics data
+        
+        # Get users over time (GA4)
+        # Use client's ga4_property_id if available, otherwise brand's
+        chart_ga4_property_id = client.get("ga4_property_id") if client_id and client else (brand.get("ga4_property_id") if brand else None)
+        if chart_ga4_property_id:
+            try:
+                property_id = chart_ga4_property_id
+                
+                # FIX: Use GA4 API directly for accurate totals (avoids double-counting from daily aggregation)
+                # This ensures chart data matches table data and GA4 dashboard
+                logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
+                
+                # Use GA4 API directly to avoid aggregation issues
+                # IMPORTANT: Pass global_filters so charts stay consistent with KPI filters
+                top_pages = await ga4_client.get_top_pages(
+                    property_id,
+                    start_date,
+                    end_date,
+                    limit=10,
+                )
+                traffic_sources = await ga4_client.get_traffic_sources(
+                    property_id,
+                    start_date,
+                    end_date,
+                    global_filters=global_filters,
+                )
+                geographic = await ga4_client.get_geographic_breakdown(
+                    property_id,
+                    start_date,
+                    end_date,
+                    limit=10,
+                    include_daily_breakdown=False,
+                    global_filters=global_filters,
+                )
+                devices = await ga4_client.get_device_breakdown(
+                    property_id,
+                    start_date,
+                    end_date,
+                )
+                
+                chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
+                chart_data["top_pages"] = top_pages if top_pages else []
+                # Filter out blank or "(not set)" country names
+                geographic_filtered = [g for g in (geographic or []) if g.get("country") and g.get("country").strip() and g.get("country").strip().lower() not in ['(not set)', 'not set', '']]
+                chart_data["geographic_breakdown"] = geographic_filtered
+                chart_data["device_breakdown"] = devices if devices else []
+                
+                logger.info(f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} (filtered from {len(geographic or [])}), devices: {len(devices)}")
+                
+                # Get GA4 traffic overview for detailed metrics from stored data
+                query_brand_id = scrunch_brand_id if client_id else brand_id
+                traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
+                if traffic_overview:
+                    # Calculate previous period for change comparison based on selected date range duration
+                    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                    period_duration = (end_dt - start_dt).days + 1
+                    prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                    prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                    prev_traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, prev_start, prev_end, client_id=client_id)
+                    
+                    if traffic_overview:
+                        # Calculate changes
+                        sessions_change = traffic_overview.get("sessionsChange", 0)
+                        engaged_sessions_change = 0
+                        avg_session_duration_change = 0
+                        engagement_rate_change = 0
+                        
+                        if prev_traffic_overview:
+                            prev_engaged_sessions = prev_traffic_overview.get("engagedSessions", 0)
+                            current_engaged_sessions = traffic_overview.get("engagedSessions", 0)
+                            if prev_engaged_sessions > 0:
+                                engaged_sessions_change = ((current_engaged_sessions - prev_engaged_sessions) / prev_engaged_sessions) * 100
+                            
+                            prev_avg_duration = prev_traffic_overview.get("averageSessionDuration", 0)
+                            current_avg_duration = traffic_overview.get("averageSessionDuration", 0)
+                            if prev_avg_duration > 0:
+                                avg_session_duration_change = ((current_avg_duration - prev_avg_duration) / prev_avg_duration) * 100
+                            
+                            prev_engagement_rate = prev_traffic_overview.get("engagementRate", 0)
+                            current_engagement_rate = traffic_overview.get("engagementRate", 0)
+                            if prev_engagement_rate > 0:
+                                engagement_rate_change = ((current_engagement_rate - prev_engagement_rate) / prev_engagement_rate) * 100
+                        
+                        chart_data["ga4_traffic_overview"] = {
+                            "sessions": traffic_overview.get("sessions", 0),
+                            "sessionsChange": sessions_change,
+                            "engagedSessions": traffic_overview.get("engagedSessions", 0),
+                            "engagedSessionsChange": engaged_sessions_change,
+                            "averageSessionDuration": traffic_overview.get("averageSessionDuration", 0),
+                            "avgSessionDurationChange": avg_session_duration_change,
+                            "engagementRate": traffic_overview.get("engagementRate", 0),
+                            "engagementRateChange": engagement_rate_change
+                        }
+                    else:
+                        logger.warning(f"[GA4 STORED DATA] No traffic overview data found in database for date range {start_date} to {end_date}")
+                
+                # Get daily metrics over time from stored data (NO live API calls)
+                logger.info(f"[GA4 STORED DATA] Fetching daily metrics from stored records")
+                daily_metrics = {}
+                prev_daily_metrics = {}
+                
+                # Calculate previous period dates
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                period_duration = (end_dt - start_dt).days + 1
+                prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                
+                try:
+                    # First, generate all dates in the range to ensure we have entries for all days
+                    all_dates_map = {}
+                    current_date = start_dt
+                    while current_date <= end_dt:
+                        date_str = current_date.strftime("%Y-%m-%d")
+                        date_formatted = current_date.strftime("%Y%m%d")  # YYYYMMDD format for chart
+                        all_dates_map[date_str] = date_formatted
+                        # Initialize with zeros - will be filled from actual data
+                        daily_metrics[date_str] = {
+                            "date": date_formatted,
+                            "users": 0,
+                            "sessions": 0,
+                            "new_users": 0,
+                            "conversions": 0,
+                            "revenue": 0
+                        }
+                        current_date += timedelta(days=1)
+                    
+                    # Get daily traffic overview records for current period using SQLAlchemy Core
+                    # CLIENT-CENTRIC: Use client_id when available, otherwise use brand_id
+                    from sqlalchemy import text
+                    
+                    traffic_table = supabase._get_table("ga4_traffic_overview")
+                    
+                    # First, run a debug query to see what's actually in the database
+                    if client_id:
+                        debug_query = text("""
+                            SELECT COUNT(*) as count, MIN(date) as min_date, MAX(date) as max_date, 
+                                   COUNT(DISTINCT client_id) as client_count, COUNT(DISTINCT property_id) as property_count,
+                                   COUNT(CASE WHEN client_id = :client_id THEN 1 END) as matching_client_count
+                            FROM ga4_traffic_overview 
+                            WHERE property_id = :property_id 
+                              AND date >= CAST(:start_date AS DATE)
+                              AND date <= CAST(:end_date AS DATE)
+                        """)
+                        debug_result = db.execute(debug_query, {
+                            "property_id": property_id,
+                            "client_id": client_id,
+                            "start_date": start_date,
+                            "end_date": end_date
+                        })
+                        debug_row = debug_result.fetchone()
+                        total_available_by_property = 0
+                        matching_client_count = 0
+                        if debug_row:
+                            total_available_by_property = debug_row[0]
+                            matching_client_count = debug_row[5]
+                            logger.info(f"[GA4 DAILY DATA] Debug query result: total_count={debug_row[0]}, min_date={debug_row[1]}, max_date={debug_row[2]}, client_count={debug_row[3]}, property_count={debug_row[4]}, matching_client_count={debug_row[5]}")
+                    
+                    # Use proper date comparison - convert string dates to date objects
+                    from sqlalchemy import cast, Date
+                    start_date_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+                    end_date_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+                    
+                    # Decide whether to query by client_id or use property_id directly
+                    # If there are significantly more records by property_id than by client_id, use property_id query
+                    # This handles cases where data is stored without client_id or multiple clients share the property
+                    use_property_id_query = False
+                    if client_id and total_available_by_property > 0:
+                        # If we have debug info and there are more records by property_id, use property_id query
+                        if total_available_by_property > matching_client_count * 2:  # Threshold: if property has >2x records
+                            logger.info(f"[GA4 DAILY DATA] Using property_id query: {total_available_by_property} records available by property_id vs {matching_client_count} by client_id")
+                            use_property_id_query = True
+                    
+                    query_conditions = [
+                        traffic_table.c.property_id == property_id,
+                        cast(traffic_table.c.date, Date) >= start_date_dt,
+                        cast(traffic_table.c.date, Date) <= end_date_dt
+                    ]
+                    
+                    if use_property_id_query:
+                        # Query by property_id only (no client_id filter)
+                        logger.info(f"[GA4 DAILY DATA] Querying daily traffic records by property_id={property_id} (date_range={start_date} to {end_date})")
+                    elif client_id:
+                        query_conditions.append(traffic_table.c.client_id == client_id)
+                        logger.info(f"[GA4 DAILY DATA] Querying daily traffic records for client_id={client_id}, property_id={property_id}, date_range={start_date} to {end_date}")
+                    else:
+                        query_conditions.append(traffic_table.c.brand_id == brand_id)
+                        logger.info(f"[GA4 DAILY DATA] Querying daily traffic records for brand_id={brand_id}, property_id={property_id}, date_range={start_date} to {end_date}")
+                    
+                    daily_traffic_query = select(traffic_table).where(and_(*query_conditions)).order_by(traffic_table.c.date.asc())
+                    daily_traffic_result = db.execute(daily_traffic_query)
+                    daily_traffic_records = [dict(row._mapping) for row in daily_traffic_result]
+                    logger.info(f"[GA4 DAILY DATA] Found {len(daily_traffic_records)} daily traffic records from database")
+                    
+                    # Log sample records if found
+                    if daily_traffic_records:
+                        sample = daily_traffic_records[0]
+                        logger.info(f"[GA4 DAILY DATA] Sample record: date={sample.get('date')} (type: {type(sample.get('date'))}), users={sample.get('users')}, sessions={sample.get('sessions')}, client_id={sample.get('client_id')}, property_id={sample.get('property_id')}")
+                        # Log a few more samples
+                        for i, rec in enumerate(daily_traffic_records[:5]):
+                            logger.debug(f"[GA4 DAILY DATA] Record {i+1}: date={rec.get('date')}, users={rec.get('users')}, sessions={rec.get('sessions')}")
+                    
+                    # Fallback: If no records found for client_id and we didn't already use property_id query, try property_id only
+                    if not daily_traffic_records and client_id and not use_property_id_query:
+                        logger.info(f"[GA4 DAILY DATA] No GA4 daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
+                        fallback_query_conditions = [
+                            traffic_table.c.property_id == property_id,
+                            cast(traffic_table.c.date, Date) >= start_date_dt,
+                            cast(traffic_table.c.date, Date) <= end_date_dt
+                        ]
+                        fallback_daily_traffic_query = select(traffic_table).where(and_(*fallback_query_conditions)).order_by(traffic_table.c.date.asc())
+                        fallback_daily_traffic_result = db.execute(fallback_daily_traffic_query)
+                        daily_traffic_records = [dict(row._mapping) for row in fallback_daily_traffic_result]
+                        logger.info(f"[GA4 DAILY DATA] Fallback query found {len(daily_traffic_records)} daily traffic records")
+                        
+                        # Log sample from fallback
+                        if daily_traffic_records:
+                            sample = daily_traffic_records[0]
+                            logger.info(f"[GA4 DAILY DATA] Fallback sample record: date={sample.get('date')} (type: {type(sample.get('date'))}), users={sample.get('users')}, sessions={sample.get('sessions')}, client_id={sample.get('client_id')}, property_id={sample.get('property_id')}")
+                    
+                    matched_count = 0
+                    unmatched_dates = []
+                    for record in daily_traffic_records:
+                        date = record.get("date")
+                        if date:
+                            # Convert date to string format if it's a date object
+                            original_date = date
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                                logger.debug(f"[GA4 DAILY DATA] Converted date object {date} to string {date_str}")
+                            else:
+                                date_str = str(date)
+                                # Remove time component if present
+                                if ' ' in date_str:
+                                    date_str = date_str.split(' ')[0]
+                                    logger.debug(f"[GA4 DAILY DATA] Removed time component from date string: {date_str}")
+                                # Ensure it's in YYYY-MM-DD format
+                                if len(date_str) == 8 and '-' not in date_str:
+                                    # Assume YYYYMMDD format, convert to YYYY-MM-DD
+                                    date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                                    logger.debug(f"[GA4 DAILY DATA] Converted YYYYMMDD format to YYYY-MM-DD: {date_str}")
+                            
+                            if date_str in daily_metrics:
+                                users_val = record.get("users", 0)
+                                sessions_val = record.get("sessions", 0)
+                                new_users_val = record.get("new_users", 0)
+                                daily_metrics[date_str]["users"] = users_val
+                                daily_metrics[date_str]["sessions"] = sessions_val
+                                daily_metrics[date_str]["new_users"] = new_users_val
+                                matched_count += 1
+                                logger.debug(f"[GA4 DAILY DATA] Matched date {date_str}: users={users_val}, sessions={sessions_val}, new_users={new_users_val}")
+                            else:
+                                unmatched_dates.append((original_date, date_str))
+                                logger.warning(f"[GA4 DAILY DATA] Date {date_str} (from {original_date}) not found in daily_metrics keys. Available keys: {list(daily_metrics.keys())[:5]}...")
+                    
+                    logger.info(f"[GA4 DAILY DATA] Successfully matched {matched_count}/{len(daily_traffic_records)} daily traffic records to daily_metrics")
+                    if unmatched_dates:
+                        logger.warning(f"[GA4 DAILY DATA] {len(unmatched_dates)} dates could not be matched: {unmatched_dates[:3]}...")
+                    
+                    # Get daily conversions - match to existing dates or create new entries
+                    conversions_table = supabase._get_table("ga4_daily_conversions")
+                    conv_query_conditions = [
+                        conversions_table.c.property_id == property_id,
+                        cast(conversions_table.c.date, Date) >= start_date_dt,
+                        cast(conversions_table.c.date, Date) <= end_date_dt
+                    ]
+                    if client_id:
+                        conv_query_conditions.append(conversions_table.c.client_id == client_id)
+                    else:
+                        conv_query_conditions.append(conversions_table.c.brand_id == brand_id)
+                    daily_conversions_query = select(conversions_table).where(and_(*conv_query_conditions))
+                    daily_conversions_result = db.execute(daily_conversions_query)
+                    daily_conversions_records = [dict(row._mapping) for row in daily_conversions_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id and brand_id only
+                    if not daily_conversions_records and client_id:
+                        logger.info(f"No GA4 daily conversions records found for client_id={client_id}, falling back to property_id={property_id} and brand_id={brand_id} query")
+                        fallback_conv_query_conditions = [
+                            conversions_table.c.property_id == property_id,
+                            conversions_table.c.brand_id == brand_id,
+                            cast(conversions_table.c.date, Date) >= start_date_dt,
+                            cast(conversions_table.c.date, Date) <= end_date_dt
+                        ]
+                        fallback_daily_conversions_query = select(conversions_table).where(and_(*fallback_conv_query_conditions))
+                        fallback_daily_conversions_result = db.execute(fallback_daily_conversions_query)
+                        daily_conversions_records = [dict(row._mapping) for row in fallback_daily_conversions_result]
+                    
+                    for record in daily_conversions_records:
+                        date = record.get("date")
+                        if date:
+                            # Convert date to string format if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                                # Remove time component if present
+                                if ' ' in date_str:
+                                    date_str = date_str.split(' ')[0]
+                                # Ensure it's in YYYY-MM-DD format
+                                if len(date_str) == 8 and '-' not in date_str:
+                                    # Assume YYYYMMDD format, convert to YYYY-MM-DD
+                                    date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                            
+                            if date_str not in daily_metrics:
+                                # Create entry if it doesn't exist (shouldn't happen, but just in case)
+                                date_formatted = date_str.replace("-", "")
+                                daily_metrics[date_str] = {
+                                    "date": date_formatted,
+                                    "users": 0,
+                                    "sessions": 0,
+                                    "new_users": 0,
+                                    "conversions": 0,
+                                    "revenue": 0
+                                }
+                            daily_metrics[date_str]["conversions"] = record.get("total_conversions", 0)
+                    
+                    # Get daily revenue - match to existing dates or create new entries
+                    revenue_table = supabase._get_table("ga4_revenue")
+                    rev_query_conditions = [
+                        revenue_table.c.property_id == property_id,
+                        cast(revenue_table.c.date, Date) >= start_date_dt,
+                        cast(revenue_table.c.date, Date) <= end_date_dt
+                    ]
+                    if client_id:
+                        rev_query_conditions.append(revenue_table.c.client_id == client_id)
+                    else:
+                        rev_query_conditions.append(revenue_table.c.brand_id == brand_id)
+                    daily_revenue_query = select(revenue_table).where(and_(*rev_query_conditions))
+                    daily_revenue_result = db.execute(daily_revenue_query)
+                    daily_revenue_records = [dict(row._mapping) for row in daily_revenue_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id and brand_id only
+                    if not daily_revenue_records and client_id:
+                        logger.info(f"No GA4 daily revenue records found for client_id={client_id}, falling back to property_id={property_id} and brand_id={brand_id} query")
+                        fallback_rev_query_conditions = [
+                            revenue_table.c.property_id == property_id,
+                            revenue_table.c.brand_id == brand_id,
+                            cast(revenue_table.c.date, Date) >= start_date_dt,
+                            cast(revenue_table.c.date, Date) <= end_date_dt
+                        ]
+                        fallback_daily_revenue_query = select(revenue_table).where(and_(*fallback_rev_query_conditions))
+                        fallback_daily_revenue_result = db.execute(fallback_daily_revenue_query)
+                        daily_revenue_records = [dict(row._mapping) for row in fallback_daily_revenue_result]
+                    
+                    for record in daily_revenue_records:
+                        date = record.get("date")
+                        if date:
+                            # Convert date to string format if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                                # Remove time component if present
+                                if ' ' in date_str:
+                                    date_str = date_str.split(' ')[0]
+                                # Ensure it's in YYYY-MM-DD format
+                                if len(date_str) == 8 and '-' not in date_str:
+                                    # Assume YYYYMMDD format, convert to YYYY-MM-DD
+                                    date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                            
+                            if date_str not in daily_metrics:
+                                # Create entry if it doesn't exist (shouldn't happen, but just in case)
+                                date_formatted = date_str.replace("-", "")
+                                daily_metrics[date_str] = {
+                                    "date": date_formatted,
+                                    "users": 0,
+                                    "sessions": 0,
+                                    "new_users": 0,
+                                    "conversions": 0,
+                                    "revenue": 0
+                                }
+                            daily_metrics[date_str]["revenue"] = float(record.get("total_revenue", 0))
+                    
+                    # Generate all dates for previous period first
+                    prev_all_dates_map = {}
+                    prev_current_date = datetime.strptime(prev_start, "%Y-%m-%d")
+                    prev_end_dt = datetime.strptime(prev_end, "%Y-%m-%d")
+                    while prev_current_date <= prev_end_dt:
+                        date_str = prev_current_date.strftime("%Y-%m-%d")
+                        date_formatted = prev_current_date.strftime("%Y%m%d")
+                        prev_all_dates_map[date_str] = date_formatted
+                        # Initialize with zeros
+                        prev_daily_metrics[date_str] = {
+                            "date": date_formatted,
+                            "users": 0,
+                            "sessions": 0,
+                            "new_users": 0,
+                            "conversions": 0,
+                            "revenue": 0
+                        }
+                        prev_current_date += timedelta(days=1)
+                    
+                    # Get previous period daily metrics using SQLAlchemy Core
+                    # CLIENT-CENTRIC: Use client_id when available, otherwise use brand_id
+                    prev_start_dt = datetime.strptime(prev_start, "%Y-%m-%d").date()
+                    prev_end_dt = datetime.strptime(prev_end, "%Y-%m-%d").date()
+                    
+                    prev_query_conditions = [
+                        traffic_table.c.property_id == property_id,
+                        cast(traffic_table.c.date, Date) >= prev_start_dt,
+                        cast(traffic_table.c.date, Date) <= prev_end_dt
+                    ]
+                    if client_id:
+                        prev_query_conditions.append(traffic_table.c.client_id == client_id)
+                    else:
+                        prev_query_conditions.append(traffic_table.c.brand_id == brand_id)
+                    prev_daily_traffic_query = select(traffic_table).where(and_(*prev_query_conditions)).order_by(traffic_table.c.date.asc())
+                    prev_daily_traffic_result = db.execute(prev_daily_traffic_query)
+                    prev_daily_traffic_records = [dict(row._mapping) for row in prev_daily_traffic_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id only
+                    if not prev_daily_traffic_records and client_id:
+                        logger.info(f"No GA4 previous period daily traffic records found for client_id={client_id}, falling back to property_id={property_id} query")
+                        fallback_prev_query_conditions = [
+                            traffic_table.c.property_id == property_id,
+                            cast(traffic_table.c.date, Date) >= prev_start_dt,
+                            cast(traffic_table.c.date, Date) <= prev_end_dt
+                        ]
+                        fallback_prev_daily_traffic_query = select(traffic_table).where(and_(*fallback_prev_query_conditions)).order_by(traffic_table.c.date.asc())
+                        fallback_prev_daily_traffic_result = db.execute(fallback_prev_daily_traffic_query)
+                        prev_daily_traffic_records = [dict(row._mapping) for row in fallback_prev_daily_traffic_result]
+                    
+                    for record in prev_daily_traffic_records:
+                        date = record.get("date")
+                        if date:
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str in prev_daily_metrics:
+                                prev_daily_metrics[date_str]["users"] = record.get("users", 0)
+                                prev_daily_metrics[date_str]["sessions"] = record.get("sessions", 0)
+                                prev_daily_metrics[date_str]["new_users"] = record.get("new_users", 0)
+                    
+                    # Get previous period conversions and revenue
+                    prev_conv_query_conditions = [
+                        conversions_table.c.property_id == property_id,
+                        cast(conversions_table.c.date, Date) >= prev_start_dt,
+                        cast(conversions_table.c.date, Date) <= prev_end_dt
+                    ]
+                    if client_id:
+                        prev_conv_query_conditions.append(conversions_table.c.client_id == client_id)
+                    else:
+                        prev_conv_query_conditions.append(conversions_table.c.brand_id == brand_id)
+                    prev_daily_conversions_query = select(conversions_table).where(and_(*prev_conv_query_conditions))
+                    prev_daily_conversions_result = db.execute(prev_daily_conversions_query)
+                    prev_daily_conversions_records = [dict(row._mapping) for row in prev_daily_conversions_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id and brand_id only
+                    if not prev_daily_conversions_records and client_id:
+                        logger.info(f"No GA4 previous period daily conversions records found for client_id={client_id}, falling back to property_id={property_id} and brand_id={brand_id} query")
+                        fallback_prev_conv_query_conditions = [
+                            conversions_table.c.property_id == property_id,
+                            conversions_table.c.brand_id == brand_id,
+                            cast(conversions_table.c.date, Date) >= prev_start_dt,
+                            cast(conversions_table.c.date, Date) <= prev_end_dt
+                        ]
+                        fallback_prev_daily_conversions_query = select(conversions_table).where(and_(*fallback_prev_conv_query_conditions))
+                        fallback_prev_daily_conversions_result = db.execute(fallback_prev_daily_conversions_query)
+                        prev_daily_conversions_records = [dict(row._mapping) for row in fallback_prev_daily_conversions_result]
+                    
+                    for record in prev_daily_conversions_records:
+                        date = record.get("date")
+                        if date:
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str not in prev_daily_metrics:
+                                date_formatted = date_str.replace("-", "") if "-" in date_str else date_str
+                                prev_daily_metrics[date_str] = {
+                                    "date": date_formatted,
+                                    "users": 0,
+                                    "sessions": 0,
+                                    "new_users": 0,
+                                    "conversions": 0,
+                                    "revenue": 0
+                                }
+                            prev_daily_metrics[date_str]["conversions"] = record.get("total_conversions", 0)
+                    
+                    prev_rev_query_conditions = [
+                        revenue_table.c.property_id == property_id,
+                        cast(revenue_table.c.date, Date) >= prev_start_dt,
+                        cast(revenue_table.c.date, Date) <= prev_end_dt
+                    ]
+                    if client_id:
+                        prev_rev_query_conditions.append(revenue_table.c.client_id == client_id)
+                    else:
+                        prev_rev_query_conditions.append(revenue_table.c.brand_id == brand_id)
+                    prev_daily_revenue_query = select(revenue_table).where(and_(*prev_rev_query_conditions))
+                    prev_daily_revenue_result = db.execute(prev_daily_revenue_query)
+                    prev_daily_revenue_records = [dict(row._mapping) for row in prev_daily_revenue_result]
+                    
+                    # Fallback: If no records found for client_id, query by property_id and brand_id only
+                    if not prev_daily_revenue_records and client_id:
+                        logger.info(f"No GA4 previous period daily revenue records found for client_id={client_id}, falling back to property_id={property_id} and brand_id={brand_id} query")
+                        fallback_prev_rev_query_conditions = [
+                            revenue_table.c.property_id == property_id,
+                            revenue_table.c.brand_id == brand_id,
+                            cast(revenue_table.c.date, Date) >= prev_start_dt,
+                            cast(revenue_table.c.date, Date) <= prev_end_dt
+                        ]
+                        fallback_prev_daily_revenue_query = select(revenue_table).where(and_(*fallback_prev_rev_query_conditions))
+                        fallback_prev_daily_revenue_result = db.execute(fallback_prev_daily_revenue_query)
+                        prev_daily_revenue_records = [dict(row._mapping) for row in fallback_prev_daily_revenue_result]
+                    
+                    for record in prev_daily_revenue_records:
+                        date = record.get("date")
+                        if date:
+                            # Convert date to string if it's a date object
+                            if hasattr(date, 'strftime'):
+                                date_str = date.strftime("%Y-%m-%d")
+                            else:
+                                date_str = str(date)
+                            if date_str not in prev_daily_metrics:
+                                date_formatted = date_str.replace("-", "") if "-" in date_str else date_str
+                                prev_daily_metrics[date_str] = {
+                                    "date": date_formatted,
+                                    "users": 0,
+                                    "sessions": 0,
+                                    "new_users": 0,
+                                    "conversions": 0,
+                                    "revenue": 0
+                                }
+                            prev_daily_metrics[date_str]["revenue"] = float(record.get("total_revenue", 0))
+                    
+                    logger.info(f"[GA4 STORED DATA] Loaded {len(daily_metrics)} daily metrics records for current period, {len(prev_daily_metrics)} for previous period")
+                    
+                    # Log summary of daily_metrics data before building chart
+                    non_zero_dates = [date for date, data in daily_metrics.items() if data.get("users", 0) > 0 or data.get("sessions", 0) > 0]
+                    total_users_in_metrics = sum(data.get("users", 0) for data in daily_metrics.values())
+                    total_sessions_in_metrics = sum(data.get("sessions", 0) for data in daily_metrics.values())
+                    logger.info(f"[GA4 DAILY DATA] Summary before building chart: {len(non_zero_dates)} dates with non-zero data out of {len(daily_metrics)} total dates")
+                    logger.info(f"[GA4 DAILY DATA] Total users in daily_metrics: {total_users_in_metrics}, Total sessions: {total_sessions_in_metrics}")
+                    if non_zero_dates:
+                        sample_data = daily_metrics[non_zero_dates[0]]
+                        logger.info(f"[GA4 DAILY DATA] Sample data for {non_zero_dates[0]}: users={sample_data.get('users')}, sessions={sample_data.get('sessions')}, new_users={sample_data.get('new_users')}")
+                    
+                    # Combine current and previous period data
+                    if daily_metrics:
+                        ga4_daily_comparison = []
+                        # Convert prev_daily_metrics to a dict for O(1) lookup by date string
+                        prev_data_dict = {date_str: data for date_str, data in prev_daily_metrics.items()}
+                        current_dates = sorted(daily_metrics.keys())
+                        
+                        # Calculate the date offset between current and previous periods
+                        # Previous period ends the day before current period starts
+                        current_start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                        prev_end_dt = current_start_dt - timedelta(days=1)
+                        period_duration = (end_dt - start_dt).days + 1
+                        date_offset_days = period_duration  # Days to go back to find corresponding previous date
+                        
+                        logger.info(f"[GA4 DAILY DATA] Building ga4_daily_comparison with {len(current_dates)} current dates and {len(prev_data_dict)} previous period dates")
+                        logger.info(f"[GA4 DAILY DATA] Date offset: {date_offset_days} days (current date - {date_offset_days} days = previous period date)")
+                        
+                        for date_str in current_dates:
+                            current = daily_metrics[date_str]
+                            
+                            # Calculate the corresponding previous period date for this current date
+                            current_date_dt = datetime.strptime(date_str, "%Y-%m-%d")
+                            prev_date_dt = current_date_dt - timedelta(days=date_offset_days)
+                            prev_date_str = prev_date_dt.strftime("%Y-%m-%d")
+                            
+                            # Look up the previous period data for this specific date
+                            previous = prev_data_dict.get(prev_date_str, {})
+                            
+                            comparison_entry = {
+                                "date": current["date"],  # Already in YYYYMMDD format
+                                "current_users": current["users"],
+                                "previous_users": previous.get("users", 0),
+                                "current_sessions": current["sessions"],
+                                "previous_sessions": previous.get("sessions", 0),
+                                "current_new_users": current["new_users"],
+                                "previous_new_users": previous.get("new_users", 0),
+                                "current_conversions": current["conversions"],
+                                "previous_conversions": previous.get("conversions", 0),
+                                "current_revenue": current["revenue"],
+                                "previous_revenue": previous.get("revenue", 0)
+                            }
+                            ga4_daily_comparison.append(comparison_entry)
+                            
+                            # Log first few entries and any entries with data for debugging
+                            if len(ga4_daily_comparison) <= 3 or current["users"] > 0 or current["sessions"] > 0:
+                                logger.debug(f"[GA4 DAILY DATA] Comparison entry for {date_str} ({current['date']}): current_users={current['users']}, current_new_users={current.get('new_users', 0)}, previous_date={prev_date_str}, previous_users={previous.get('users', 0)}, previous_new_users={previous.get('new_users', 0)}")
+                        
+                        chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                        logger.info(f"[GA4 DAILY DATA] Created ga4_daily_comparison with {len(ga4_daily_comparison)} entries")
+                        
+                        # Log summary of comparison data
+                        entries_with_data = [e for e in ga4_daily_comparison if e.get("current_users", 0) > 0 or e.get("current_sessions", 0) > 0]
+                        total_chart_users = sum(e.get("current_users", 0) for e in ga4_daily_comparison)
+                        total_chart_sessions = sum(e.get("current_sessions", 0) for e in ga4_daily_comparison)
+                        total_chart_new_users = sum(e.get("current_new_users", 0) for e in ga4_daily_comparison)
+                        logger.info(f"[GA4 DAILY DATA] {len(entries_with_data)}/{len(ga4_daily_comparison)} comparison entries have non-zero data")
+                        logger.info(f"[GA4 DAILY DATA] Total users in chart: {total_chart_users}, Total sessions: {total_chart_sessions}, Total new users: {total_chart_new_users}")
+                        
+                        # Keep backward compatibility - users_over_time (all days in range)
+                        users_over_time = []
+                        for date_str in sorted(daily_metrics.keys()):
+                            users_over_time.append({
+                                "date": daily_metrics[date_str]["date"],  # Already in YYYYMMDD format
+                                "users": daily_metrics[date_str]["users"]
+                            })
+                        chart_data["users_over_time"] = users_over_time
+                        logger.info(f"[GA4 DAILY DATA] Created users_over_time with {len(users_over_time)} entries")
+                        
+                        # Log summary of users_over_time
+                        users_with_data = [e for e in users_over_time if e.get("users", 0) > 0]
+                        total_users_over_time = sum(e.get("users", 0) for e in users_over_time)
+                        logger.info(f"[GA4 DAILY DATA] {len(users_with_data)}/{len(users_over_time)} users_over_time entries have non-zero users. Total: {total_users_over_time}")
+                    else:
+                        # Even if no data found, generate chart data with zeros for all dates in range
+                        # This ensures charts show up even when no data is synced yet
+                        ga4_daily_comparison = []
+                        users_over_time = []
+                        current_date = start_dt
+                        while current_date <= end_dt:
+                            date_str = current_date.strftime("%Y-%m-%d")
+                            date_formatted = current_date.strftime("%Y%m%d")
+                            ga4_daily_comparison.append({
+                                "date": date_formatted,
+                                "current_users": 0,
+                                "previous_users": 0,
+                                "current_sessions": 0,
+                                "previous_sessions": 0,
+                                "current_new_users": 0,
+                                "previous_new_users": 0,
+                                "current_conversions": 0,
+                                "previous_conversions": 0,
+                                "current_revenue": 0,
+                                "previous_revenue": 0
+                            })
+                            users_over_time.append({
+                                "date": date_formatted,
+                                "users": 0
+                            })
+                            current_date += timedelta(days=1)
+                        chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                        chart_data["users_over_time"] = users_over_time
+                except Exception as e:
+                    logger.warning(f"[GA4 STORED DATA] Could not fetch daily metrics from stored data: {str(e)}")
+                    # Generate empty chart data with zeros for all dates even on error
+                    ga4_daily_comparison = []
+                    users_over_time = []
+                    try:
+                        current_date = start_dt
+                        while current_date <= end_dt:
+                            date_formatted = current_date.strftime("%Y%m%d")
+                            ga4_daily_comparison.append({
+                                "date": date_formatted,
+                                "current_users": 0,
+                                "previous_users": 0,
+                                "current_sessions": 0,
+                                "previous_sessions": 0,
+                                "current_new_users": 0,
+                                "previous_new_users": 0,
+                                "current_conversions": 0,
+                                "previous_conversions": 0,
+                                "current_revenue": 0,
+                                "previous_revenue": 0
+                            })
+                            users_over_time.append({
+                                "date": date_formatted,
+                                "users": 0
+                            })
+                            current_date += timedelta(days=1)
+                    except:
+                        pass
+                    chart_data["ga4_daily_comparison"] = ga4_daily_comparison
+                    chart_data["users_over_time"] = users_over_time
+            except Exception as e:
+                logger.warning(f"Error fetching GA4 chart data: {str(e)}")
+        
+        # For chart data, reuse campaign_links derived above (client campaigns if client_id; brand links otherwise)
+        if campaign_links:
+            try:
+                campaign_ids = [link["campaign_id"] for link in campaign_links]
+                
+                # Get campaign data using SQLAlchemy Core
+                campaigns_table = supabase._get_table("agency_analytics_campaigns")
+                campaigns_query = select(campaigns_table).where(
+                    campaigns_table.c.id.in_(campaign_ids)
+                )
+                campaigns_result = db.execute(campaigns_query)
+                campaigns = [dict(row._mapping) for row in campaigns_result]
+                
+                # NOTE: impressions_vs_clicks and top_campaigns charts are NOT populated
+                # as they require estimated impressions/clicks calculations.
+                # Only 100% accurate source data is used for charts.
+                chart_data["impressions_vs_clicks"] = []  # Empty - requires estimations
+                chart_data["top_campaigns"] = []  # Empty - requires estimations
+                
+                # Calculate keyword rankings performance metrics and collect all keywords
+                rankings_table = supabase._get_table("agency_analytics_keyword_rankings")
+                keywords_table = supabase._get_table("agency_analytics_keywords")
+
+                chart_all_keywords_rankings = []
+                chart_total_rankings = 0
+                chart_total_search_volume = 0
+
+                # Aggregate avg ranking and avg volume per keyword across campaigns in date range
+                ranking_conditions = [
+                    rankings_table.c.date >= start_date,
+                    rankings_table.c.date <= end_date
+                ]
+                # Only consider rows with valid google_ranking > 0 to avoid zeros/nulls skewing averages
+                ranking_conditions.append(rankings_table.c.google_ranking != None)
+                ranking_conditions.append(rankings_table.c.google_ranking > 0)
+                # Include zero-volume keywords in agency analytics report chart
+                if campaign_ids:
+                    ranking_conditions.append(rankings_table.c.campaign_id.in_(campaign_ids))
+
+                rankings_agg_query = (
+                    select(
+                        rankings_table.c.keyword_id.label("keyword_id"),
+                        func.avg(rankings_table.c.google_ranking).label("avg_ranking"),
+                        func.avg(rankings_table.c.volume).label("avg_volume"),
+                        func.count(rankings_table.c.id).label("row_count")
+                    )
+                    .where(and_(*ranking_conditions))
+                    .group_by(rankings_table.c.keyword_id)
+                )
+                rankings_agg = [dict(row._mapping) for row in db.execute(rankings_agg_query)]
+
+                keyword_ids = [r["keyword_id"] for r in rankings_agg if r.get("keyword_id")]
+                keyword_phrase_map = {}
+                if keyword_ids:
+                    keywords_query = select(
+                        keywords_table.c.id,
+                        keywords_table.c.keyword_phrase
+                    ).where(keywords_table.c.id.in_(keyword_ids))
+                    for row in db.execute(keywords_query):
+                        keyword_phrase_map[row.id] = row.keyword_phrase
+
+                for row in rankings_agg:
+                    avg_rank = row.get("avg_ranking")
+                    if avg_rank is None or avg_rank <= 0:
+                        continue
+                    keyword_id = row.get("keyword_id")
+                    phrase = keyword_phrase_map.get(keyword_id) or f"Keyword {keyword_id}"
+                    avg_volume = row.get("avg_volume") or 0
+                    chart_total_rankings += row.get("row_count", 0)
+                    chart_total_search_volume += avg_volume or 0
+                    chart_all_keywords_rankings.append({
+                        "keyword": phrase,
+                        "average_ranking": int(round(float(avg_rank))) if avg_rank is not None else 0,
+                        "average_search_volume": float(avg_volume) if avg_volume is not None else 0,
+                        "keyword_id": keyword_id,
+                    })
+
+                # Sort by average ranking (best first) and keep top 10
+                chart_all_keywords_rankings.sort(key=lambda x: x["average_ranking"] if x["average_ranking"] is not None else 999)
+                chart_data["all_keywords_ranking"] = chart_all_keywords_rankings[:10]
+                chart_data["keyword_rankings_performance"] = {
+                    "google_rankings": chart_total_rankings,
+                    "google_rankings_change": 0,  # Would need historical comparison in chart section
+                    "volume": chart_total_search_volume,
+                    "volume_change": 0  # Would need historical comparison in chart section
+                }
+                    
+            except Exception as e:
+                logger.warning(f"Error fetching Agency Analytics chart data: {str(e)}")
+        
+        # Scrunch processing removed - handled by separate endpoint
+        # section_times["scrunch"] removed - no longer needed
+        total_time = time.time() - total_start
+        section_times["total"] = total_time
+        
+        # Log performance breakdown
+        logger.info(f"[PERFORMANCE] Dashboard endpoint for brand {brand_id} took {total_time:.2f}s total:")
+        for section, duration in sorted(section_times.items(), key=lambda x: x[1], reverse=True):
+            if duration > 0.05:  # Log sections taking more than 50ms (lowered threshold to see sub-timings)
+                percentage = (duration / total_time * 100) if total_time > 0 else 0
+                logger.info(f"[PERFORMANCE]   - {section}: {duration:.2f}s ({percentage:.1f}%)")
+        
+        # Determine brand_name and ga4_configured based on client or brand
+        if client:
+            brand_name = client.get("company_name") or client.get("name")
+            ga4_configured = bool(client.get("ga4_property_id"))
+        elif brand:
+            brand_name = brand.get("name")
+            ga4_configured = bool(brand.get("ga4_property_id"))
+        else:
+            brand_name = None
+            ga4_configured = False
+        
+        # Determine the actual brand_id to return in response
+        # When client_id is provided, use scrunch_brand_id from client, otherwise use path parameter brand_id
+        actual_brand_id = scrunch_brand_id if client_id and scrunch_brand_id else brand_id
+        
+        response_payload = {
+            "brand_id": actual_brand_id,
+            "client_id": client_id if client_id else None,
+            "brand_name": brand_name,
+            "client_name": client.get("company_name") if client else None,
+            "date_range": {
+                "start_date": start_date,
+                "end_date": end_date
+            },
+            "kpis": kpis,
+            "chart_data": chart_data,
+            "available_sources": {
+                "ga4": bool(ga4_kpis),
+                "agency_analytics": bool(agency_kpis),
+                "scrunch": bool(scrunch_kpis)
+            },
+            "diagnostics": {
+                "ga4_configured": ga4_configured,
+                "agency_analytics_configured": bool(campaign_links),
+                "ga4_errors": ga4_errors,
+                "agency_errors": agency_errors,
+                "kpi_counts": {
+                    "ga4": len(ga4_kpis),
+                    "agency_analytics": len(agency_kpis),
+                    "scrunch": len(scrunch_kpis),
+                    "total": len(kpis)
+                }
+            }
+        }
+        # If nothing matched the requested date range, return graceful empty payload
+        has_kpis = kpis and len(kpis) > 0
+        has_chart_data = chart_data and any(
+            chart_data.get(key) and (
+                isinstance(chart_data[key], list) and len(chart_data[key]) > 0 or
+                isinstance(chart_data[key], dict) and len(chart_data[key]) > 0
+            )
+            for key in chart_data.keys()
+        )
+        if not has_kpis and not has_chart_data:
+            response_payload["no_data"] = True
+            response_payload["message"] = "No data available for the selected date range."
+        return response_payload
+        
+    except Exception as e:
+        logger.error(f"Error fetching reporting dashboard: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@router.get("/data/reporting-dashboard/client/{client_id}")
+async def get_reporting_dashboard_by_client(
+    client_id: int,
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
+    # Global filters can be passed as JSON string via query param from frontend
+    global_filters: Optional[str] = Query(
+        None,
+        description="Global filters JSON (user_type, traffic_channels, traffic_sources, countries, regions, cities, page_urls, conversion_types, conversion_by)",
+    ),
+    db: Session = Depends(get_db),
+):
+    """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard by client ID (client-centric)
+    
+    Uses the client's scrunch_brand_id to fetch the data.
+    """
+    try:
+        supabase = SupabaseService(db=db)
+        brand_id = None
+        
+        # Get client from database using SQLAlchemy
+        client = supabase.get_client_by_id(client_id)
+        
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # CLIENT-CENTRIC: Pass client_id directly to the main endpoint
+        # The main endpoint will use client_id for all queries
+        # scrunch_brand_id is only used for Scrunch queries (responses/prompts tables)
+        scrunch_brand_id = client.get("scrunch_brand_id")
+        if not scrunch_brand_id:
+            logger.warning(f"Client {client_id} has no scrunch_brand_id configured. Scrunch data will not be available.")
+        
+        # Use scrunch_brand_id as brand_id parameter for backward compatibility
+        # But the main endpoint will use client_id for all actual data queries
+        brand_id = scrunch_brand_id if scrunch_brand_id else 0  # Use 0 as fallback if no scrunch_brand_id
+        
+        logger.info(f"Found client {client_id}, using client-centric approach. scrunch_brand_id={scrunch_brand_id}")
+        
+        # Map alias params and call the main reporting dashboard endpoint with client_id
+        # The main endpoint will use client_id for all data queries
+        # Pass client_id so GA4 queries can use it
+        start_date = start_date or from_date
+        end_date = end_date or to_date
+
+        parsed_filters: Optional[Dict[str, List[str]]] = None
+        if global_filters:
+            import json
+
+            try:
+                # Handle both string and Query object types
+                # FastAPI Query params can sometimes be passed as Query objects
+                filters_str = str(global_filters) if not isinstance(global_filters, str) else global_filters
+                # If it's a Query object string representation, extract the actual value
+                if filters_str.startswith("annotation="):
+                    # This is a Query object, not a JSON string - skip parsing
+                    logger.warning(
+                        f"global_filters received as Query object for client {client_id}, "
+                        f"this usually means the frontend didn't send it correctly. "
+                        f"Treating as no filters."
+                    )
+                    parsed_filters = None
+                else:
+                    parsed_filters = json.loads(filters_str)
+                    logger.info(
+                        f"[GA4 FILTER] Successfully parsed global_filters for client {client_id}: {parsed_filters}"
+                    )
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    f"Failed to parse global_filters JSON for client {client_id}: {str(e)}; "
+                    f"value type={type(global_filters)}, value={global_filters}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Unexpected error parsing global_filters for client {client_id}: {str(e)}; "
+                    f"value type={type(global_filters)}, value={global_filters}"
+                )
+
+        return await get_reporting_dashboard(
+            brand_id,
+            start_date,
+            end_date,
+            client_id=client_id,
+            db=db,
+            global_filters=parsed_filters,
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error fetching reporting dashboard for client {client_id}: {str(e)}\n{error_trace}")
+        raise HTTPException(status_code=500, detail=f"Error fetching reporting dashboard: {str(e)}")
+
+
+@router.get("/data/reporting-dashboard/slug/{slug}")
+async def get_reporting_dashboard_by_slug(
+    slug: str,
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
+    db: Session = Depends(get_db)
+):
+    """Get consolidated KPIs from GA4, Agency Analytics, and Scrunch for reporting dashboard by slug (public access)
+    
+    Supports both client url_slug and brand slug:
+    - First tries to find a client by url_slug, then uses scrunch_brand_id
+    - Falls back to finding a brand by slug if no client found
+    """
+    try:
+        supabase = SupabaseService(db=db)
+        brand_id = None
+        client_id_for_dashboard = None
+        dashboard_link = supabase.get_dashboard_link_by_slug(slug)
+        client = None
+
+        # Respect explicit query params first, then dashboard link stored range
+        start_date = start_date or from_date
+        end_date = end_date or to_date
+
+        if dashboard_link:
+            if not dashboard_link.get("enabled", False):
+                raise HTTPException(status_code=403, detail="Dashboard link is disabled")
+            expires_at = dashboard_link.get("expires_at")
+            if expires_at:
+                # Handle timezone-aware comparison
+                now = datetime.now(timezone.utc)
+                # If expires_at is a string, parse it; if it's datetime, ensure it's timezone-aware
+                if isinstance(expires_at, str):
+                    expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                elif isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                    # If naive, assume UTC
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                # Now both are timezone-aware, compare
+                if now > expires_at:
+                    supabase.disable_dashboard_link(dashboard_link["id"])
+                    raise HTTPException(status_code=410, detail="Dashboard link has expired")
+
+            client = supabase.get_client_by_id(dashboard_link["client_id"])
+            if not client:
+                raise HTTPException(status_code=404, detail="Client not found for dashboard link")
+
+            client_id_for_dashboard = client.get("id")
+            if not start_date:
+                start_date = dashboard_link["start_date"].isoformat()
+            if not end_date:
+                end_date = dashboard_link["end_date"].isoformat()
+            logger.info(f"Found dashboard link for slug '{slug}', client_id={client_id_for_dashboard}, date range {start_date} to {end_date}")
+            
+            # Load global_filters from dashboard link's kpi_selection if available
+            link_global_filters = None
+            if dashboard_link.get("kpi_selection") and dashboard_link["kpi_selection"].get("global_filters"):
+                link_global_filters = dashboard_link["kpi_selection"]["global_filters"]
+                logger.info(f"Loaded global_filters from dashboard link '{slug}': {link_global_filters}")
+
+            if client.get("scrunch_brand_id"):
+                brand_id = client["scrunch_brand_id"]
+            else:
+                try:
+                    # Pass link_global_filters to get_reporting_dashboard_by_client if available
+                    result = await get_reporting_dashboard_by_client(
+                        client_id_for_dashboard, 
+                        start_date, 
+                        end_date, 
+                        global_filters=json.dumps(link_global_filters) if link_global_filters else None,
+                        db=db
+                    )
+                    result["brand_slug"] = slug
+                    result["dashboard_link"] = dashboard_link
+                    kpis = result.get("kpis", {})
+                    chart_data = result.get("chart_data", {})
+                    has_kpis = kpis and len(kpis) > 0
+                    has_chart_data = chart_data and any(
+                        chart_data.get(key) and (
+                            isinstance(chart_data[key], list) and len(chart_data[key]) > 0 or
+                            isinstance(chart_data[key], dict) and len(chart_data[key]) > 0
+                        )
+                        for key in chart_data.keys()
+                    )
+                    if not has_kpis and not has_chart_data:
+                        result["no_data"] = True
+                        result["diagnostics"] = result.get("diagnostics", {})
+                        result["diagnostics"]["message"] = "No data available. Please configure scrunch_brand_id for Scrunch data or ensure Agency Analytics/GA4 is configured."
+                    return result
+                except Exception as e:
+                    logger.error(f"Error fetching dashboard data for client_id={client_id_for_dashboard}: {str(e)}")
+                    return {
+                        "brand_id": None,
+                        "brand_name": client.get("company_name", "Unknown"),
+                        "brand_slug": slug,
+                        "client_id": client_id_for_dashboard,
+                        "kpis": {},
+                        "chart_data": {},
+                        "diagnostics": {
+                            "ga4_configured": bool(client.get("ga4_property_id")),
+                            "scrunch_configured": False,
+                            "agency_analytics_configured": False,
+                            "message": "Error loading data. Please check configuration."
+                        },
+                        "no_data": True
+                    }
+
+        # First, try to find a client by url_slug (for /reporting/client/:slug routes)
+        if client is None:
+            client = supabase.get_client_by_slug(slug)
+        if client:
+            # If client found, use the scrunch_brand_id from the client
+            if client.get("scrunch_brand_id"):
+                brand_id = client["scrunch_brand_id"]
+                client_id_for_dashboard = client.get("id")  # Pass client_id to dashboard
+                logger.info(f"Found client by url_slug '{slug}', using scrunch_brand_id: {brand_id}, client_id: {client_id_for_dashboard}")
+            else:
+                # Client found but no scrunch_brand_id - still check for Agency Analytics/GA4 data
+                client_id_for_dashboard = client.get("id")
+                logger.info(f"Client found but no brand mapping configured (scrunch_brand_id is null), checking for Agency Analytics/GA4 data for client_id={client_id_for_dashboard}")
+                # Call get_reporting_dashboard_by_client to check for Agency Analytics/GA4 data
+                # Use a dummy brand_id (0) since get_reporting_dashboard requires it, but client_id will be used
+                try:
+                    result = await get_reporting_dashboard_by_client(client_id_for_dashboard, start_date, end_date, db=db)
+                    result["brand_slug"] = slug
+                    # Only set no_data if truly no data exists (no KPIs and no chart data)
+                    kpis = result.get("kpis", {})
+                    chart_data = result.get("chart_data", {})
+                    has_kpis = kpis and len(kpis) > 0
+                    has_chart_data = chart_data and any(
+                        chart_data.get(key) and (
+                            isinstance(chart_data[key], list) and len(chart_data[key]) > 0 or
+                            isinstance(chart_data[key], dict) and len(chart_data[key]) > 0
+                        )
+                        for key in chart_data.keys()
+                    )
+                    if not has_kpis and not has_chart_data:
+                        result["no_data"] = True
+                        result["diagnostics"] = result.get("diagnostics", {})
+                        result["diagnostics"]["message"] = "No data available. Please configure scrunch_brand_id for Scrunch data or ensure Agency Analytics/GA4 is configured."
+                    return result
+                except Exception as e:
+                    logger.error(f"Error fetching dashboard data for client_id={client_id_for_dashboard}: {str(e)}")
+                    # Return empty dashboard data as fallback
+                    return {
+                        "brand_id": None,
+                        "brand_name": client.get("company_name", "Unknown"),
+                        "brand_slug": slug,
+                        "client_id": client_id_for_dashboard,
+                        "kpis": {},
+                        "chart_data": {},
+                        "diagnostics": {
+                            "ga4_configured": bool(client.get("ga4_property_id")),
+                            "scrunch_configured": False,
+                            "agency_analytics_configured": False,
+                            "message": "Error loading data. Please check configuration."
+                        },
+                        "no_data": True
+                    }
+        else:
+            # Fall back to finding a brand by slug (for backward compatibility)
+            brand = supabase.get_brand_by_slug(slug)
+            
+            if not brand:
+                # Return empty dashboard data instead of 404 for public view (graceful degradation)
+                logger.warning(f"Neither client nor brand found for slug '{slug}', returning empty dashboard")
+                return {
+                    "brand_id": None,
+                    "brand_name": "Unknown",
+                    "brand_slug": slug,
+                    "client_id": None,
+                    "kpis": {},
+                    "chart_data": {},
+                    "diagnostics": {
+                        "ga4_configured": False,
+                        "scrunch_configured": False,
+                        "agency_analytics_configured": False,
+                        "message": "No data available for this slug."
+                    },
+                    "no_data": True
+                }
+            
+            brand_id = brand["id"]
+            logger.info(f"Found brand by slug '{slug}', using brand_id: {brand_id}")
+        
+        if not brand_id:
+            # Return empty dashboard data instead of 404 for public view (graceful degradation)
+            logger.warning(f"Brand ID not found for slug '{slug}', returning empty dashboard")
+            return {
+                "brand_id": None,
+                "brand_name": "Unknown",
+                "brand_slug": slug,
+                "client_id": None,
+                "kpis": {},
+                "chart_data": {},
+                "diagnostics": {
+                    "ga4_configured": False,
+                    "scrunch_configured": False,
+                    "agency_analytics_configured": False,
+                    "message": "No data available."
+                },
+                "no_data": True
+            }
+        
+        # Call the existing get_reporting_dashboard function directly instead of making HTTP request
+        # Use link_global_filters if available (from dashboard link), otherwise None
+        result = await get_reporting_dashboard(
+            brand_id, 
+            start_date, 
+            end_date, 
+            client_id=client_id_for_dashboard, 
+            db=db,
+            global_filters=link_global_filters
+        )
+        result["brand_slug"] = slug
+        if dashboard_link:
+            result["dashboard_link"] = dashboard_link
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error fetching reporting dashboard by slug '{slug}': {str(e)}\n{error_trace}")
+        raise HTTPException(status_code=500, detail=f"Error fetching reporting dashboard: {str(e)}")
+
+
+@router.get("/data/reporting-dashboard/slug/{slug}/scrunch")
+@handle_api_errors(context="fetching Scrunch dashboard data by slug")
+async def get_scrunch_dashboard_data_by_slug(
+    slug: str,
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    from_date: Optional[str] = Query(None, alias="from", description="Start date alias (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, alias="to", description="End date alias (YYYY-MM-DD)"),
+    db: Session = Depends(get_db)
+):
+    """Get Scrunch AI KPIs and chart data for reporting dashboard by slug (public access)
+    
+    Supports both client url_slug and brand slug:
+    - First tries to find a client by url_slug, then uses scrunch_brand_id
+    - Falls back to finding a brand by slug if no client found
+    """
+    try:
+        supabase = SupabaseService(db=db)
+        brand_id = None
+        dashboard_link = supabase.get_dashboard_link_by_slug(slug)
+        # Respect explicit query params first, then dashboard link stored range
+        start_date = start_date or from_date
+        end_date = end_date or to_date
+
+        if dashboard_link:
+            if not dashboard_link.get("enabled", False):
+                raise HTTPException(status_code=403, detail="Dashboard link is disabled")
+            expires_at = dashboard_link.get("expires_at")
+            if expires_at:
+                # Handle timezone-aware comparison
+                now = datetime.now(timezone.utc)
+                # If expires_at is a string, parse it; if it's datetime, ensure it's timezone-aware
+                if isinstance(expires_at, str):
+                    expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                elif isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                    # If naive, assume UTC
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                # Now both are timezone-aware, compare
+                if now > expires_at:
+                    supabase.disable_dashboard_link(dashboard_link["id"])
+                    raise HTTPException(status_code=410, detail="Dashboard link has expired")
+
+            client = supabase.get_client_by_id(dashboard_link["client_id"])
+            if not client:
+                raise HTTPException(status_code=404, detail="Client not found for dashboard link")
+
+            if not client.get("scrunch_brand_id"):
+                logger.warning(f"Dashboard link found but no Scrunch brand mapping configured for client_id={client.get('id')}, returning empty data")
+                return {
+                    "kpis": {},
+                    "chart_data": {},
+                    "no_data": True,
+                    "message": "No Scrunch brand mapping configured"
+                }
+
+            brand_id = client["scrunch_brand_id"]
+            if not start_date:
+                start_date = dashboard_link["start_date"].isoformat()
+            if not end_date:
+                end_date = dashboard_link["end_date"].isoformat()
+            logger.info(f"Found dashboard link for Scrunch slug '{slug}', using brand_id={brand_id} and date range {start_date} to {end_date}")
+        
+        # First, try to find a client by url_slug (for /reporting/client/:slug routes)
+        if not brand_id:
+            client = supabase.get_client_by_slug(slug)
+            if client:
+                # If client found, use the scrunch_brand_id from the client
+                if client.get("scrunch_brand_id"):
+                    brand_id = client["scrunch_brand_id"]
+                    logger.info(f"Found client by url_slug '{slug}', using scrunch_brand_id: {brand_id}")
+                else:
+                    # Return empty Scrunch data instead of 404 for public view (graceful degradation)
+                    logger.warning(f"Client found but no Scrunch brand mapping configured (scrunch_brand_id is null), returning empty data")
+                    return {
+                        "kpis": {},
+                        "chart_data": {},
+                        "no_data": True,
+                        "message": "No Scrunch brand mapping configured"
+                    }
+            else:
+                # Fall back to finding a brand by slug (for backward compatibility)
+                brand = supabase.get_brand_by_slug(slug)
+                
+                if not brand:
+                    # Return empty Scrunch data instead of 404 for public view (graceful degradation)
+                    logger.warning(f"Neither client nor brand found for slug '{slug}', returning empty Scrunch data")
+                    return {
+                        "kpis": {},
+                        "chart_data": {},
+                        "no_data": True,
+                        "message": "No data available for this slug."
+                    }
+                
+                brand_id = brand["id"]
+                logger.info(f"Found brand by slug '{slug}', using brand_id: {brand_id}")
+        
+        if not brand_id:
+            # Return empty Scrunch data instead of 404 for public view (graceful degradation)
+            logger.warning(f"Brand ID not found for slug '{slug}', returning empty Scrunch data")
+            return {
+                "kpis": {},
+                "chart_data": {},
+                "no_data": True,
+                "message": "No data available."
+            }
+        
+        # Get client_id if we found a client
+        client_id_for_scrunch = client.get("id") if client else None
+        
+        # Call the existing get_scrunch_dashboard_data function
+        result = await get_scrunch_dashboard_data(brand_id, start_date, end_date, client_id=client_id_for_scrunch, db=db)
+        result["brand_slug"] = slug
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Error fetching Scrunch dashboard data by slug '{slug}': {str(e)}\n{error_trace}")
+        raise HTTPException(status_code=500, detail=f"Error fetching Scrunch dashboard data: {str(e)}")
+
+
+@router.get("/data/reporting-dashboard/{brand_id}/scrunch")
+@handle_api_errors(context="fetching Scrunch dashboard data")
+async def get_scrunch_dashboard_data(
+    brand_id: int,
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    client_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get Scrunch AI KPIs and chart data for reporting dashboard (separate endpoint for parallel loading)
+    
+    Supports querying by brand_id or client_id. When client_id is provided, uses scrunch_brand_id from client.
+    """
+    try:
+        supabase = SupabaseService(db=db)
+        
+        # If client_id is provided, get the scrunch_brand_id from client
+        actual_brand_id = brand_id
+        if client_id:
+            client = supabase.get_client_by_id(client_id)
+            if client and client.get("scrunch_brand_id"):
+                actual_brand_id = client["scrunch_brand_id"]
+                logger.info(f"Using scrunch_brand_id {actual_brand_id} from client {client_id} for Scrunch queries")
+        
+        # Get brand info using SQLAlchemy (may not exist if using scrunch_brand_id)
+        brand = supabase.get_brand_by_id(actual_brand_id)
+        
+        # If brand doesn't exist in brands table but we have client_id, that's okay - we'll use scrunch_brand_id directly
+        if not brand and not client_id:
+            raise HTTPException(status_code=404, detail="Brand not found")
+        
+        # Set default date range
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        if not end_date:
+            end_date = datetime.now().strftime("%Y-%m-%d")
+        
+        # Validate date range
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+            
+            if start_dt > end_dt:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Invalid date range: start_date ({start_date}) must be before or equal to end_date ({end_date})"
+                )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date format. Use YYYY-MM-DD format. Error: {str(e)}"
+            )
+        
+        # Pre-compute timezone-aware bounds so all downstream queries consistently
+        # filter by the requested date range (inclusive)
+        start_ts = datetime.fromisoformat(f"{start_date}T00:00:00+00:00")
+        end_ts = datetime.fromisoformat(f"{end_date}T23:59:59+00:00")
+        
+        # Import the Scrunch calculation logic from the main endpoint
+        # This is a simplified version that only returns Scrunch data
+        scrunch_kpis = {}
+        scrunch_chart_data = {
+            "top_performing_prompts": [],
+            "scrunch_ai_insights": []
+        }
+        
+        try:
+            # Calculate previous period for change comparison
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+            period_duration = (end_dt - start_dt).days + 1
+            prev_end_ts = start_ts - timedelta(seconds=1)
+            prev_start_ts = prev_end_ts - timedelta(days=period_duration - 1)
+            prev_start = prev_start_ts.date().strftime("%Y-%m-%d")
+            prev_end = prev_end_ts.date().strftime("%Y-%m-%d")
+            
+            # Get responses for this brand filtered by date range (current period) using SQLAlchemy
+            from app.db.models import Response, Prompt
+            responses_query = select(
+                Response.id,
+                Response.brand_id,
+                Response.prompt_id,
+                Response.platform,
+                Response.brand_present,
+                Response.brand_sentiment,
+                Response.brand_position,  # Added for position calculation
+                Response.competitors_present,
+                Response.citations
+            ).where(
+                and_(
+                    Response.brand_id == actual_brand_id,
+                    Response.created_at >= start_ts,
+                    Response.created_at <= end_ts
+                )
+            )
+            responses_result = db.execute(responses_query)
+            responses = [dict(row._mapping) for row in responses_result]
+            
+            logger.info(f"Found {len(responses)} Scrunch responses for brand {actual_brand_id} in date range {start_date} to {end_date}")
+            
+            # Get responses for previous period using SQLAlchemy
+            prev_responses_query = select(
+                Response.id,
+                Response.brand_id,
+                Response.prompt_id,
+                Response.platform,
+                Response.brand_present,
+                Response.brand_sentiment,
+                Response.brand_position,  # Added for position calculation
+                Response.competitors_present,
+                Response.citations
+            ).where(
+                and_(
+                    Response.brand_id == actual_brand_id,
+                    Response.created_at >= prev_start_ts,
+                    Response.created_at <= prev_end_ts
+                )
+            )
+            prev_responses_result = db.execute(prev_responses_query)
+            prev_responses = [dict(row._mapping) for row in prev_responses_result]
+            
+            logger.info(f"Found {len(prev_responses)} Scrunch responses for brand {actual_brand_id} in previous period {prev_start} to {prev_end}")
+            
+            # Get prompts for this brand using SQLAlchemy
+            # CORRECT FIX: Show prompts that have responses in the date range
+            # This is the correct behavior - show prompts that were active/used in the selected period
+            # First, get prompt_ids from responses in the date range
+            prompt_ids_from_responses = set()
+            for response in responses:
+                prompt_id = response.get("prompt_id")
+                if prompt_id:
+                    prompt_ids_from_responses.add(prompt_id)
+            
+            logger.info(f"Found {len(prompt_ids_from_responses)} unique prompt_ids from {len(responses)} responses in date range")
+            
+            # Get prompts that either:
+            # 1. Were created in the date range, OR
+            # 2. Have responses in the date range (correct behavior - show active prompts)
+            if prompt_ids_from_responses:
+                prompts_query = select(
+                    Prompt.id,
+                    Prompt.text,
+                    Prompt.stage,
+                    Prompt.topics,
+                    Prompt.brand_id
+                ).where(
+                    and_(
+                        Prompt.brand_id == actual_brand_id,
+                        or_(
+                            and_(
+                                Prompt.created_at >= start_ts,
+                                Prompt.created_at <= end_ts
+                            ),
+                            Prompt.id.in_(list(prompt_ids_from_responses))
+                        )
+                    )
+                )
+            else:
+                # No responses, so only get prompts created in date range
+                prompts_query = select(
+                    Prompt.id,
+                    Prompt.text,
+                    Prompt.stage,
+                    Prompt.topics,
+                    Prompt.brand_id
+                ).where(
+                    and_(
+                        Prompt.brand_id == actual_brand_id,
+                        Prompt.created_at >= start_ts,
+                        Prompt.created_at <= end_ts
+                    )
+                )
+            prompts_result = db.execute(prompts_query)
+            prompts = [dict(row._mapping) for row in prompts_result]
+            
+            logger.info(f"Found {len(prompts)} prompts for brand {actual_brand_id} (created in range or have responses in range {start_date} to {end_date})")
+            
+            # Check if brand has any Scrunch data using SQLAlchemy
+            has_any_scrunch_data = len(responses) > 0 or len(prompts) > 0
+            
+            # Import the calculate_scrunch_metrics function logic
+            # (We'll use the same logic from the main endpoint)
+            # Note: responses_list should already be filtered by brand_id, but we validate for safety
+            def calculate_scrunch_metrics(responses_list, prompts_list=None, brand_id_filter=None):
+                if not responses_list:
+                    return {
+                        "total_citations": 0,
+                        "brand_present_count": 0,
+                        "brand_presence_rate": 0,
+                        "sentiment_score": 0,
+                        "prompt_search_volume": 0,
+                        "top10_prompt_percentage": 0,
+                        "brand_position_percentage": 0,
+                        "brand_position_distribution": {"top": 0, "middle": 0, "bottom": 0},
+                        "competitive_benchmarking": {
+                            "brand_visibility_percent": 0,
+                            "competitor_avg_visibility_percent": 0
+                        },
+                        "prompt_reach": {
+                            "total_prompts_tracked": 0,
+                            "prompts_with_brand": 0,
+                            "display": "Tracked prompts: 0; brand appeared in 0 of them"
+                        },
+                        "citations_by_prompt": {},
+                    }
+                
+                # Initialize all tracking variables
+                total_citations = 0  # Research analysis: Only count citations when brand is present
+                brand_present_count = 0
+                sentiment_scores = {"positive": 0, "neutral": 0, "negative": 0}
+                prompt_counts = {}
+                prompt_platform_map = {}
+                unique_prompts_tracked = set()
+                unique_prompts_with_brand = set()
+                competitor_visibility_count = {}
+                total_responses_with_competitors = 0
+                citations_by_prompt = {}
+                valid_responses_count = 0
+                brand_position_counts = {"top": 0, "middle": 0, "bottom": 0}  # Initialize brand position tracking
+                
+                # Single pass through responses - calculate everything at once
+                # Optimized: Pre-compile regex and use faster string operations
+                import json
+                import re
+                
+                # Pre-compile regex for faster sentiment matching
+                positive_pattern = re.compile(r'positive', re.IGNORECASE)
+                negative_pattern = re.compile(r'negative', re.IGNORECASE)
+                
+                # Cache for parsed JSON to avoid re-parsing
+                json_cache = {}
+                
+                for r in responses_list:
+                    # Filter by brand_id if provided (should already be filtered, but double-check)
+                    if brand_id_filter is not None:
+                        if r.get("brand_id") != brand_id_filter:
+                            continue
+                    valid_responses_count += 1
+                    
+                    prompt_id = r.get("prompt_id")
+                    brand_present = r.get("brand_present", False)
+                    
+                    # Track prompt counts and platforms (for top 10 calculation)
+                    if prompt_id:
+                        prompt_counts[prompt_id] = prompt_counts.get(prompt_id, 0) + 1
+                        unique_prompts_tracked.add(prompt_id)
+                        
+                        platform = r.get("platform")
+                        if platform:
+                            if prompt_id not in prompt_platform_map:
+                                prompt_platform_map[prompt_id] = set()
+                            prompt_platform_map[prompt_id].add(platform)
+                        
+                        if brand_present:
+                            unique_prompts_with_brand.add(prompt_id)
+                    
+                    # Track brand presence first (needed for research analysis)
+                    if brand_present:
+                        brand_present_count += 1
+                        
+                        # Research Analysis: Only count citations when brand is present
+                        # This matches Scrunch's methodology - research analysis analyzes where your brand appears
+                        citations = r.get("citations")
+                        citation_count = 0
+                        if citations:
+                            if isinstance(citations, list):
+                                citation_count = len(citations)
+                            elif isinstance(citations, str):
+                                # Check cache first
+                                if citations in json_cache:
+                                    citation_count = json_cache[citations]
+                                else:
+                                    try:
+                                        parsed = json.loads(citations)
+                                        if isinstance(parsed, list):
+                                            citation_count = len(parsed)
+                                            json_cache[citations] = citation_count  # Cache result
+                                    except:
+                                        pass
+                        
+                        total_citations += citation_count
+                        if prompt_id:
+                            citations_by_prompt[prompt_id] = citations_by_prompt.get(prompt_id, 0) + citation_count
+                    
+                    # Track competitors (optimized - use list comprehension for speed)
+                    competitors_present = r.get("competitors_present")
+                    if isinstance(competitors_present, list) and len(competitors_present) > 0:
+                        total_responses_with_competitors += 1
+                        # Use dict comprehension for faster updates
+                        for comp in competitors_present:
+                            if comp:
+                                competitor_visibility_count[comp] = competitor_visibility_count.get(comp, 0) + 1
+                    
+                    # Track sentiment (optimized - use pre-compiled regex)
+                    sentiment = r.get("brand_sentiment")
+                    if sentiment:
+                        if positive_pattern.search(sentiment):
+                            sentiment_scores["positive"] += 1
+                        elif negative_pattern.search(sentiment):
+                            sentiment_scores["negative"] += 1
+                        else:
+                            sentiment_scores["neutral"] += 1
+                    
+                    # Track brand position (only when brand is present)
+                    if brand_present:
+                        brand_position = r.get("brand_position")
+                        if brand_position:
+                            position_lower = str(brand_position).lower()
+                            if "top" in position_lower:
+                                brand_position_counts["top"] += 1
+                            elif "middle" in position_lower or "mid" in position_lower:
+                                brand_position_counts["middle"] += 1
+                            elif "bottom" in position_lower:
+                                brand_position_counts["bottom"] += 1
+                        # Debug: Log when brand_position is None
+                        elif valid_responses_count <= 5:  # Only log first few to avoid spam
+                            logger.debug(f"[DEBUG] Response {r.get('id')} has brand_present=True but brand_position is None or empty")
+                
+                # Calculate Top 10 Prompt Percentage (optimized - use sorted once)
+                sorted_prompts = sorted(prompt_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+                top10_count = sum(count for _, count in sorted_prompts)
+                top10_prompt_percentage = (top10_count / valid_responses_count * 100) if valid_responses_count > 0 else 0
+                
+                # Calculate metrics (100% from source data only)
+                brand_presence_rate = (brand_present_count / valid_responses_count * 100) if valid_responses_count > 0 else 0
+                
+                total_sentiment_responses = sum(sentiment_scores.values())
+                if total_sentiment_responses > 0:
+                    sentiment_score = (
+                        (sentiment_scores["positive"] * 1.0 + 
+                         sentiment_scores["neutral"] * 0.0 + 
+                         sentiment_scores["negative"] * -1.0) / total_sentiment_responses * 100
+                    )
+                else:
+                    sentiment_score = 0
+                
+                brand_visibility_percent = brand_presence_rate
+                competitor_avg_visibility_percent = 0
+                if total_responses_with_competitors > 0:
+                    unique_competitors = len(competitor_visibility_count)
+                    if unique_competitors > 0:
+                        total_competitor_appearances = sum(competitor_visibility_count.values())
+                        competitor_avg_visibility_percent = (total_competitor_appearances / total_responses_with_competitors) * 100
+                
+                # Calculate Prompt Reach Metric
+                prompt_reach = {
+                    "total_prompts_tracked": len(unique_prompts_tracked),
+                    "prompts_with_brand": len(unique_prompts_with_brand),
+                    "display": f"Tracked prompts: {len(unique_prompts_tracked)}; brand appeared in {len(unique_prompts_with_brand)} of them"
+                }
+                
+                # Calculate Brand Position Percentage (% of total responses where brand is in "top" position)
+                # This matches Scrunch's methodology: Position (% of total) = (Top position responses / Total responses) × 100
+                # "of total" means all responses, not just those with brand present
+                total_position_responses = sum(brand_position_counts.values())
+                brand_position_percentage = 0
+                if valid_responses_count > 0:
+                    # Calculate percentage of ALL responses where brand is in "top" position
+                    # This is the correct calculation: top responses / total responses × 100
+                    brand_position_percentage = (brand_position_counts["top"] / valid_responses_count * 100)
+                elif total_position_responses > 0:
+                    # Fallback: if we have position data but no valid responses count, use position responses as denominator
+                    brand_position_percentage = (brand_position_counts["top"] / total_position_responses * 100)
+                else:
+                    # If we have brand present but no position data, default to 0
+                    brand_position_percentage = 0
+                
+                # Debug logging for position calculation
+                logger.info(f"[DEBUG] Brand position calculation: top={brand_position_counts['top']}, middle={brand_position_counts['middle']}, bottom={brand_position_counts['bottom']}, total_responses={valid_responses_count}, total_position_responses={total_position_responses}, percentage={brand_position_percentage}")
+                
+                return {
+                    "total_citations": total_citations,
+                    "brand_present_count": brand_present_count,
+                    "brand_presence_rate": brand_presence_rate,
+                    "sentiment_score": sentiment_score,
+                    "prompt_search_volume": valid_responses_count,
+                    "top10_prompt_percentage": top10_prompt_percentage,
+                    "brand_position_percentage": brand_position_percentage,
+                    "brand_position_distribution": brand_position_counts,
+                    "competitive_benchmarking": {
+                        "brand_visibility_percent": brand_visibility_percent,
+                        "competitor_avg_visibility_percent": competitor_avg_visibility_percent
+                    },
+                    "prompt_reach": prompt_reach,
+                    "citations_by_prompt": citations_by_prompt,
+                }
+            
+            print(f"[CRITICAL START] has_any_scrunch_data: {has_any_scrunch_data}, responses: {len(responses)}, prompts: {len(prompts)}")
+            if has_any_scrunch_data:
+                # Calculate current period metrics (will be zero if no responses)
+                print(f"[CRITICAL] About to calculate current_metrics with {len(responses)} responses")
+                logger.info(f"[DEBUG] About to calculate current_metrics with {len(responses)} responses")
+                current_metrics = calculate_scrunch_metrics(responses, prompts, brand_id)
+                print(f"[CRITICAL] After calculate_scrunch_metrics, brand_position_percentage: {current_metrics.get('brand_position_percentage', 'NOT_FOUND')}")
+                logger.info(f"[DEBUG] current_metrics keys: {list(current_metrics.keys())}")
+                logger.info(f"[DEBUG] current_metrics.brand_position_percentage: {current_metrics.get('brand_position_percentage', 'NOT_FOUND')}")
+                logger.info(f"[DEBUG] current_metrics.brand_position_distribution: {current_metrics.get('brand_position_distribution', 'NOT_FOUND')}")
+                
+                # Calculate previous period metrics (will be zero if no responses)
+                prev_metrics = calculate_scrunch_metrics(prev_responses, prompts, brand_id)
+                logger.info(f"[DEBUG] prev_metrics.brand_position_percentage: {prev_metrics.get('brand_position_percentage', 'NOT_FOUND')}")
+                
+                # Extract citations_by_prompt from current_metrics (already calculated)
+                citations_by_prompt = current_metrics.get("citations_by_prompt", {})
+                
+                def calculate_change(current, previous):
+                    if current == 0 and previous == 0:
+                        return 0.0
+                    if previous == 0 and current > 0:
+                        return 100.0
+                    if current == 0 and previous > 0:
+                        return -100.0
+                    if previous > 0:
+                        return ((current - previous) / previous) * 100
+                    return 0.0
+                
+                total_citations_change = calculate_change(current_metrics["total_citations"], prev_metrics["total_citations"])
+                brand_presence_rate_change = calculate_change(current_metrics["brand_presence_rate"], prev_metrics["brand_presence_rate"])
+                sentiment_score_change = calculate_change(current_metrics["sentiment_score"], prev_metrics["sentiment_score"])
+                top10_prompt_change = calculate_change(current_metrics["top10_prompt_percentage"], prev_metrics["top10_prompt_percentage"])
+                prompt_search_volume_change = calculate_change(current_metrics["prompt_search_volume"], prev_metrics["prompt_search_volume"])
+                brand_position_percentage_change = calculate_change(
+                    current_metrics.get("brand_position_percentage", 0),
+                    prev_metrics.get("brand_position_percentage", 0)
+                )
+                
+                competitive_current = current_metrics.get("competitive_benchmarking", {})
+                competitive_prev = prev_metrics.get("competitive_benchmarking", {})
+                brand_visibility_change = calculate_change(
+                    competitive_current.get("brand_visibility_percent", 0),
+                    competitive_prev.get("brand_visibility_percent", 0)
+                )
+                competitor_avg_change = calculate_change(
+                    competitive_current.get("competitor_avg_visibility_percent", 0),
+                    competitive_prev.get("competitor_avg_visibility_percent", 0)
+                )
+                
+                # Debug: Log brand_position_percentage value
+                logger.info(f"[DEBUG] brand_position_percentage from current_metrics: {current_metrics.get('brand_position_percentage', 'NOT_FOUND')}")
+                logger.info(f"[DEBUG] brand_position_counts from current_metrics: {current_metrics.get('brand_position_distribution', 'NOT_FOUND')}")
+                
+                scrunch_kpis = {
+                    "total_citations": {
+                        "value": int(current_metrics["total_citations"]),
+                        "change": round(total_citations_change, 2),
+                        "source": "Scrunch",
+                        "label": "Total Citations",
+                        "icon": "Link",
+                        "format": "number"
+                    },
+                    "brand_presence_rate": {
+                        "value": round(current_metrics["brand_presence_rate"], 1),
+                        "change": round(brand_presence_rate_change, 2),
+                        "source": "Scrunch",
+                        "label": "Brand Presence Rate",
+                        "icon": "CheckCircle",
+                        "format": "percentage"
+                    },
+                    "brand_sentiment_score": {
+                        "value": round(current_metrics["sentiment_score"], 1),
+                        "change": round(sentiment_score_change, 2),
+                        "source": "Scrunch",
+                        "label": "Brand Sentiment Score",
+                        "icon": "SentimentSatisfied",
+                        "format": "number"
+                    },
+                    "top10_prompt_percentage": {
+                        "value": round(current_metrics["top10_prompt_percentage"], 1),
+                        "change": round(top10_prompt_change, 2),
+                        "source": "Scrunch",
+                        "label": "Top 10 Prompt",
+                        "icon": "Article",
+                        "format": "percentage"
+                    },
+                    "prompt_search_volume": {
+                        "value": int(current_metrics["prompt_search_volume"]),
+                        "change": round(prompt_search_volume_change, 2),
+                        "source": "Scrunch",
+                        "label": "Prompt Search Volume",
+                        "icon": "TrendingUp",
+                        "format": "number"
+                    },
+                    "brand_position_percentage": {
+                        "value": round(current_metrics.get("brand_position_percentage", 0), 1),
+                        "change": round(brand_position_percentage_change, 2),
+                        "source": "Scrunch",
+                        "label": "Position (% of total)",
+                        "icon": "TrendingUp",
+                        "format": "percentage"
+                    },
+                    "competitive_benchmarking": {
+                        "value": {
+                            "brand_visibility_percent": round(competitive_current.get("brand_visibility_percent", 0), 1),
+                            "competitor_avg_visibility_percent": round(competitive_current.get("competitor_avg_visibility_percent", 0), 1)
+                        },
+                        "change": {
+                            "brand_visibility": round(brand_visibility_change, 2),
+                            "competitor_avg_visibility": round(competitor_avg_change, 2)
+                        },
+                        "source": "Scrunch",
+                        "label": "Competitive Benchmarking",
+                        "icon": "BarChart",
+                        "format": "custom"
+                    },
+                    "prompt_reach": {
+                        "value": current_metrics.get("prompt_reach", {}),
+                        "change": None,  # Not calculating change for this metric
+                        "source": "Scrunch",
+                        "label": "Prompt Reach",
+                        "icon": "Article",
+                        "format": "custom"
+                    }
+                }
+                
+                # CRITICAL: Print immediately after scrunch_kpis assignment
+                print(f"[CRITICAL] scrunch_kpis assigned with {len(scrunch_kpis)} items")
+                print(f"[CRITICAL] Keys: {list(scrunch_kpis.keys())}")
+                print(f"[CRITICAL] brand_position_percentage in dict: {'brand_position_percentage' in scrunch_kpis}")
+                
+                # Debug: Log after adding to scrunch_kpis - USE PRINT FOR IMMEDIATE VISIBILITY
+                print(f"[CRITICAL DEBUG] scrunch_kpis keys: {list(scrunch_kpis.keys())}")
+                print(f"[CRITICAL DEBUG] brand_position_percentage in scrunch_kpis: {'brand_position_percentage' in scrunch_kpis}")
+                if 'brand_position_percentage' in scrunch_kpis:
+                    print(f"[CRITICAL DEBUG] brand_position_percentage value: {scrunch_kpis['brand_position_percentage']}")
+                else:
+                    print(f"[CRITICAL DEBUG] ERROR: brand_position_percentage NOT in scrunch_kpis!")
+                    print(f"[CRITICAL DEBUG] scrunch_kpis: {scrunch_kpis}")
+                logger.info(f"[DEBUG] scrunch_kpis keys after adding brand_position_percentage: {list(scrunch_kpis.keys())}")
+                logger.info(f"[DEBUG] brand_position_percentage in scrunch_kpis: {'brand_position_percentage' in scrunch_kpis}")
+                
+                # Get top performing prompts (optimized - use data already calculated in metrics)
+                top_prompts_start = time.time()
+                # Build prompt lookup map for quick access
+                prompt_map = {p.get("id"): p for p in prompts if p.get("brand_id") == brand_id and p.get("id")}
+                
+                # Extract prompt counts and platform variants from responses (single pass)
+                prompt_response_counts = {}
+                prompt_variants = {}
+                total_responses_for_brand = len([r for r in responses if r.get("brand_id") == brand_id])
+                
+                for r in responses:
+                    if r.get("brand_id") != brand_id:
+                        continue
+                    prompt_id = r.get("prompt_id")
+                    if prompt_id and prompt_id in prompt_map:
+                        prompt_response_counts[prompt_id] = prompt_response_counts.get(prompt_id, 0) + 1
+                        platform = r.get("platform")
+                        if platform:
+                            if prompt_id not in prompt_variants:
+                                prompt_variants[prompt_id] = set()
+                            prompt_variants[prompt_id].add(platform)
+                
+                # Sort and build top performing prompts
+                top_prompts = sorted(prompt_response_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+                top_performing_prompts = []
+                for idx, (prompt_id, count) in enumerate(top_prompts, 1):
+                    prompt = prompt_map.get(prompt_id)
+                    if prompt:
+                        unique_variants = len(prompt_variants.get(prompt_id, set()))
+                        variants_count = unique_variants if unique_variants > 0 else 1
+                        
+                        top_performing_prompts.append({
+                            "id": prompt_id,
+                            "text": prompt.get("text", "N/A"),
+                            "rank": idx,
+                            "responseCount": count,
+                            "variants": variants_count,
+                            "citations": citations_by_prompt.get(prompt_id, 0),
+                            "totalResponsesForBrand": total_responses_for_brand
+                        })
+                
+                scrunch_chart_data["top_performing_prompts"] = top_performing_prompts
+                
+                # Calculate Scrunch AI Insights (optimized - single pass through responses)
+                insights_start = time.time()
+                if prompts and responses:
+                    # Build prompt lookup map
+                    prompt_map_insights = {p.get("id"): p for p in prompts if p.get("brand_id") == brand_id and p.get("id")}
+                    
+                    # Single pass through responses to build insights data
+                    prompt_insights_data = {}
+                    import json
+                    for r in responses:
+                        if r.get("brand_id") != brand_id:
+                            continue
+                        prompt_id = r.get("prompt_id")
+                        if not prompt_id or prompt_id not in prompt_map_insights:
+                            continue
+                        
+                        if prompt_id not in prompt_insights_data:
+                            prompt_insights_data[prompt_id] = {
+                                "response_count": 0,
+                                "presence_count": 0,
+                                "variants": set(),
+                                "citations": 0,
+                                "competitors": set()
+                            }
+                        
+                        data = prompt_insights_data[prompt_id]
+                        data["response_count"] += 1
+                        if r.get("brand_present"):
+                            data["presence_count"] += 1
+                        
+                        platform = r.get("platform")
+                        if platform:
+                            data["variants"].add(platform)
+                        
+                        # Count citations (reuse JSON parsing logic)
+                        citations = r.get("citations")
+                        if citations:
+                            if isinstance(citations, list):
+                                data["citations"] += len(citations)
+                            elif isinstance(citations, str):
+                                try:
+                                    parsed = json.loads(citations)
+                                    if isinstance(parsed, list):
+                                        data["citations"] += len(parsed)
+                                except:
+                                    pass
+                        
+                        # Track competitors
+                        competitors_present = r.get("competitors_present", [])
+                        if isinstance(competitors_present, list):
+                            for comp in competitors_present:
+                                if comp:
+                                    data["competitors"].add(comp)
+                    
+                    # Build insights list
+                    insights = []
+                    for prompt_id, data in prompt_insights_data.items():
+                        if data["response_count"] > 0:
+                            prompt = prompt_map_insights[prompt_id]
+                            presence = (data["presence_count"] / data["response_count"] * 100) if data["response_count"] > 0 else 0
+                            
+                            # Get category
+                            category = (
+                                prompt.get("topics", [None])[0] if prompt.get("topics") else None
+                            ) or (
+                                (prompt.get("text") or prompt.get("prompt_text") or "").split(" ")[:3]
+                            ) or prompt.get("stage") or "General"
+                            
+                            if isinstance(category, list):
+                                category = " ".join(category)
+                            
+                            insights.append({
+                                "id": prompt_id,
+                                "seedPrompt": prompt.get("text") or prompt.get("prompt_text") or "N/A",
+                                "stage": prompt.get("stage") or "Unknown",
+                                "variants": len(data["variants"]) or 1,
+                                "responses": data["response_count"],
+                                "presence": round(presence, 1),
+                                "presenceChange": 0,
+                                "citations": data["citations"],
+                                "citationsChange": 0,
+                                "competitors": len(data["competitors"]),
+                                "competitorsChange": 0,
+                                "category": category
+                            })
+                    
+                    # Sort and limit
+                    insights.sort(key=lambda x: x["responses"], reverse=True)
+                    scrunch_chart_data["scrunch_ai_insights"] = insights[:20]
+                
+        except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            logger.error(f"Error fetching Scrunch AI KPIs for brand {brand_id}: {str(e)}\n{error_trace}")
+            # Debug: Log what scrunch_kpis contains when exception occurs
+            logger.error(f"[DEBUG] scrunch_kpis at exception time: {scrunch_kpis}")
+            logger.error(f"[DEBUG] scrunch_kpis keys: {list(scrunch_kpis.keys()) if scrunch_kpis else 'None'}")
+        
+        # Final debug: Log what's being returned
+        logger.info(f"[DEBUG] FINAL: Returning scrunch_kpis with {len(scrunch_kpis)} KPIs")
+        logger.info(f"[DEBUG] FINAL: scrunch_kpis keys: {list(scrunch_kpis.keys())}")
+        logger.info(f"[DEBUG] FINAL: brand_position_percentage in return: {'brand_position_percentage' in scrunch_kpis}")
+        
+        return {
+            "brand_id": brand_id,
+            "kpis": scrunch_kpis,
+            "chart_data": scrunch_chart_data,
+            "prompts": prompts,  # Include prompts in response
+            "available": bool(scrunch_kpis)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching Scrunch dashboard data: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/data/reporting-dashboard/{brand_id}/kpi-selections")
+@handle_api_errors(context="fetching KPI selections")
+async def get_brand_kpi_selections(brand_id: int, db: Session = Depends(get_db)):
+    """Get saved KPI selections for a brand (used to control public view visibility)"""
+    import time
+    start_time = time.time()
+    
+    try:
+        init_start = time.time()
+        supabase = SupabaseService(db=db)
+        init_time = time.time() - init_start
+        if init_time > 0.5:
+            logger.warning(f"Slow SupabaseService initialization: {init_time:.2f}s for brand {brand_id}")
+        
+        # Get KPI selections for this brand using SQLAlchemy Core
+        query_start = time.time()
+        table = supabase._get_table("brand_kpi_selections")
+        query = select(
+            table.c.selected_kpis,
+            table.c.visible_sections,
+            table.c.selected_charts,
+            table.c.updated_at,
+            table.c.version,
+            table.c.last_modified_by
+        ).where(table.c.brand_id == brand_id).limit(1)
+        result = supabase.db.execute(query)
+        row = result.first()
+        query_time = time.time() - query_start
+        
+        if query_time > 1.0:
+            logger.warning(f"Slow KPI selections query: {query_time:.2f}s for brand {brand_id}")
+        
+        if row:
+            selection = dict(row._mapping)
+            result = {
+                "brand_id": brand_id,
+                "selected_kpis": selection.get("selected_kpis", []),
+                "visible_sections": selection.get("visible_sections", ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"]),
+                "selected_charts": selection.get("selected_charts", []),
+                "selected_performance_metrics_kpis": selection.get("selected_performance_metrics_kpis", []),
+                "updated_at": selection.get("updated_at").isoformat() if selection.get("updated_at") else None,
+                "version": selection.get("version", 1),
+                "last_modified_by": selection.get("last_modified_by")
+            }
+        else:
+            # Return default values if no selection exists (means all sections and KPIs are shown)
+            result = {
+                "brand_id": brand_id,
+                "selected_kpis": [],
+                "visible_sections": ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"],
+                "selected_charts": [],
+                "updated_at": None,
+                "version": 1,
+                "last_modified_by": None
+            }
+        
+        total_time = time.time() - start_time
+        if total_time > 1.0:
+            logger.warning(f"Slow KPI selections endpoint: {total_time:.2f}s total (init: {init_time:.2f}s, query: {query_time:.2f}s) for brand {brand_id}")
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        total_time = time.time() - start_time
+        logger.error(f"Error fetching KPI selections for brand {brand_id} (took {total_time:.2f}s): {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching KPI selections: {str(e)}")
+
+@router.get("/data/reporting-dashboard/client/{client_id}/kpi-selections")
+@handle_api_errors(context="fetching KPI selections")
+async def get_client_kpi_selections(client_id: int, db: Session = Depends(get_db)):
+    """Get saved KPI selections for a client (used to control public view visibility) - client-centric"""
+    import time
+    start_time = time.time()
+    
+    try:
+        supabase = SupabaseService(db=db)
+        
+        # Get KPI selections for this client using SQLAlchemy Core
+        query_start = time.time()
+        selection = supabase.get_client_kpi_selection(client_id)
+        query_time = time.time() - query_start
+        
+        if selection:
+            result = {
+                "client_id": client_id,
+                "brand_id": selection.get("brand_id"),
+                "selected_kpis": selection.get("selected_kpis", []),
+                "visible_sections": selection.get("visible_sections", ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"]),
+                "selected_charts": selection.get("selected_charts", []),
+                "selected_performance_metrics_kpis": selection.get("selected_performance_metrics_kpis", []),
+                "updated_at": selection.get("updated_at"),
+                "version": selection.get("version", 1),
+                "last_modified_by": selection.get("last_modified_by")
+            }
+        else:
+            # Return default values if no selection exists (means all sections and KPIs are shown)
+            result = {
+                "client_id": client_id,
+                "brand_id": None,
+                "selected_kpis": [],
+                "visible_sections": ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"],
+                "selected_charts": [],
+                "selected_performance_metrics_kpis": [],
+                "updated_at": None,
+                "version": 1,
+                "last_modified_by": None
+            }
+        
+        total_time = time.time() - start_time
+        if total_time > 1.0:
+            logger.warning(f"Slow KPI selections endpoint: {total_time:.2f}s total (query: {query_time:.2f}s) for client {client_id}")
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        total_time = time.time() - start_time
+        logger.error(f"Error fetching KPI selections for client {client_id} (took {total_time:.2f}s): {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching KPI selections: {str(e)}")
+
+@router.put("/data/reporting-dashboard/client/{client_id}/kpi-selections")
+@handle_api_errors(context="saving KPI selections")
+async def save_client_kpi_selections(
+    client_id: int,
+    request: KPISelectionRequest,
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """Save KPI selections for a client (used by managers/admins to control public view visibility) - client-centric"""
+    from app.services.websocket_manager import websocket_manager
+    from datetime import datetime
+    
+    try:
+        supabase = SupabaseService(db=db)
+        
+        # Check if client exists
+        client = supabase.get_client_by_id(client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Get current KPI selection record to check version
+        existing = supabase.get_client_kpi_selection(client_id)
+        
+        # Version conflict check (only if version is provided and record exists)
+        if request.version is not None and existing:
+            current_version = existing.get("version", 1)
+            if request.version != current_version:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "conflict",
+                        "message": "Resource was modified by another user. Please refresh and try again.",
+                        "current_version": current_version,
+                        "current_data": {
+                            "selected_kpis": existing.get("selected_kpis", []),
+                            "visible_sections": existing.get("visible_sections", []),
+                            "last_modified_by": existing.get("last_modified_by")
+                        }
+                    }
+                )
+        
+        # Prepare visible_sections
+        visible_sections = request.visible_sections
+        if visible_sections is None:
+            # If not provided, keep existing sections or use default
+            if existing and existing.get("visible_sections"):
+                visible_sections = existing["visible_sections"]
+            else:
+                visible_sections = ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"]
+        
+        # Prepare selected_charts
+        selected_charts = request.selected_charts
+        if selected_charts is None:
+            # If not provided, keep existing charts or use empty array
+            if existing and existing.get("selected_charts") is not None:
+                selected_charts = existing["selected_charts"]
+            else:
+                selected_charts = []
+        
+        # Prepare selected_performance_metrics_kpis
+        selected_performance_metrics_kpis = request.selected_performance_metrics_kpis
+        if selected_performance_metrics_kpis is None:
+            # If not provided, keep existing performance metrics KPIs or use empty array
+            if existing and existing.get("selected_performance_metrics_kpis") is not None:
+                selected_performance_metrics_kpis = existing["selected_performance_metrics_kpis"]
+            else:
+                selected_performance_metrics_kpis = []
+        
+        # Upsert KPI selections using SQLAlchemy (client-centric)
+        result = supabase.upsert_client_kpi_selection(
+            client_id=client_id,
+            selected_kpis=request.selected_kpis,
+            visible_sections=visible_sections,
+            selected_charts=selected_charts,
+            selected_performance_metrics_kpis=selected_performance_metrics_kpis,
+            version=request.version,
+            last_modified_by=current_user.get("email")
+        )
+        
+        updated_version = result.get("version", 1)
+        
+        logger.info(f"Saved KPI selections for client {client_id}: {len(request.selected_kpis)} KPIs, {len(visible_sections)} sections, {len(selected_charts)} charts, version={updated_version}")
+        
+        # Broadcast WebSocket notification
+        try:
+            await websocket_manager.notify_resource_updated(
+                resource_type="kpi_selection",
+                resource_id=client_id,
+                updated_by=current_user.get("email"),
+                updated_at=datetime.utcnow().isoformat() + "Z",
+                version=updated_version,
+                exclude_user_id=current_user.get("id")
+            )
+        except Exception as ws_error:
+            logger.warning(f"Failed to send WebSocket notification: {str(ws_error)}")
+        
+        return {
+            "client_id": client_id,
+            "brand_id": result.get("brand_id"),
+            "selected_kpis": request.selected_kpis,
+            "visible_sections": visible_sections,
+            "selected_charts": selected_charts,
+            "version": updated_version,
+            "message": "KPI, section, and chart selections saved successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving KPI selections for client {client_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error saving KPI selections: {str(e)}")
+
+@router.put("/data/reporting-dashboard/{brand_id}/kpi-selections")
+@handle_api_errors(context="saving KPI selections")
+async def save_brand_kpi_selections(
+    brand_id: int,
+    request: KPISelectionRequest,
+    current_user: dict = Depends(get_current_user_v2),
+    db: Session = Depends(get_db)
+):
+    """Save KPI selections for a brand (used by managers/admins to control public view visibility) - backward compatibility"""
+    from app.services.websocket_manager import websocket_manager
+    from datetime import datetime
+    
+    try:
+        supabase = SupabaseService(db=db)
+        
+        # Check if brand exists using SQLAlchemy
+        brand = supabase.get_brand_by_id(brand_id)
+        if not brand:
+            raise HTTPException(status_code=404, detail="Brand not found")
+        
+        # Get current KPI selection record to check version
+        existing = supabase.get_brand_kpi_selection(brand_id)
+        
+        # Version conflict check (only if version is provided and record exists)
+        if request.version is not None and existing:
+            current_version = existing.get("version", 1)
+            if request.version != current_version:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "conflict",
+                        "message": "Resource was modified by another user. Please refresh and try again.",
+                        "current_version": current_version,
+                        "current_data": {
+                            "selected_kpis": existing.get("selected_kpis", []),
+                            "visible_sections": existing.get("visible_sections", []),
+                            "last_modified_by": existing.get("last_modified_by")
+                        }
+                    }
+                )
+        
+        # Prepare visible_sections
+        visible_sections = request.visible_sections
+        if visible_sections is None:
+            # If not provided, keep existing sections or use default
+            if existing and existing.get("visible_sections"):
+                visible_sections = existing["visible_sections"]
+            else:
+                visible_sections = ["ga4", "scrunch_ai", "brand_analytics", "advanced_analytics", "performance_metrics"]
+        
+        # Prepare selected_charts
+        selected_charts = request.selected_charts
+        if selected_charts is None:
+            # If not provided, keep existing charts or use empty array
+            if existing and existing.get("selected_charts") is not None:
+                selected_charts = existing["selected_charts"]
+            else:
+                selected_charts = []
+        
+        # Upsert KPI selections using SQLAlchemy
+        result = supabase.upsert_brand_kpi_selection(
+            brand_id=brand_id,
+            selected_kpis=request.selected_kpis,
+            visible_sections=visible_sections,
+            selected_charts=selected_charts,
+            version=request.version,
+            last_modified_by=current_user.get("email")
+        )
+        
+        updated_version = result.get("version", 1)
+        
+        logger.info(f"Saved KPI selections for brand {brand_id}: {len(request.selected_kpis)} KPIs, {len(visible_sections)} sections, {len(selected_charts)} charts, version={updated_version}")
+        
+        # Broadcast WebSocket notification
+        try:
+            await websocket_manager.notify_resource_updated(
+                resource_type="kpi_selection",
+                resource_id=brand_id,
+                updated_by=current_user.get("email"),
+                updated_at=datetime.utcnow().isoformat() + "Z",
+                version=updated_version,
+                exclude_user_id=current_user.get("id")
+            )
+        except Exception as ws_error:
+            logger.warning(f"Failed to send WebSocket notification: {str(ws_error)}")
+        
+        return {
+            "brand_id": brand_id,
+            "selected_kpis": request.selected_kpis,
+            "visible_sections": visible_sections,
+            "selected_charts": selected_charts,
+            "version": updated_version,
+            "message": "KPI, section, and chart selections saved successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving KPI selections for brand {brand_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error saving KPI selections: {str(e)}")
+
+

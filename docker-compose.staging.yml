@@ -1,0 +1,34 @@
+services:
+  backend:
+    container_name: mcraes-backend-staging
+    ports: !override
+      - "8200:8000"
+    environment:
+      - OTEL_DEPLOYMENT_ENVIRONMENT=staging
+      - SUPABASE_DB_HOST=mcraes-postgres
+    networks: !override
+      - mcraes-network
+      - mcraes-production-network
+
+  frontend:
+    container_name: mcraes-frontend-staging
+    ports: !override
+      - "3200:3000"
+    build:
+      args:
+        VITE_OTEL_DEPLOYMENT_ENVIRONMENT: staging
+
+  postgres:
+    container_name: mcraes-postgres-staging
+    ports: !override
+      - "5432:5432"
+
+  pgadmin:
+    container_name: mcraes-pgadmin-staging
+    ports: !override
+      - "5150:80"
+
+networks:
+  mcraes-production-network:
+    external: true
+    name: mcraes_website_analytics_mcraes-network

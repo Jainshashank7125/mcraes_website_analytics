@@ -4,7 +4,12 @@ from fastapi.exceptions import RequestValidationError, HTTPException
 from contextlib import asynccontextmanager
 import uvicorn
 from app.core.config import settings
-from app.api import sync, data, database, auth, auth_v2, audit, sync_jobs, openai, websocket, telemetry
+from app.api import database, auth, auth_v2, audit, sync_jobs, openai, websocket, telemetry
+from app.api.routes import (
+    scrunch_data, ga4_data, agency_analytics_data,
+    reporting_data, clients_data, dashboard_links_data, keywords_data,
+    sync_shared, sync_scrunch, sync_ga4, sync_agency_analytics,
+)
 from app.db.database import init_db, check_db_connection
 from app.core.logging_config import setup_logging
 from app.core.error_handlers import (
@@ -104,9 +109,22 @@ app.add_exception_handler(Exception, general_exception_handler)
 # Include routers
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(auth_v2.router, prefix="/api/v1", tags=["auth-v2"])
-app.include_router(sync.router, prefix="/api/v1", tags=["sync"])
 app.include_router(sync_jobs.router, prefix="/api/v1", tags=["sync-jobs"])
-app.include_router(data.router, prefix="/api/v1", tags=["data"])
+
+# Data routers (order matters — reporting before clients to preserve FastAPI route matching)
+app.include_router(scrunch_data.router, prefix="/api/v1", tags=["data"])
+app.include_router(ga4_data.router, prefix="/api/v1", tags=["data"])
+app.include_router(agency_analytics_data.router, prefix="/api/v1", tags=["data"])
+app.include_router(reporting_data.router, prefix="/api/v1", tags=["data"])
+app.include_router(clients_data.router, prefix="/api/v1", tags=["data"])
+app.include_router(dashboard_links_data.router, prefix="/api/v1", tags=["data"])
+app.include_router(keywords_data.router, prefix="/api/v1", tags=["data"])
+
+# Sync routers
+app.include_router(sync_scrunch.router, prefix="/api/v1", tags=["sync"])
+app.include_router(sync_ga4.router, prefix="/api/v1", tags=["sync"])
+app.include_router(sync_agency_analytics.router, prefix="/api/v1", tags=["sync"])
+app.include_router(sync_shared.router, prefix="/api/v1", tags=["sync"])
 app.include_router(database.router, prefix="/api/v1", tags=["database"])
 app.include_router(audit.router, prefix="/api/v1", tags=["audit"])
 app.include_router(openai.router, prefix="/api/v1", tags=["openai"])
