@@ -362,13 +362,16 @@ class GA4DBMixin(BaseDB):
         records = []
         for source in sources:
             record = {
-                "property_id": property_id,
-                "date": date,
-                "source": source.get("source", ""),
-                "sessions": source.get("sessions", 0),
-                "users": source.get("users", 0),
-                "bounce_rate": source.get("bounceRate", 0),
-                "updated_at": datetime.now()
+                "property_id":   property_id,
+                "date":          date,
+                "source":        source.get("source", ""),
+                "sessions":      source.get("sessions", 0),
+                "users":         source.get("users", 0),
+                "bounce_rate":   source.get("bounceRate", 0),
+                # conversions & conversion_rate were fetched but previously discarded
+                "conversions":   source.get("conversions", 0),
+                "conversion_rate": source.get("conversionRate", 0),
+                "updated_at":    datetime.now()
             }
             if client_id is not None:
                 record["client_id"] = client_id
@@ -385,10 +388,12 @@ class GA4DBMixin(BaseDB):
                 insert_stmt = insert_stmt.on_conflict_do_update(
                     index_elements=['brand_id', 'property_id', 'date', 'source'],
                     set_={
-                        'sessions': insert_stmt.excluded.sessions,
-                        'users': insert_stmt.excluded.users,
-                        'bounce_rate': insert_stmt.excluded.bounce_rate,
-                        'updated_at': insert_stmt.excluded.updated_at
+                        'sessions':        insert_stmt.excluded.sessions,
+                        'users':           insert_stmt.excluded.users,
+                        'bounce_rate':     insert_stmt.excluded.bounce_rate,
+                        'conversions':     insert_stmt.excluded.conversions,
+                        'conversion_rate': insert_stmt.excluded.conversion_rate,
+                        'updated_at':      insert_stmt.excluded.updated_at
                     }
                 )
                 self.db.execute(insert_stmt)
@@ -470,12 +475,14 @@ class GA4DBMixin(BaseDB):
             # Use date from record if available, otherwise use parameter
             record_date = geo.get("date", date)
             record = {
-                "property_id": property_id,
-                "date": record_date,
-                "country": geo.get("country", ""),
-                "users": geo.get("users", 0),
-                "sessions": geo.get("sessions", 0),
-                "updated_at": datetime.now()
+                "property_id":    property_id,
+                "date":           record_date,
+                "country":        geo.get("country", ""),
+                "users":          geo.get("users", 0),
+                "sessions":       geo.get("sessions", 0),
+                # engagementRate was fetched but previously discarded
+                "engagement_rate": geo.get("engagementRate", 0),
+                "updated_at":     datetime.now()
             }
             if client_id is not None:
                 record["client_id"] = client_id
@@ -500,9 +507,10 @@ class GA4DBMixin(BaseDB):
                 insert_stmt = insert_stmt.on_conflict_do_update(
                     index_elements=conflict_columns,
                     set_={
-                        'users': insert_stmt.excluded.users,
-                        'sessions': insert_stmt.excluded.sessions,
-                        'updated_at': insert_stmt.excluded.updated_at
+                        'users':           insert_stmt.excluded.users,
+                        'sessions':        insert_stmt.excluded.sessions,
+                        'engagement_rate': insert_stmt.excluded.engagement_rate,
+                        'updated_at':      insert_stmt.excluded.updated_at
                     }
                 )
                 self.db.execute(insert_stmt)
@@ -1443,7 +1451,7 @@ class GA4DBMixin(BaseDB):
             if not records:
                 return []
 
-            # Aggregate by country
+            # Aggregate by country; compute weighted-average engagementRate
             country_aggregates = {}
             for record in records:
                 country = record.get("country")
@@ -1452,18 +1460,29 @@ class GA4DBMixin(BaseDB):
 
                 if country not in country_aggregates:
                     country_aggregates[country] = {
-                        "country": country,
-                        "users": 0,
-                        "sessions": 0,
-                        "engagementRate": 0.0
+                        "country":                country,
+                        "users":                  0,
+                        "sessions":               0,
+                        "engagementRate":         0.0,
+                        # internal accumulators (removed from output below)
+                        "_total_engagement_weight": 0.0,
+                        "_total_sessions":          0,
                     }
 
-                country_aggregates[country]["users"] += record.get("users", 0)
-                country_aggregates[country]["sessions"] += record.get("sessions", 0)
+                sessions_val       = int(record.get("sessions", 0) or 0)
+                engagement_rate_val = float(record.get("engagement_rate", 0) or 0)
 
-            # Calculate engagement rate (simplified - would need engaged_sessions in table for accurate calculation)
+                country_aggregates[country]["users"]    += int(record.get("users", 0) or 0)
+                country_aggregates[country]["sessions"] += sessions_val
+                country_aggregates[country]["_total_engagement_weight"] += engagement_rate_val * sessions_val
+                country_aggregates[country]["_total_sessions"]          += sessions_val
+
+            # Finalise: compute weighted engagementRate, strip internal keys
             countries = []
             for country, data in country_aggregates.items():
+                total_sessions = data.pop("_total_sessions", 0)
+                total_weight   = data.pop("_total_engagement_weight", 0.0)
+                data["engagementRate"] = (total_weight / total_sessions) if total_sessions > 0 else 0.0
                 countries.append(data)
 
             # Sort by sessions descending and limit

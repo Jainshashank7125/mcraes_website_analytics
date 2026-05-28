@@ -181,119 +181,77 @@ async def sync_ga4_background(
                 logger.info(f"[Job {job_id}] Current period: {period_start_date} to {period_end_date}")
                 logger.info(f"[Job {job_id}] Previous period: {prev_period_start_date} to {prev_period_end_date}")
 
-                # Fetch current period data
+                # ----------------------------------------------------------------
+                # SINGLE GA4 call — get_traffic_overview now returns exactly 4
+                # internal API calls covering both current AND previous period,
+                # including conversions and revenue.
+                # Previously this block made up to 14 API calls:
+                #   get_traffic_overview(current)  → 4 calls internally
+                #   + 2 separate conversions/revenue calls (current)
+                #   + get_traffic_overview(previous) → 4 calls internally
+                #   + 2 separate conversions/revenue calls (previous)
+                #   + 2 separate daily conversions/revenue calls
+                # Now reduced to: 4 calls.
+                # ----------------------------------------------------------------
                 await sync_job_service.update_job_status(
                     job_id, "running", progress=progress + 5,
-                    current_step=f"Fetching current period data for {client_name}..."
+                    current_step=f"Fetching GA4 data for {client_name}..."
                 )
 
-                current_traffic_overview = await ga4_client.get_traffic_overview(property_id, period_start_date, period_end_date)
+                current_traffic_overview = await ga4_client.get_traffic_overview(
+                    property_id, period_start_date, period_end_date
+                )
 
-                # Check for cancellation after API call
+                # Check for cancellation after the single traffic overview call
                 if sync_job_service.is_cancelled(job_id):
                     logger.info(f"[Job {job_id}] Job cancelled after fetching traffic overview for {client_name}")
                     return
 
-                # Get conversions and revenue for current period
-                current_conversions = 0
-                current_revenue = 0
-                try:
-                    from google.analytics.data_v1beta.types import RunReportRequest, DateRange, Metric
-                    client = ga4_client._get_data_client()
+                # Conversions and revenue come embedded in the response (added to
+                # Requests 1 & 2 inside get_traffic_overview — no extra API calls).
+                current_conversions = current_traffic_overview.get("conversions", 0) if current_traffic_overview else 0
+                current_revenue     = current_traffic_overview.get("revenue",      0) if current_traffic_overview else 0
 
-                    # Get conversions
-                    conversions_request = RunReportRequest(
-                        property=f"properties/{property_id}",
-                        date_ranges=[DateRange(start_date=period_start_date, end_date=period_end_date)],
-                        metrics=[Metric(name="conversions")],
-                    )
-                    conversions_response = client.run_report(conversions_request)
-                    if conversions_response.rows:
-                        current_conversions = float(conversions_response.rows[0].metric_values[0].value)
+                # Previous-period values are returned as prev_* keys — no second
+                # get_traffic_overview call needed.
+                prev_conversions = current_traffic_overview.get("prev_conversions", 0) if current_traffic_overview else 0
+                prev_revenue     = current_traffic_overview.get("prev_revenue",     0) if current_traffic_overview else 0
 
-                    # Get revenue
-                    revenue_request = RunReportRequest(
-                        property=f"properties/{property_id}",
-                        date_ranges=[DateRange(start_date=period_start_date, end_date=period_end_date)],
-                        metrics=[Metric(name="totalRevenue")],
-                    )
-                    revenue_response = client.run_report(revenue_request)
-                    if revenue_response.rows:
-                        current_revenue = float(revenue_response.rows[0].metric_values[0].value)
-                except Exception as e:
-                    logger.warning(f"Could not fetch conversions/revenue for current period: {str(e)}")
-
-                # Check for cancellation before fetching previous period
-                if sync_job_service.is_cancelled(job_id):
-                    logger.info(f"[Job {job_id}] Job cancelled after fetching current period data for {client_name}")
-                    return
-
-                # Fetch previous period data
-                await sync_job_service.update_job_status(
-                    job_id, "running", progress=progress + 10,
-                    current_step=f"Fetching previous period data for {client_name}..."
+                logger.info(
+                    f"[Job {job_id}] GA4 data fetched — "
+                    f"current: users={current_traffic_overview.get('users') if current_traffic_overview else 0}, "
+                    f"sessions={current_traffic_overview.get('sessions') if current_traffic_overview else 0}, "
+                    f"conversions={current_conversions}, revenue={current_revenue} | "
+                    f"prev: users={current_traffic_overview.get('prev_users') if current_traffic_overview else 0}, "
+                    f"conversions={prev_conversions}"
                 )
 
-                prev_traffic_overview = await ga4_client.get_traffic_overview(property_id, prev_period_start_date, prev_period_end_date)
-
-                # Check for cancellation after API call
-                if sync_job_service.is_cancelled(job_id):
-                    logger.info(f"[Job {job_id}] Job cancelled after fetching previous period traffic overview for {client_name}")
-                    return
-
-                # Get conversions and revenue for previous period
-                prev_conversions = 0
-                prev_revenue = 0
-                try:
-                    from google.analytics.data_v1beta.types import RunReportRequest, DateRange, Metric
-                    client = ga4_client._get_data_client()
-
-                    # Get previous period conversions
-                    prev_conversions_request = RunReportRequest(
-                        property=f"properties/{property_id}",
-                        date_ranges=[DateRange(start_date=prev_period_start_date, end_date=prev_period_end_date)],
-                        metrics=[Metric(name="conversions")],
-                    )
-                    prev_conversions_response = client.run_report(prev_conversions_request)
-                    if prev_conversions_response.rows:
-                        prev_conversions = float(prev_conversions_response.rows[0].metric_values[0].value)
-
-                    # Get previous period revenue
-                    prev_revenue_request = RunReportRequest(
-                        property=f"properties/{property_id}",
-                        date_ranges=[DateRange(start_date=prev_period_start_date, end_date=prev_period_end_date)],
-                        metrics=[Metric(name="totalRevenue")],
-                    )
-                    prev_revenue_response = client.run_report(prev_revenue_request)
-                    if prev_revenue_response.rows:
-                        prev_revenue = float(prev_revenue_response.rows[0].metric_values[0].value)
-                except Exception as e:
-                    logger.warning(f"Could not fetch conversions/revenue for previous period: {str(e)}")
-
-                # Prepare current period values
+                # Prepare current period values (all sourced from single API call)
+                cur = current_traffic_overview or {}
                 current_values = {
-                    "users": current_traffic_overview.get("users", 0) if current_traffic_overview else 0,
-                    "sessions": current_traffic_overview.get("sessions", 0) if current_traffic_overview else 0,
-                    "new_users": current_traffic_overview.get("newUsers", 0) if current_traffic_overview else 0,
-                    "bounce_rate": current_traffic_overview.get("bounceRate", 0) if current_traffic_overview else 0,
-                    "avg_session_duration": current_traffic_overview.get("averageSessionDuration", 0) if current_traffic_overview else 0,
-                    "engagement_rate": current_traffic_overview.get("engagementRate", 0) if current_traffic_overview else 0,
-                    "engaged_sessions": current_traffic_overview.get("engagedSessions", 0) if current_traffic_overview else 0,
-                    "conversions": current_conversions,
-                    "revenue": current_revenue,
+                    "users":               cur.get("users", 0),
+                    "sessions":            cur.get("sessions", 0),
+                    "new_users":           cur.get("newUsers", 0),
+                    "bounce_rate":         cur.get("bounceRate", 0),
+                    "avg_session_duration":cur.get("averageSessionDuration", 0),
+                    "engagement_rate":     cur.get("engagementRate", 0),
+                    "engaged_sessions":    cur.get("engagedSessions", 0),
+                    "conversions":         current_conversions,
+                    "revenue":             current_revenue,
                 }
 
-                # Prepare previous period values
+                # Prepare previous period values (sourced from prev_* keys returned
+                # by the single get_traffic_overview call — no second API call needed)
                 previous_values = {
-                    "users": prev_traffic_overview.get("users", 0) if prev_traffic_overview else 0,
-                    "sessions": prev_traffic_overview.get("sessions", 0) if prev_traffic_overview else 0,
-                    "new_users": prev_traffic_overview.get("newUsers", 0) if prev_traffic_overview else 0,
-                    "bounce_rate": prev_traffic_overview.get("bounceRate", 0) if prev_traffic_overview else 0,
-                    "avg_session_duration": prev_traffic_overview.get("averageSessionDuration", 0) if prev_traffic_overview else 0,
-                    "engagement_rate": prev_traffic_overview.get("engagementRate", 0) if prev_traffic_overview else 0,
-                    "engaged_sessions": prev_traffic_overview.get("engagedSessions", 0) if prev_traffic_overview else 0,
-                    "conversions": prev_conversions,
-                    "revenue": prev_revenue,
+                    "users":               cur.get("prev_users", 0),
+                    "sessions":            cur.get("prev_sessions", 0),
+                    "new_users":           cur.get("prev_new_users", 0),
+                    "bounce_rate":         cur.get("prev_bounce_rate", 0),
+                    "avg_session_duration":cur.get("prev_avg_session_duration", 0),
+                    "engagement_rate":     cur.get("prev_engagement_rate", 0),
+                    "engaged_sessions":    cur.get("prev_engaged_sessions", 0),
+                    "conversions":         prev_conversions,
+                    "revenue":             prev_revenue,
                 }
 
                 # Calculate percentage changes
@@ -348,58 +306,26 @@ async def sync_ga4_background(
                     daily_records = current_traffic_overview.get("daily_data", [])
                     logger.info(f"[Job {job_id}] Storing {len(daily_records)} daily traffic overview records for {client_name}")
 
-                    # Get daily conversions and revenue if available
-                    daily_conversions_data = {}
-                    daily_revenue_data = {}
-
-                    # Try to get daily breakdown of conversions and revenue
-                    try:
-                        from google.analytics.data_v1beta.types import RunReportRequest, DateRange, Metric, Dimension
-                        client = ga4_client._get_data_client()
-
-                        # Get daily conversions
-                        daily_conversions_request = RunReportRequest(
-                            property=f"properties/{property_id}",
-                            date_ranges=[DateRange(start_date=period_start_date, end_date=period_end_date)],
-                            dimensions=[Dimension(name="date")],
-                            metrics=[Metric(name="conversions")],
-                        )
-                        daily_conversions_response = client.run_report(daily_conversions_request)
-                        if daily_conversions_response.rows:
-                            for row in daily_conversions_response.rows:
-                                date_str = row.dimension_values[0].value
-                                conversions_value = float(row.metric_values[0].value)
-                                daily_conversions_data[date_str] = conversions_value
-
-                        # Get daily revenue
-                        daily_revenue_request = RunReportRequest(
-                            property=f"properties/{property_id}",
-                            date_ranges=[DateRange(start_date=period_start_date, end_date=period_end_date)],
-                            dimensions=[Dimension(name="date")],
-                            metrics=[Metric(name="totalRevenue")],
-                        )
-                        daily_revenue_response = client.run_report(daily_revenue_request)
-                        if daily_revenue_response.rows:
-                            for row in daily_revenue_response.rows:
-                                date_str = row.dimension_values[0].value
-                                revenue_value = float(row.metric_values[0].value)
-                                daily_revenue_data[date_str] = revenue_value
-                    except Exception as e:
-                        logger.warning(f"Could not fetch daily conversions/revenue breakdown: {str(e)}")
-
-                    # Store each daily record for ALL clients sharing this property_id
+                    # Daily records already include conversions and revenue —
+                    # get_traffic_overview now fetches them in Request 2 (daily
+                    # breakdown).  No separate API calls needed.
                     first_record_logged = False
                     for daily_record in daily_records:
                         date_str = daily_record.get("date")
                         if date_str:
-                            # Add conversions and revenue for this day
+                            # conversions and revenue already present in daily_record
                             daily_record_with_extras = daily_record.copy()
-                            daily_record_with_extras["conversions"] = daily_conversions_data.get(date_str, 0)
-                            daily_record_with_extras["revenue"] = daily_revenue_data.get(date_str, 0)
 
-                            # Log first record to verify newUsers is present
+                            # Log first record to verify newUsers + conversions are present
                             if not first_record_logged:
-                                logger.info(f"[Job {job_id}] Sample daily record: date={date_str}, users={daily_record_with_extras.get('users')}, sessions={daily_record_with_extras.get('sessions')}, newUsers={daily_record_with_extras.get('newUsers')}")
+                                logger.info(
+                                    f"[Job {job_id}] Sample daily record: date={date_str}, "
+                                    f"users={daily_record_with_extras.get('users')}, "
+                                    f"sessions={daily_record_with_extras.get('sessions')}, "
+                                    f"newUsers={daily_record_with_extras.get('newUsers')}, "
+                                    f"conversions={daily_record_with_extras.get('conversions')}, "
+                                    f"revenue={daily_record_with_extras.get('revenue')}"
+                                )
                                 first_record_logged = True
 
                             # Store for all clients sharing this property_id
@@ -411,10 +337,9 @@ async def sync_ga4_background(
 
                     logger.info(f"[Job {job_id}] Stored {len(daily_records)} daily traffic overview records for {len(clients_with_property)} client(s) with property {property_id}")
                 elif current_traffic_overview:
-                    # Fallback: Store aggregated record if daily data not available
+                    # Fallback: Store aggregated record if daily data not available.
+                    # conversions and revenue already in current_traffic_overview.
                     traffic_overview_with_extras = current_traffic_overview.copy()
-                    traffic_overview_with_extras["conversions"] = current_conversions
-                    traffic_overview_with_extras["revenue"] = current_revenue
 
                     # Store for all clients sharing this property_id
                     for client in clients_with_property:
