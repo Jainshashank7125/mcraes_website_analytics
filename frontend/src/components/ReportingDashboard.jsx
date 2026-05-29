@@ -249,6 +249,7 @@ function ReportingDashboard({
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const [editingLink, setEditingLink] = useState(null);
   const [linkDialogTab, setLinkDialogTab] = useState(0); // 0 = Basic, 1 = Advanced
+  const [attachedLinkIds, setAttachedLinkIds] = useState([null, null]); // [slot1Id, slot2Id] for public view toggling
   const [linkFormData, setLinkFormData] = useState({
     name: "",
     description: "",
@@ -1296,12 +1297,61 @@ function ReportingDashboard({
     }
   };
 
-  const handleCopyOverviewLink = () => {
+  const copyTextToClipboard = async (text) => {
+    const value = typeof text === "string" ? text.trim() : "";
+    if (!value) {
+      throw new Error("Nothing to copy");
+    }
+
+    // Prefer async clipboard API when available and permitted.
+    if (window.isSecureContext && navigator?.clipboard) {
+      try {
+        await navigator.clipboard.writeText(value);
+        return;
+      } catch (err) {
+        debugWarn("navigator.clipboard.writeText failed, trying fallback", err);
+      }
+    }
+
+    // Fallback for non-secure/restricted environments.
+    const textArea = document.createElement("textarea");
+    textArea.value = value;
+    textArea.setAttribute("readonly", "");
+    textArea.style.position = "fixed";
+    textArea.style.opacity = "0";
+    textArea.style.pointerEvents = "none";
+    textArea.style.top = "0";
+    textArea.style.left = "0";
+    document.body.appendChild(textArea);
+    const selection = document.getSelection();
+    const selectedRange =
+      selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+
+    textArea.focus({ preventScroll: true });
+    textArea.select();
+    textArea.setSelectionRange(0, textArea.value.length);
+
+    const copied = document.execCommand("copy");
+    document.body.removeChild(textArea);
+    if (selectedRange && selection) {
+      selection.removeAllRanges();
+      selection.addRange(selectedRange);
+    }
+
+    if (!copied) {
+      throw new Error("Clipboard copy command failed");
+    }
+  };
+
+  const handleCopyOverviewLink = async () => {
     if (!savedOverviewLinkUrl) return;
-    navigator.clipboard.writeText(savedOverviewLinkUrl).then(
-      () => setError(null),
-      () => setError("Failed to copy URL")
-    );
+    try {
+      await copyTextToClipboard(savedOverviewLinkUrl);
+      setError(null);
+    } catch (err) {
+      debugWarn("Failed to copy overview link URL", err);
+      setError("Failed to copy URL");
+    }
   };
 
   // Generate overview for public dashboard link and save it
@@ -2788,6 +2838,7 @@ function ReportingDashboard({
     // Auto-generate name and description
     const autoName = generateAutoLinkName(currentStartDate, currentEndDate);
     const autoDescription = generateAutoLinkDescription(currentStartDate, currentEndDate);
+    setAttachedLinkIds([null, null]);
     setLinkFormData({
       name: autoName,
       description: autoDescription,
@@ -3076,6 +3127,10 @@ function ReportingDashboard({
       }
     }
     
+    // Load attached link IDs for public view toggling
+    const ids = link.attached_link_ids || []
+    setAttachedLinkIds([ids[0] ?? null, ids[1] ?? null])
+
     // Don't open dialog automatically - user will click "Edit Link" button to open it
   };
 
@@ -3139,6 +3194,9 @@ function ReportingDashboard({
       if (globalFilters && Object.keys(globalFilters).length > 0) {
         payload.global_filters = globalFilters;
       }
+
+      // Include attached link IDs for public view toggling
+      payload.attached_link_ids = attachedLinkIds.filter(id => id !== null)
 
       // Save dashboard "last state": all three AI overview cards (executive summary, what worked, what to watch)
       // when AI Overview section is selected. Backend uses this as-is and does not regenerate.
@@ -3280,18 +3338,21 @@ function ReportingDashboard({
     }
   };
 
-  const handleCopyLinkUrl = (link) => {
+  const handleCopyLinkUrl = async (link) => {
     const baseUrl = window.location.origin;
-    const url = `${baseUrl}/reporting/client/${link.slug}`;
-    navigator.clipboard
-      .writeText(url)
-      .then(() => {
+    if (!link?.slug) {
+      setError("Cannot copy URL: selected link is missing a slug");
+      return;
+    }
+    const url = `${baseUrl}/reporting/client/${encodeURIComponent(link.slug)}`;
+    try {
+      await copyTextToClipboard(url);
       setError(null);
       debugLog("Link URL copied to clipboard");
-      })
-      .catch(() => {
+    } catch (err) {
+      debugWarn("Failed to copy link URL", err);
       setError("Failed to copy URL");
-    });
+    }
   };
 
   // Helper function to check if a section should be visible
@@ -9591,6 +9652,53 @@ function ReportingDashboard({
                     changes.
                   </Typography>
                 </Alert>
+              )}
+              {dashboardLinks.length > 1 && (
+                <Box>
+                  <Typography variant="body2" fontWeight={600} sx={{ mb: 0.5 }}>
+                    Attach Additional Reports (optional)
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5 }}>
+                    Attach up to 2 existing reports so viewers can toggle between them in the public view.
+                  </Typography>
+                  {[0, 1].map((slotIndex) => {
+                    const otherSlotId = attachedLinkIds[slotIndex === 0 ? 1 : 0]
+                    const availableLinks = dashboardLinks.filter(
+                      (l) => l.id !== editingLink?.id && l.id !== otherSlotId
+                    )
+                    return (
+                      <FormControl fullWidth key={slotIndex} sx={{ mb: 1.5 }}>
+                        <InputLabel shrink>{`Attach Report ${slotIndex + 1}`}</InputLabel>
+                        <Select
+                          value={attachedLinkIds[slotIndex] ?? ""}
+                          displayEmpty
+                          label={`Attach Report ${slotIndex + 1}`}
+                          onChange={(e) => {
+                            const newIds = [...attachedLinkIds]
+                            newIds[slotIndex] = e.target.value || null
+                            setAttachedLinkIds(newIds)
+                          }}
+                          disabled={loading}
+                          notched
+                        >
+                          <MenuItem value="">
+                            <em>None</em>
+                          </MenuItem>
+                          {availableLinks.map((l) => (
+                            <MenuItem key={l.id} value={l.id}>
+                              {l.name || l.slug}
+                              {!l.enabled && (
+                                <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                                  (disabled)
+                                </Typography>
+                              )}
+                            </MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
+                    )
+                  })}
+                </Box>
               )}
             </Box>
           )}

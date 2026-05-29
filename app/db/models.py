@@ -229,6 +229,7 @@ class DashboardLink(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     created_by = Column(String, nullable=True, index=True)  # Email of user who created the link
     updated_by = Column(String, nullable=True, index=True)  # Email of user who last updated the link
+    attached_link_ids = Column(ARRAY(Integer), nullable=True)  # Up to 2 sibling dashboard link IDs for public view toggling
 
     # Relationships
     kpi_selection = relationship("DashboardLinkKPISelection", back_populates="link", uselist=False, cascade="all, delete-orphan")

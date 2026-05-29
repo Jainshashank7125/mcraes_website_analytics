@@ -151,6 +151,15 @@ async def upsert_dashboard_link_for_client(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
+    # Validate attached_link_ids — must belong to the same client, max 2
+    if request.attached_link_ids:
+        if len(request.attached_link_ids) > 2:
+            raise HTTPException(status_code=400, detail="Cannot attach more than 2 links")
+        client_link_ids = {l["id"] for l in supabase.list_dashboard_links_for_client(client_id)}
+        invalid = [i for i in request.attached_link_ids if i not in client_link_ids]
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"Attached link IDs not found for this client: {invalid}")
+
     link = supabase.upsert_dashboard_link(
         client_id=client_id,
         slug=request.slug,
@@ -169,6 +178,7 @@ async def upsert_dashboard_link_for_client(
         show_change_period=request.show_change_period,
         executive_summary=request.executive_summary,
         global_filters=request.global_filters,
+        attached_link_ids=request.attached_link_ids,
     )
 
     if not link:
@@ -268,7 +278,16 @@ async def update_dashboard_link(
         update_data["show_change_period"] = request.show_change_period
     if request.executive_summary is not None:
         update_data["executive_summary"] = request.executive_summary
-    
+    if request.attached_link_ids is not None:
+        if len(request.attached_link_ids) > 2:
+            raise HTTPException(status_code=400, detail="Cannot attach more than 2 links")
+        # Validate all IDs belong to this client and are not self-referential
+        client_link_ids = {l["id"] for l in links}
+        invalid = [i for i in request.attached_link_ids if i not in client_link_ids or i == link_id]
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"Invalid attached link IDs: {invalid}")
+        update_data["attached_link_ids"] = request.attached_link_ids
+
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
     

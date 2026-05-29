@@ -24,6 +24,10 @@ class DashboardLinkRequest(BaseModel):
         None,
         description="Global filters configuration for this dashboard link (user_type, traffic_channels, traffic_sources, countries, regions, cities, page_urls, conversion_types, conversion_by)",
     )
+    attached_link_ids: Optional[List[int]] = Field(
+        None,
+        description="IDs of up to 2 existing dashboard links from the same client to attach for public view toggling",
+    )
 
 class DashboardLinkUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -45,3 +49,7 @@ class DashboardLinkUpdateRequest(BaseModel):
         description="Global filters configuration for this dashboard link (user_type, traffic_channels, traffic_sources, countries, regions, cities, page_urls, conversion_types, conversion_by)",
     )
     executive_summary: Optional[Dict[str, Any]] = Field(None, description="Executive summary data (structured JSON)")
+    attached_link_ids: Optional[List[int]] = Field(
+        None,
+        description="IDs of up to 2 existing dashboard links from the same client to attach for public view toggling",
+    )

@@ -1063,6 +1063,25 @@ class ClientDBMixin(BaseDB):
                         link_dict["kpi_selection"] = kpi_selection
                     # Executive summary is already included in link_dict from the query
 
+                # Resolve attached_link_ids to basic link info for public view toggling
+                attached_ids = link_dict.get("attached_link_ids") or []
+                attached_links = []
+                for aid in attached_ids[:2]:
+                    aq = select(table).where(table.c.id == aid).limit(1)
+                    arow = self.db.execute(aq).first()
+                    if arow:
+                        arow_dict = dict(arow._mapping)
+                        attached_links.append({
+                            "id": arow_dict["id"],
+                            "slug": arow_dict["slug"],
+                            "name": arow_dict.get("name"),
+                            "start_date": arow_dict["start_date"],
+                            "end_date": arow_dict["end_date"],
+                            "enabled": arow_dict["enabled"],
+                            "expires_at": arow_dict.get("expires_at"),
+                        })
+                link_dict["attached_links"] = attached_links
+
                 return link_dict
             return None
         except Exception as e:
@@ -1185,6 +1204,7 @@ class ClientDBMixin(BaseDB):
         show_change_period: Optional[Dict[str, bool]] = None,
         executive_summary: Optional[Dict] = None,
         global_filters: Optional[Dict[str, List[str]]] = None,
+        attached_link_ids: Optional[List[int]] = None,
     ) -> Optional[Dict]:
         """Create a new dashboard link for a client (always creates new, allows multiple links for same date range)"""
         try:
@@ -1218,6 +1238,9 @@ class ClientDBMixin(BaseDB):
             # Audit: created_by if column exists
             if "created_by" in table_columns and user_email:
                 link_data["created_by"] = user_email
+            # Attached links (up to 2 sibling link IDs for public view toggling)
+            if "attached_link_ids" in table_columns and attached_link_ids is not None:
+                link_data["attached_link_ids"] = attached_link_ids[:2]
 
             insert_stmt = pg_insert(table).values(
                 **link_data,
@@ -1472,6 +1495,9 @@ class ClientDBMixin(BaseDB):
             global_filters = updates.pop("global_filters", None)
             # Extract executive_summary but we'll add it back to update_data if column exists
             executive_summary = updates.pop("executive_summary", None)
+            # Extract attached_link_ids (stored directly on dashboard_links)
+            raw_attached_ids = updates.pop("attached_link_ids", None)
+            attached_link_ids = raw_attached_ids[:2] if raw_attached_ids is not None else None
 
             # Only allow updating specific fields
             allowed_fields = ["start_date", "end_date", "enabled", "expires_at", "slug"]
@@ -1481,6 +1507,8 @@ class ClientDBMixin(BaseDB):
                 allowed_fields.append("description")
             if has_executive_summary_column:
                 allowed_fields.append("executive_summary")
+            if "attached_link_ids" in table_columns:
+                allowed_fields.append("attached_link_ids")
 
             update_data = {k: v for k, v in updates.items() if k in allowed_fields}
 
@@ -1488,6 +1516,9 @@ class ClientDBMixin(BaseDB):
             if has_executive_summary_column and executive_summary is not None:
                 update_data["executive_summary"] = executive_summary
                 logger.info(f"Adding executive_summary to update_data for link {link_id}, type: {type(executive_summary)}")
+            # Add attached_link_ids if provided and column exists
+            if "attached_link_ids" in table_columns and attached_link_ids is not None:
+                update_data["attached_link_ids"] = attached_link_ids
 
             # Audit: updated_by if column exists
             has_updated_by = "updated_by" in table_columns
