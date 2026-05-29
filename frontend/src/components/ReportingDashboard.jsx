@@ -73,6 +73,8 @@ import {
   Close as CloseIcon,
   ExpandLess as ExpandLessIcon,
   Error as ErrorIcon,
+  OpenInNew as OpenInNewIcon,
+  Add as AddIcon,
 should } from "@mui/icons-material";
 import { motion } from "framer-motion";
 import {
@@ -249,7 +251,7 @@ function ReportingDashboard({
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const [editingLink, setEditingLink] = useState(null);
   const [linkDialogTab, setLinkDialogTab] = useState(0); // 0 = Basic, 1 = Advanced
-  const [attachedLinkIds, setAttachedLinkIds] = useState([null, null]); // [slot1Id, slot2Id] for public view toggling
+  const [attachedLinkIds, setAttachedLinkIds] = useState([null, null]); // dynamic array of attached link IDs for public view toggling
   const [linkFormData, setLinkFormData] = useState({
     name: "",
     description: "",
@@ -4168,11 +4170,12 @@ function ReportingDashboard({
                           <MenuItem key={link.id} value={link.id}>
                             <Box
                               display="flex"
-                              flexDirection="column"
                               alignItems="flex-start"
-                              sx={{ width: '100%' }}
+                              justifyContent="space-between"
+                              sx={{ width: '100%', gap: 0.5 }}
                             >
-                              <Typography variant="body2" fontWeight={500}>
+                              <Box display="flex" flexDirection="column" alignItems="flex-start" sx={{ flexGrow: 1, minWidth: 0 }}>
+                              <Typography variant="body2" fontWeight={500} noWrap sx={{ maxWidth: 200 }}>
                                 {link.name || link.slug || `Link ${link.id}`}
                               </Typography>
                               {link.description && (
@@ -4202,6 +4205,21 @@ function ReportingDashboard({
                                 >
                                   {link.start_date.split('T')[0]} to {link.end_date.split('T')[0]}
                                 </Typography>
+                              )}
+                              </Box>
+                              {link.slug && (
+                                <IconButton
+                                  size="small"
+                                  component="span"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    window.open(`/reporting/client/${link.slug}`, "_blank", "noopener,noreferrer")
+                                  }}
+                                  sx={{ p: 0.25, flexShrink: 0, mt: 0.25 }}
+                                  title="Open link in new tab"
+                                >
+                                  <OpenInNewIcon sx={{ fontSize: 13, color: "text.secondary" }} />
+                                </IconButton>
                               )}
                             </Box>
                           </MenuItem>
@@ -9653,53 +9671,102 @@ function ReportingDashboard({
                   </Typography>
                 </Alert>
               )}
-              {dashboardLinks.length > 1 && (
-                <Box>
-                  <Typography variant="body2" fontWeight={600} sx={{ mb: 0.5 }}>
-                    Attach Additional Reports (optional)
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5 }}>
-                    Attach up to 2 existing reports so viewers can toggle between them in the public view.
-                  </Typography>
-                  {[0, 1].map((slotIndex) => {
-                    const otherSlotId = attachedLinkIds[slotIndex === 0 ? 1 : 0]
-                    const availableLinks = dashboardLinks.filter(
-                      (l) => l.id !== editingLink?.id && l.id !== otherSlotId
-                    )
-                    return (
-                      <FormControl fullWidth key={slotIndex} sx={{ mb: 1.5 }}>
-                        <InputLabel shrink>{`Attach Report ${slotIndex + 1}`}</InputLabel>
-                        <Select
-                          value={attachedLinkIds[slotIndex] ?? ""}
-                          displayEmpty
-                          label={`Attach Report ${slotIndex + 1}`}
-                          onChange={(e) => {
-                            const newIds = [...attachedLinkIds]
-                            newIds[slotIndex] = e.target.value || null
-                            setAttachedLinkIds(newIds)
-                          }}
+              {dashboardLinks.length > 1 && (() => {
+                // Max attachable = all client links except the one being edited
+                const maxSlots = dashboardLinks.filter(l => l.id !== editingLink?.id).length
+                const canAddMore = attachedLinkIds.length < maxSlots
+                return (
+                  <Box>
+                    <Box display="flex" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5 }}>
+                      <Typography variant="body2" fontWeight={600}>
+                        Attach Additional Reports (optional)
+                      </Typography>
+                      {canAddMore && (
+                        <IconButton
+                          size="small"
+                          onClick={() => setAttachedLinkIds([...attachedLinkIds, null])}
                           disabled={loading}
-                          notched
+                          sx={{ color: "primary.main" }}
+                          title="Add another report slot"
                         >
-                          <MenuItem value="">
-                            <em>None</em>
-                          </MenuItem>
-                          {availableLinks.map((l) => (
-                            <MenuItem key={l.id} value={l.id}>
-                              {l.name || l.slug}
-                              {!l.enabled && (
-                                <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                                  (disabled)
-                                </Typography>
-                              )}
-                            </MenuItem>
-                          ))}
-                        </Select>
-                      </FormControl>
-                    )
-                  })}
-                </Box>
-              )}
+                          <AddIcon fontSize="small" />
+                        </IconButton>
+                      )}
+                    </Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5 }}>
+                      Attach existing reports so viewers can toggle between them in the public view.
+                    </Typography>
+                    {attachedLinkIds.map((slotId, slotIndex) => {
+                      // Filter out self, and IDs already picked in other slots
+                      const otherSelected = attachedLinkIds.filter((_, i) => i !== slotIndex)
+                      const availableLinks = dashboardLinks.filter(
+                        (l) => l.id !== editingLink?.id && !otherSelected.includes(l.id)
+                      )
+                      return (
+                        <Box key={slotIndex} display="flex" alignItems="center" gap={1} sx={{ mb: 1.5 }}>
+                          <FormControl fullWidth size="small">
+                            <InputLabel shrink>{`Attach Report ${slotIndex + 1}`}</InputLabel>
+                            <Select
+                              value={slotId ?? ""}
+                              displayEmpty
+                              label={`Attach Report ${slotIndex + 1}`}
+                              notched
+                              onChange={(e) => {
+                                const newIds = [...attachedLinkIds]
+                                newIds[slotIndex] = e.target.value || null
+                                setAttachedLinkIds(newIds)
+                              }}
+                              disabled={loading}
+                            >
+                              <MenuItem value=""><em>None</em></MenuItem>
+                              {availableLinks.map((l) => (
+                                <MenuItem key={l.id} value={l.id}>
+                                  <Box display="flex" alignItems="center" justifyContent="space-between" sx={{ width: "100%" }}>
+                                    <Typography variant="body2" noWrap sx={{ flexGrow: 1, mr: 1 }}>
+                                      {l.name || l.slug}
+                                      {!l.enabled && (
+                                        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
+                                          (disabled)
+                                        </Typography>
+                                      )}
+                                    </Typography>
+                                    <IconButton
+                                      size="small"
+                                      component="span"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        window.open(`/reporting/client/${l.slug}`, "_blank", "noopener,noreferrer")
+                                      }}
+                                      sx={{ p: 0.25, flexShrink: 0 }}
+                                      title="Open report in new tab"
+                                    >
+                                      <OpenInNewIcon sx={{ fontSize: 13, color: "text.secondary" }} />
+                                    </IconButton>
+                                  </Box>
+                                </MenuItem>
+                              ))}
+                            </Select>
+                          </FormControl>
+                          <IconButton
+                            size="small"
+                            onClick={() => setAttachedLinkIds(attachedLinkIds.filter((_, i) => i !== slotIndex))}
+                            disabled={loading}
+                            sx={{ color: "text.secondary", flexShrink: 0 }}
+                            title="Remove this slot"
+                          >
+                            <CloseIcon fontSize="small" />
+                          </IconButton>
+                        </Box>
+                      )
+                    })}
+                    {attachedLinkIds.length === 0 && (
+                      <Typography variant="caption" color="text.secondary">
+                        No reports attached. Click + to add one.
+                      </Typography>
+                    )}
+                  </Box>
+                )
+              })()}
             </Box>
           )}
           {linkDialogTab === 1 && (

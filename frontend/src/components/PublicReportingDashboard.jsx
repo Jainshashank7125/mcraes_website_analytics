@@ -237,10 +237,22 @@ function PublicReportingDashboard() {
 
   const attachedLinks = brandInfo?.dashboard_link?.attached_links || []
   const hasMultipleReports = attachedLinks.length > 0
+
+  // Generate a short label from a link's start_date, e.g. "Dec '25" or "Apr '26"
+  const shortTabLabel = (link) => {
+    const raw = link?.start_date
+    if (!raw) return link?.name || 'Report'
+    const d = new Date(String(raw).split('T')[0] + 'T00:00:00')
+    if (isNaN(d.getTime())) return link?.name || 'Report'
+    const month = d.toLocaleString('en-US', { month: 'short' })
+    const year = String(d.getFullYear()).slice(2)
+    return `${month} '${year}`
+  }
+
   const tabLabels = hasMultipleReports
     ? [
-        brandInfo?.dashboard_link?.name || 'Report 1',
-        ...attachedLinks.map((l, i) => l.name || `Report ${i + 2}`),
+        shortTabLabel(brandInfo?.dashboard_link),
+        ...attachedLinks.map((l) => shortTabLabel(l)),
       ]
     : []
 
@@ -367,11 +379,30 @@ function PublicReportingDashboard() {
       >
         {/* Top-level report tabs — only shown when attached links exist */}
         {hasMultipleReports && (
-          <Box sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper', px: 3 }}>
+          <Box
+            sx={{
+              borderBottom: 1,
+              borderColor: 'divider',
+              bgcolor: 'background.paper',
+              px: { xs: 1, sm: 3 },
+            }}
+          >
             <Tabs
               value={activeReportIndex}
               onChange={handleReportTabChange}
-              sx={{ '& .MuiTab-root': { textTransform: 'none', fontWeight: 600 } }}
+              variant="scrollable"
+              scrollButtons="auto"
+              allowScrollButtonsMobile
+              sx={{
+                '& .MuiTab-root': {
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  minWidth: 80,
+                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                  px: { xs: 1.5, sm: 2 },
+                },
+                '& .MuiTabs-scrollButtons': { color: 'primary.main' },
+              }}
             >
               {tabLabels.map((label, i) => (
                 <Tab key={i} label={label} />

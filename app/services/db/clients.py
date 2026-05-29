@@ -1066,7 +1066,7 @@ class ClientDBMixin(BaseDB):
                 # Resolve attached_link_ids to basic link info for public view toggling
                 attached_ids = link_dict.get("attached_link_ids") or []
                 attached_links = []
-                for aid in attached_ids[:2]:
+                for aid in attached_ids:
                     aq = select(table).where(table.c.id == aid).limit(1)
                     arow = self.db.execute(aq).first()
                     if arow:
@@ -1238,9 +1238,9 @@ class ClientDBMixin(BaseDB):
             # Audit: created_by if column exists
             if "created_by" in table_columns and user_email:
                 link_data["created_by"] = user_email
-            # Attached links (up to 2 sibling link IDs for public view toggling)
+            # Attached sibling link IDs for public view toggling
             if "attached_link_ids" in table_columns and attached_link_ids is not None:
-                link_data["attached_link_ids"] = attached_link_ids[:2]
+                link_data["attached_link_ids"] = attached_link_ids
 
             insert_stmt = pg_insert(table).values(
                 **link_data,
@@ -1497,7 +1497,7 @@ class ClientDBMixin(BaseDB):
             executive_summary = updates.pop("executive_summary", None)
             # Extract attached_link_ids (stored directly on dashboard_links)
             raw_attached_ids = updates.pop("attached_link_ids", None)
-            attached_link_ids = raw_attached_ids[:2] if raw_attached_ids is not None else None
+            attached_link_ids = raw_attached_ids if raw_attached_ids is not None else None
 
             # Only allow updating specific fields
             allowed_fields = ["start_date", "end_date", "enabled", "expires_at", "slug"]

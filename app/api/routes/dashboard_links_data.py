@@ -151,11 +151,13 @@ async def upsert_dashboard_link_for_client(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    # Validate attached_link_ids — must belong to the same client, max 2
+    # Validate attached_link_ids — must belong to the same client
     if request.attached_link_ids:
-        if len(request.attached_link_ids) > 2:
-            raise HTTPException(status_code=400, detail="Cannot attach more than 2 links")
-        client_link_ids = {l["id"] for l in supabase.list_dashboard_links_for_client(client_id)}
+        client_links = supabase.list_dashboard_links_for_client(client_id)
+        client_link_ids = {l["id"] for l in client_links}
+        max_attachable = max(0, len(client_link_ids) - 1)  # can't attach self
+        if len(request.attached_link_ids) > max_attachable:
+            raise HTTPException(status_code=400, detail=f"Cannot attach more than {max_attachable} links for this client")
         invalid = [i for i in request.attached_link_ids if i not in client_link_ids]
         if invalid:
             raise HTTPException(status_code=400, detail=f"Attached link IDs not found for this client: {invalid}")
@@ -279,10 +281,11 @@ async def update_dashboard_link(
     if request.executive_summary is not None:
         update_data["executive_summary"] = request.executive_summary
     if request.attached_link_ids is not None:
-        if len(request.attached_link_ids) > 2:
-            raise HTTPException(status_code=400, detail="Cannot attach more than 2 links")
         # Validate all IDs belong to this client and are not self-referential
         client_link_ids = {l["id"] for l in links}
+        max_attachable = max(0, len(client_link_ids) - 1)
+        if len(request.attached_link_ids) > max_attachable:
+            raise HTTPException(status_code=400, detail=f"Cannot attach more than {max_attachable} links for this client")
         invalid = [i for i in request.attached_link_ids if i not in client_link_ids or i == link_id]
         if invalid:
             raise HTTPException(status_code=400, detail=f"Invalid attached link IDs: {invalid}")
