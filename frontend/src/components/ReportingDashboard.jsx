@@ -3129,9 +3129,13 @@ function ReportingDashboard({
       }
     }
     
-    // Load attached link IDs for public view toggling
-    const ids = link.attached_link_ids || []
-    setAttachedLinkIds([ids[0] ?? null, ids[1] ?? null])
+    // Load attached link IDs — preserve all existing, pad to minimum 2 empty slots
+    const ids = (link.attached_link_ids || []).filter(id => id != null)
+    const MIN_SLOTS = 2
+    const slots = ids.length >= MIN_SLOTS
+      ? ids
+      : [...ids, ...Array(MIN_SLOTS - ids.length).fill(null)]
+    setAttachedLinkIds(slots)
 
     // Don't open dialog automatically - user will click "Edit Link" button to open it
   };

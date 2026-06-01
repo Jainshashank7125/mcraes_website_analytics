@@ -36,6 +36,7 @@ function PublicReportingDashboard() {
   const [activeReportIndex, setActiveReportIndex] = useState(0)
   const [activeSlug, setActiveSlug] = useState(null)
   const [activeLinkData, setActiveLinkData] = useState(null)
+  const [activeTabLoading, setActiveTabLoading] = useState(false)
   
   // Read date range from URL params, fallback to saved client dates
   // Accept both new `from`/`to` params and legacy `startDate`/`endDate`
@@ -233,6 +234,7 @@ function PublicReportingDashboard() {
     setActiveReportIndex(0)
     setActiveSlug(null)
     setActiveLinkData(null)
+    setActiveTabLoading(false)
   }, [slug])
 
   const attachedLinks = brandInfo?.dashboard_link?.attached_links || []
@@ -259,12 +261,18 @@ function PublicReportingDashboard() {
   const handleReportTabChange = async (event, newIndex) => {
     setActiveReportIndex(newIndex)
     if (newIndex === 0) {
+      setActiveTabLoading(false)
       setActiveSlug(null)
       setActiveLinkData(null)
       return
     }
     const targetLink = attachedLinks[newIndex - 1]
     if (!targetLink) return
+
+    // Show loading immediately — don't wait for the async fetch
+    setActiveTabLoading(true)
+    setActiveLinkData(null)
+
     try {
       const fetchedLink = await clientAPI.getDashboardLinkBySlug(targetLink.slug)
       setActiveSlug(targetLink.slug)
@@ -278,6 +286,8 @@ function PublicReportingDashboard() {
       } else {
         setActiveLinkData({ __error: 'unavailable' })
       }
+    } finally {
+      setActiveTabLoading(false)
     }
   }
 
@@ -411,8 +421,20 @@ function PublicReportingDashboard() {
           </Box>
         )}
 
-        {/* Error state for a disabled/expired attached link */}
-        {activeLinkData?.__error ? (
+        {/* Tab switch loading spinner — shown immediately on click, before data arrives */}
+        {activeTabLoading ? (
+          <Box
+            sx={{
+              minHeight: '60vh',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <CircularProgress size={44} thickness={4} />
+          </Box>
+        ) : activeLinkData?.__error ? (
+          /* Error state for a disabled/expired attached link */
           <Container maxWidth="lg" sx={{ py: 4 }}>
             <Alert severity="warning" sx={{ borderRadius: 2 }}>
               <Typography>
