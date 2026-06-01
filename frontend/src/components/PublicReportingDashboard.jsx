@@ -12,6 +12,8 @@ import {
   Container,
   ThemeProvider,
   CssBaseline,
+  Tabs,
+  Tab,
 } from '@mui/material'
 import { createTheme } from '@mui/material/styles'
 import { motion } from 'framer-motion'
@@ -29,6 +31,12 @@ function PublicReportingDashboard() {
   const [linkExpired, setLinkExpired] = useState(false)
   const [linkDisabled, setLinkDisabled] = useState(false)
   const theme = useTheme()
+
+  // Attached reports tab state
+  const [activeReportIndex, setActiveReportIndex] = useState(0)
+  const [activeSlug, setActiveSlug] = useState(null)
+  const [activeLinkData, setActiveLinkData] = useState(null)
+  const [activeTabLoading, setActiveTabLoading] = useState(false)
   
   // Read date range from URL params, fallback to saved client dates
   // Accept both new `from`/`to` params and legacy `startDate`/`endDate`
@@ -221,6 +229,68 @@ function PublicReportingDashboard() {
     fetchBrand()
   }, [slug])
 
+  // Reset attached report tabs when the primary slug changes
+  useEffect(() => {
+    setActiveReportIndex(0)
+    setActiveSlug(null)
+    setActiveLinkData(null)
+    setActiveTabLoading(false)
+  }, [slug])
+
+  const attachedLinks = brandInfo?.dashboard_link?.attached_links || []
+  const hasMultipleReports = attachedLinks.length > 0
+
+  // Generate a short label from a link's start_date, e.g. "Dec '25" or "Apr '26"
+  const shortTabLabel = (link) => {
+    const raw = link?.start_date
+    if (!raw) return link?.name || 'Report'
+    const d = new Date(String(raw).split('T')[0] + 'T00:00:00')
+    if (isNaN(d.getTime())) return link?.name || 'Report'
+    const month = d.toLocaleString('en-US', { month: 'short' })
+    const year = String(d.getFullYear()).slice(2)
+    return `${month} '${year}`
+  }
+
+  const tabLabels = hasMultipleReports
+    ? [
+        shortTabLabel(brandInfo?.dashboard_link),
+        ...attachedLinks.map((l) => shortTabLabel(l)),
+      ]
+    : []
+
+  const handleReportTabChange = async (event, newIndex) => {
+    setActiveReportIndex(newIndex)
+    if (newIndex === 0) {
+      setActiveTabLoading(false)
+      setActiveSlug(null)
+      setActiveLinkData(null)
+      return
+    }
+    const targetLink = attachedLinks[newIndex - 1]
+    if (!targetLink) return
+
+    // Show loading immediately — don't wait for the async fetch
+    setActiveTabLoading(true)
+    setActiveLinkData(null)
+
+    try {
+      const fetchedLink = await clientAPI.getDashboardLinkBySlug(targetLink.slug)
+      setActiveSlug(targetLink.slug)
+      setActiveLinkData({ ...brandInfo, dashboard_link: fetchedLink })
+    } catch (err) {
+      const status = err.response?.status
+      if (status === 403) {
+        setActiveLinkData({ __error: 'disabled' })
+      } else if (status === 410) {
+        setActiveLinkData({ __error: 'expired' })
+      } else {
+        setActiveLinkData({ __error: 'unavailable' })
+      }
+    } finally {
+      setActiveTabLoading(false)
+    }
+  }
+
   if (loading) {
     return (
       <Box
@@ -296,6 +366,14 @@ function PublicReportingDashboard() {
   // Let the dashboard endpoint check for Agency Analytics/GA4 data and show appropriate message
   // Only show "no data" message if dashboard endpoint also returns no_data
 
+  // Determine the active link's start/end dates for the ReportingDashboard
+  const activeStartDate = activeSlug
+    ? (activeLinkData?.dashboard_link?.start_date?.split?.('T')?.[0] ?? activeLinkData?.dashboard_link?.start_date)
+    : (effectiveStartDate || undefined)
+  const activeEndDate = activeSlug
+    ? (activeLinkData?.dashboard_link?.end_date?.split?.('T')?.[0] ?? activeLinkData?.dashboard_link?.end_date)
+    : (effectiveEndDate || undefined)
+
   // Render the ReportingDashboard component but override it to use slug-based data fetching
   // We'll create a wrapper that passes the brand_id to ReportingDashboard
   return (
@@ -306,17 +384,76 @@ function PublicReportingDashboard() {
           minHeight: '100vh',
           bgcolor: brandTheme.palette.background.default,
           fontFamily: brandTheme.typography.fontFamily,
-          // Apply theme colors globally
           color: brandTheme.palette.text.primary,
         }}
       >
-        {/* Pass slug and date range to ReportingDashboard */}
-        <ReportingDashboard 
-          publicSlug={slug} 
-          brandInfo={brandInfo}
-          publicStartDate={effectiveStartDate || undefined}
-          publicEndDate={effectiveEndDate || undefined}
-        />
+        {/* Top-level report tabs — only shown when attached links exist */}
+        {hasMultipleReports && (
+          <Box
+            sx={{
+              borderBottom: 1,
+              borderColor: 'divider',
+              bgcolor: 'background.paper',
+              px: { xs: 1, sm: 3 },
+            }}
+          >
+            <Tabs
+              value={activeReportIndex}
+              onChange={handleReportTabChange}
+              variant="scrollable"
+              scrollButtons="auto"
+              allowScrollButtonsMobile
+              sx={{
+                '& .MuiTab-root': {
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  minWidth: 80,
+                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                  px: { xs: 1.5, sm: 2 },
+                },
+                '& .MuiTabs-scrollButtons': { color: 'primary.main' },
+              }}
+            >
+              {tabLabels.map((label, i) => (
+                <Tab key={i} label={label} />
+              ))}
+            </Tabs>
+          </Box>
+        )}
+
+        {/* Tab switch loading spinner — shown immediately on click, before data arrives */}
+        {activeTabLoading ? (
+          <Box
+            sx={{
+              minHeight: '60vh',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <CircularProgress size={44} thickness={4} />
+          </Box>
+        ) : activeLinkData?.__error ? (
+          /* Error state for a disabled/expired attached link */
+          <Container maxWidth="lg" sx={{ py: 4 }}>
+            <Alert severity="warning" sx={{ borderRadius: 2 }}>
+              <Typography>
+                {activeLinkData.__error === 'disabled'
+                  ? 'This attached report is currently disabled.'
+                  : activeLinkData.__error === 'expired'
+                  ? 'This attached report link has expired.'
+                  : 'This attached report is unavailable.'}
+              </Typography>
+            </Alert>
+          </Container>
+        ) : (
+          <ReportingDashboard
+            publicSlug={activeSlug || slug}
+            brandInfo={activeLinkData || brandInfo}
+            publicStartDate={activeStartDate}
+            publicEndDate={activeEndDate}
+          />
+        )}
       </Box>
     </ThemeProvider>
   )

@@ -73,6 +73,8 @@ import {
   Close as CloseIcon,
   ExpandLess as ExpandLessIcon,
   Error as ErrorIcon,
+  OpenInNew as OpenInNewIcon,
+  Add as AddIcon,
 should } from "@mui/icons-material";
 import { motion } from "framer-motion";
 import {
@@ -249,6 +251,7 @@ function ReportingDashboard({
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const [editingLink, setEditingLink] = useState(null);
   const [linkDialogTab, setLinkDialogTab] = useState(0); // 0 = Basic, 1 = Advanced
+  const [attachedLinkIds, setAttachedLinkIds] = useState([null, null]); // dynamic array of attached link IDs for public view toggling
   const [linkFormData, setLinkFormData] = useState({
     name: "",
     description: "",
@@ -1296,12 +1299,61 @@ function ReportingDashboard({
     }
   };
 
-  const handleCopyOverviewLink = () => {
+  const copyTextToClipboard = async (text) => {
+    const value = typeof text === "string" ? text.trim() : "";
+    if (!value) {
+      throw new Error("Nothing to copy");
+    }
+
+    // Prefer async clipboard API when available and permitted.
+    if (window.isSecureContext && navigator?.clipboard) {
+      try {
+        await navigator.clipboard.writeText(value);
+        return;
+      } catch (err) {
+        debugWarn("navigator.clipboard.writeText failed, trying fallback", err);
+      }
+    }
+
+    // Fallback for non-secure/restricted environments.
+    const textArea = document.createElement("textarea");
+    textArea.value = value;
+    textArea.setAttribute("readonly", "");
+    textArea.style.position = "fixed";
+    textArea.style.opacity = "0";
+    textArea.style.pointerEvents = "none";
+    textArea.style.top = "0";
+    textArea.style.left = "0";
+    document.body.appendChild(textArea);
+    const selection = document.getSelection();
+    const selectedRange =
+      selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+
+    textArea.focus({ preventScroll: true });
+    textArea.select();
+    textArea.setSelectionRange(0, textArea.value.length);
+
+    const copied = document.execCommand("copy");
+    document.body.removeChild(textArea);
+    if (selectedRange && selection) {
+      selection.removeAllRanges();
+      selection.addRange(selectedRange);
+    }
+
+    if (!copied) {
+      throw new Error("Clipboard copy command failed");
+    }
+  };
+
+  const handleCopyOverviewLink = async () => {
     if (!savedOverviewLinkUrl) return;
-    navigator.clipboard.writeText(savedOverviewLinkUrl).then(
-      () => setError(null),
-      () => setError("Failed to copy URL")
-    );
+    try {
+      await copyTextToClipboard(savedOverviewLinkUrl);
+      setError(null);
+    } catch (err) {
+      debugWarn("Failed to copy overview link URL", err);
+      setError("Failed to copy URL");
+    }
   };
 
   // Generate overview for public dashboard link and save it
@@ -2788,6 +2840,7 @@ function ReportingDashboard({
     // Auto-generate name and description
     const autoName = generateAutoLinkName(currentStartDate, currentEndDate);
     const autoDescription = generateAutoLinkDescription(currentStartDate, currentEndDate);
+    setAttachedLinkIds([null, null]);
     setLinkFormData({
       name: autoName,
       description: autoDescription,
@@ -3076,6 +3129,14 @@ function ReportingDashboard({
       }
     }
     
+    // Load attached link IDs — preserve all existing, pad to minimum 2 empty slots
+    const ids = (link.attached_link_ids || []).filter(id => id != null)
+    const MIN_SLOTS = 2
+    const slots = ids.length >= MIN_SLOTS
+      ? ids
+      : [...ids, ...Array(MIN_SLOTS - ids.length).fill(null)]
+    setAttachedLinkIds(slots)
+
     // Don't open dialog automatically - user will click "Edit Link" button to open it
   };
 
@@ -3139,6 +3200,9 @@ function ReportingDashboard({
       if (globalFilters && Object.keys(globalFilters).length > 0) {
         payload.global_filters = globalFilters;
       }
+
+      // Include attached link IDs for public view toggling
+      payload.attached_link_ids = attachedLinkIds.filter(id => id !== null)
 
       // Save dashboard "last state": all three AI overview cards (executive summary, what worked, what to watch)
       // when AI Overview section is selected. Backend uses this as-is and does not regenerate.
@@ -3280,18 +3344,21 @@ function ReportingDashboard({
     }
   };
 
-  const handleCopyLinkUrl = (link) => {
+  const handleCopyLinkUrl = async (link) => {
     const baseUrl = window.location.origin;
-    const url = `${baseUrl}/reporting/client/${link.slug}`;
-    navigator.clipboard
-      .writeText(url)
-      .then(() => {
+    if (!link?.slug) {
+      setError("Cannot copy URL: selected link is missing a slug");
+      return;
+    }
+    const url = `${baseUrl}/reporting/client/${encodeURIComponent(link.slug)}`;
+    try {
+      await copyTextToClipboard(url);
       setError(null);
       debugLog("Link URL copied to clipboard");
-      })
-      .catch(() => {
+    } catch (err) {
+      debugWarn("Failed to copy link URL", err);
       setError("Failed to copy URL");
-    });
+    }
   };
 
   // Helper function to check if a section should be visible
@@ -4107,11 +4174,12 @@ function ReportingDashboard({
                           <MenuItem key={link.id} value={link.id}>
                             <Box
                               display="flex"
-                              flexDirection="column"
                               alignItems="flex-start"
-                              sx={{ width: '100%' }}
+                              justifyContent="space-between"
+                              sx={{ width: '100%', gap: 0.5 }}
                             >
-                              <Typography variant="body2" fontWeight={500}>
+                              <Box display="flex" flexDirection="column" alignItems="flex-start" sx={{ flexGrow: 1, minWidth: 0 }}>
+                              <Typography variant="body2" fontWeight={500} noWrap sx={{ maxWidth: 200 }}>
                                 {link.name || link.slug || `Link ${link.id}`}
                               </Typography>
                               {link.description && (
@@ -4141,6 +4209,21 @@ function ReportingDashboard({
                                 >
                                   {link.start_date.split('T')[0]} to {link.end_date.split('T')[0]}
                                 </Typography>
+                              )}
+                              </Box>
+                              {link.slug && (
+                                <IconButton
+                                  size="small"
+                                  component="span"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    window.open(`/reporting/client/${link.slug}`, "_blank", "noopener,noreferrer")
+                                  }}
+                                  sx={{ p: 0.25, flexShrink: 0, mt: 0.25 }}
+                                  title="Open link in new tab"
+                                >
+                                  <OpenInNewIcon sx={{ fontSize: 13, color: "text.secondary" }} />
+                                </IconButton>
                               )}
                             </Box>
                           </MenuItem>
@@ -9592,6 +9675,102 @@ function ReportingDashboard({
                   </Typography>
                 </Alert>
               )}
+              {dashboardLinks.length > 1 && (() => {
+                // Max attachable = all client links except the one being edited
+                const maxSlots = dashboardLinks.filter(l => l.id !== editingLink?.id).length
+                const canAddMore = attachedLinkIds.length < maxSlots
+                return (
+                  <Box>
+                    <Box display="flex" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5 }}>
+                      <Typography variant="body2" fontWeight={600}>
+                        Attach Additional Reports (optional)
+                      </Typography>
+                      {canAddMore && (
+                        <IconButton
+                          size="small"
+                          onClick={() => setAttachedLinkIds([...attachedLinkIds, null])}
+                          disabled={loading}
+                          sx={{ color: "primary.main" }}
+                          title="Add another report slot"
+                        >
+                          <AddIcon fontSize="small" />
+                        </IconButton>
+                      )}
+                    </Box>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5 }}>
+                      Attach existing reports so viewers can toggle between them in the public view.
+                    </Typography>
+                    {attachedLinkIds.map((slotId, slotIndex) => {
+                      // Filter out self, and IDs already picked in other slots
+                      const otherSelected = attachedLinkIds.filter((_, i) => i !== slotIndex)
+                      const availableLinks = dashboardLinks.filter(
+                        (l) => l.id !== editingLink?.id && !otherSelected.includes(l.id)
+                      )
+                      return (
+                        <Box key={slotIndex} display="flex" alignItems="center" gap={1} sx={{ mb: 1.5 }}>
+                          <FormControl fullWidth size="small">
+                            <InputLabel shrink>{`Attach Report ${slotIndex + 1}`}</InputLabel>
+                            <Select
+                              value={slotId ?? ""}
+                              displayEmpty
+                              label={`Attach Report ${slotIndex + 1}`}
+                              notched
+                              onChange={(e) => {
+                                const newIds = [...attachedLinkIds]
+                                newIds[slotIndex] = e.target.value || null
+                                setAttachedLinkIds(newIds)
+                              }}
+                              disabled={loading}
+                            >
+                              <MenuItem value=""><em>None</em></MenuItem>
+                              {availableLinks.map((l) => (
+                                <MenuItem key={l.id} value={l.id}>
+                                  <Box display="flex" alignItems="center" justifyContent="space-between" sx={{ width: "100%" }}>
+                                    <Typography variant="body2" noWrap sx={{ flexGrow: 1, mr: 1 }}>
+                                      {l.name || l.slug}
+                                      {!l.enabled && (
+                                        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
+                                          (disabled)
+                                        </Typography>
+                                      )}
+                                    </Typography>
+                                    <IconButton
+                                      size="small"
+                                      component="span"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        window.open(`/reporting/client/${l.slug}`, "_blank", "noopener,noreferrer")
+                                      }}
+                                      sx={{ p: 0.25, flexShrink: 0 }}
+                                      title="Open report in new tab"
+                                    >
+                                      <OpenInNewIcon sx={{ fontSize: 13, color: "text.secondary" }} />
+                                    </IconButton>
+                                  </Box>
+                                </MenuItem>
+                              ))}
+                            </Select>
+                          </FormControl>
+                          <IconButton
+                            size="small"
+                            onClick={() => setAttachedLinkIds(attachedLinkIds.filter((_, i) => i !== slotIndex))}
+                            disabled={loading}
+                            sx={{ color: "text.secondary", flexShrink: 0 }}
+                            title="Remove this slot"
+                          >
+                            <CloseIcon fontSize="small" />
+                          </IconButton>
+                        </Box>
+                      )
+                    })}
+                    {attachedLinkIds.length === 0 && (
+                      <Typography variant="caption" color="text.secondary">
+                        No reports attached. Click + to add one.
+                      </Typography>
+                    )}
+                  </Box>
+                )
+              })()}
             </Box>
           )}
           {linkDialogTab === 1 && (

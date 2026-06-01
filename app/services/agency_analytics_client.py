@@ -92,7 +92,16 @@ class AgencyAnalyticsClient:
             raise
     
     async def get_campaigns(self, limit: int = 50, offset: int = 0) -> List[Dict]:
-        """Get campaigns with pagination"""
+        """Get campaigns with pagination.
+
+        Only requests fields that are actually used downstream:
+          - id, url, company  → campaign matching and display
+          - scope, status, group_title, type, campaign_group_id → metadata
+          - date_created, date_modified, timezone → housekeeping
+        Fields removed (fetched but never displayed or used in logic):
+          email_addresses, phone_numbers, address, city, state, zip, country,
+          revenue, headcount, google_ignore_places, enforce_google_cid
+        """
         try:
             body = {
                 "provider": "agency-analytics-v2",
@@ -107,17 +116,6 @@ class AgencyAnalyticsClient:
                     "scope",
                     "status",
                     "group_title",
-                    "email_addresses",
-                    "phone_numbers",
-                    "address",
-                    "city",
-                    "state",
-                    "zip",
-                    "country",
-                    "revenue",
-                    "headcount",
-                    "google_ignore_places",
-                    "enforce_google_cid",
                     "timezone",
                     "type",
                     "campaign_group_id"
@@ -176,7 +174,7 @@ class AgencyAnalyticsClient:
         return all_campaigns
     
     async def get_campaign(self, campaign_id: int) -> Optional[Dict]:
-        """Get a specific campaign by ID"""
+        """Get a specific campaign by ID.  Same field set as get_campaigns."""
         try:
             body = {
                 "provider": "agency-analytics-v2",
@@ -191,17 +189,6 @@ class AgencyAnalyticsClient:
                     "scope",
                     "status",
                     "group_title",
-                    "email_addresses",
-                    "phone_numbers",
-                    "address",
-                    "city",
-                    "state",
-                    "zip",
-                    "country",
-                    "revenue",
-                    "headcount",
-                    "google_ignore_places",
-                    "enforce_google_cid",
                     "timezone",
                     "type",
                     "campaign_group_id"
