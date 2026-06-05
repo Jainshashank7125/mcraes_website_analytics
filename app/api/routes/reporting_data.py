@@ -229,6 +229,8 @@ async def get_reporting_dashboard(
         ga4_kpis = {}
         ga4_errors = []
         prev_traffic_overview = None  # Initialize to avoid scope issues
+        filtered_traffic_overview = None       # preserved when global_filters active; used in chart data section
+        filtered_prev_traffic_overview = None  # preserved when global_filters active; used in chart data section
         
         # Get GA4 property ID from client (primary) or brand (fallback)
         # CRITICAL: Must use the same property ID that has the data in GA4 UI
@@ -310,6 +312,7 @@ async def get_reporting_dashboard(
                             end_date=end_date,
                             global_filters=global_filters,
                         )
+                        filtered_traffic_overview = traffic_overview  # preserve for chart data section
 
                         # Build KPI objects directly from filtered traffic_overview
                         if traffic_overview:
@@ -339,6 +342,7 @@ async def get_reporting_dashboard(
                                     end_date=prev_end,
                                     global_filters=global_filters,
                                 )
+                                filtered_prev_traffic_overview = prev_traffic_overview  # preserve for chart data section
                             except Exception as prev_err:
                                 logger.warning(f"Could not fetch previous period with filters for comparison: {str(prev_err)}")
                             
@@ -1871,7 +1875,7 @@ async def get_reporting_dashboard(
                     logger.warning(f"[GA4 DAILY DATA] Generated zero-filled chart data due to error: {len(ga4_daily_comparison)} entries")
             except Exception as e:
                 logger.warning(f"Error fetching GA4 chart data: {str(e)}")
-        
+
         # Get impressions vs clicks and top campaigns (Agency Analytics) using SQLAlchemy Core
         # NOTE: Do NOT overwrite campaign_links here - it's already set correctly above (client-based if client_id, brand-based otherwise)
         # The campaign_links variable is already populated in the Agency Analytics KPIs section above
@@ -2845,7 +2849,7 @@ async def get_reporting_dashboard(
                     chart_data["users_over_time"] = users_over_time
             except Exception as e:
                 logger.warning(f"Error fetching GA4 chart data: {str(e)}")
-        
+
         # For chart data, reuse campaign_links derived above (client campaigns if client_id; brand links otherwise)
         if campaign_links:
             try:
@@ -2948,6 +2952,57 @@ async def get_reporting_dashboard(
                 percentage = (duration / total_time * 100) if total_time > 0 else 0
                 logger.info(f"[PERFORMANCE]   - {section}: {duration:.2f}s ({percentage:.1f}%)")
         
+        # When a country/global filter is active, override ga4_traffic_overview and
+        # ga4_daily_comparison with filtered live data from the KPI API call.
+        # This block runs OUTSIDE all chart-section try/except blocks so it executes
+        # even when the GA4 API calls above threw (e.g. traffic_sources with a filter
+        # can raise, which aborted the entire inner try before we could override).
+        if global_filters and filtered_traffic_overview:
+            try:
+                chart_data["ga4_traffic_overview"] = {
+                    "sessions":                filtered_traffic_overview.get("sessions", 0),
+                    "sessionsChange":           filtered_traffic_overview.get("sessionsChange", 0),
+                    "engagedSessions":          filtered_traffic_overview.get("engagedSessions", 0),
+                    "engagedSessionsChange":    filtered_traffic_overview.get("engagedSessionsChange", 0),
+                    "averageSessionDuration":   filtered_traffic_overview.get("averageSessionDuration", 0),
+                    "avgSessionDurationChange": filtered_traffic_overview.get("avgSessionDurationChange", 0),
+                    "engagementRate":           filtered_traffic_overview.get("engagementRate", 0),
+                    "engagementRateChange":     filtered_traffic_overview.get("engagementRateChange", 0),
+                }
+                current_daily_f = {d["date"]: d for d in (filtered_traffic_overview.get("daily_data") or [])}
+                prev_daily_f    = {d["date"]: d for d in ((filtered_prev_traffic_overview or {}).get("daily_data") or [])}
+                start_dt_f = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt_f   = datetime.strptime(end_date,   "%Y-%m-%d")
+                period_dur_f = (end_dt_f - start_dt_f).days + 1
+                ga4_daily_comparison_f = []
+                cur_f = start_dt_f
+                while cur_f <= end_dt_f:
+                    cur_fmt  = cur_f.strftime("%Y%m%d")
+                    prev_fmt = (cur_f - timedelta(days=period_dur_f)).strftime("%Y%m%d")
+                    c = current_daily_f.get(cur_fmt, {})
+                    p = prev_daily_f.get(prev_fmt, {})
+                    ga4_daily_comparison_f.append({
+                        "date":                cur_fmt,
+                        "current_users":       c.get("users",    0),
+                        "previous_users":      p.get("users",    0),
+                        "current_sessions":    c.get("sessions", 0),
+                        "previous_sessions":   p.get("sessions", 0),
+                        "current_new_users":   c.get("newUsers", 0),
+                        "previous_new_users":  p.get("newUsers", 0),
+                        "current_conversions": int(c.get("conversions", 0)),
+                        "previous_conversions":int(p.get("conversions", 0)),
+                        "current_revenue":     float(c.get("revenue", 0)),
+                        "previous_revenue":    float(p.get("revenue", 0)),
+                    })
+                    cur_f += timedelta(days=1)
+                chart_data["ga4_daily_comparison"] = ga4_daily_comparison_f
+                logger.info(
+                    f"[GA4 FILTER] Built filtered chart data from live API: "
+                    f"ga4_traffic_overview set, ga4_daily_comparison={len(ga4_daily_comparison_f)} entries"
+                )
+            except Exception as filter_chart_err:
+                logger.warning(f"[GA4 FILTER] Could not build filtered chart data: {str(filter_chart_err)}")
+
         # Determine brand_name and ga4_configured based on client or brand
         if client:
             brand_name = client.get("company_name") or client.get("name")
