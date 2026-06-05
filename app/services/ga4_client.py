@@ -618,7 +618,8 @@ class GA4APIClient:
             # IMPORTANT: We do NOT exclude 'countries' here – if the user applies a
             # Countries filter, GA4 should restrict results to those countries.
             # This mirrors GA4 UI behavior (filter on country, then view Top Countries).
-            dimension_filter = GA4FilterBuilder.build_dimension_filter(global_filters)
+            _filter_dict = GA4FilterBuilder.build_dimension_filter(global_filters)
+            dimension_filter = self._dict_to_filter_expression(_filter_dict) if _filter_dict else None
             if dimension_filter and global_filters:
                 logger.info(
                     f"[GA4 FILTER] Applying filters to get_geographic_breakdown: {GA4FilterBuilder.get_filter_summary(global_filters)}"
