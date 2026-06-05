@@ -792,6 +792,9 @@ function ReportingDashboard({
           setSelectedClientLogoUrl(publicBrandInfo.clientData.logo_url || null);
           setSelectedClientName(publicBrandInfo.clientData.company_name || null);
         }
+        // Apply global filters saved on this dashboard link (e.g. country filter)
+        const savedFilters = dashboardLink.kpi_selection?.global_filters ?? null;
+        setGlobalFilters(savedFilters && Object.keys(savedFilters).length > 0 ? savedFilters : null);
         console.log("🔍 USING DATA FROM PUBLICBRANDINFO - Dashboard link already loaded by PublicReportingDashboard");
         return; // Don't fetch again - PublicReportingDashboard already loaded everything
       }
