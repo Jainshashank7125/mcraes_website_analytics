@@ -13,6 +13,7 @@ from google.analytics.data_v1beta.types import (
     Dimension,
     Metric,
     FilterExpression,
+    FilterExpressionList,
     Filter,
     RunRealtimeReportRequest,
     OrderBy,
