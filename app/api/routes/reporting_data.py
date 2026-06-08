@@ -2101,6 +2101,7 @@ async def get_reporting_dashboard(
                     start_date,
                     end_date,
                     limit=10,
+                    global_filters=global_filters,
                 )
                 traffic_sources = await ga4_client.get_traffic_sources(
                     property_id,
@@ -2120,6 +2121,7 @@ async def get_reporting_dashboard(
                     property_id,
                     start_date,
                     end_date,
+                    global_filters=global_filters,
                 )
                 
                 chart_data["traffic_sources"] = traffic_sources if traffic_sources else []

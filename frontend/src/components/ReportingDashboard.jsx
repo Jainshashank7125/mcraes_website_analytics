@@ -8759,6 +8759,140 @@ function ReportingDashboard({
                       )}
                     />
                   </Grid>
+
+                  {/* Traffic channels filter */}
+                  <Grid item xs={12} sm={6}>
+                    <Typography
+                      variant="body2"
+                      fontWeight={600}
+                      sx={{ mb: 0.5, fontSize: "0.875rem" }}
+                    >
+                      Traffic Channels
+                    </Typography>
+                    <Autocomplete
+                      multiple
+                      size="small"
+                      options={[
+                        "Organic Search",
+                        "Direct",
+                        "Referral",
+                        "Email",
+                        "Paid Search",
+                        "Organic Social",
+                        "Paid Social",
+                        "Display",
+                        "Organic Shopping",
+                        "Paid Shopping",
+                        "Organic Video",
+                        "Paid Video",
+                        "Cross-network",
+                        "Affiliates",
+                        "Audio",
+                        "SMS",
+                        "(Other)",
+                      ]}
+                      value={tempGlobalFilters?.traffic_channels || []}
+                      onChange={(_, newValue) => {
+                        setTempGlobalFilters((prev) => {
+                          const next = { ...(prev || {}) };
+                          const cleaned = (newValue || [])
+                            .map((v) => (typeof v === "string" ? v.trim() : ""))
+                            .filter((v) => v.length > 0);
+                          if (cleaned.length === 0) {
+                            delete next.traffic_channels;
+                          } else {
+                            next.traffic_channels = cleaned;
+                          }
+                          return next;
+                        });
+                      }}
+                      renderTags={(value, getTagProps) =>
+                        value.map((option, index) => (
+                          <Chip
+                            {...getTagProps({ index })}
+                            key={option}
+                            label={option}
+                            size="small"
+                          />
+                        ))
+                      }
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          variant="outlined"
+                          placeholder="Select channels"
+                          helperText="Select one or more channels. Leave empty for all channels."
+                        />
+                      )}
+                    />
+                  </Grid>
+
+                  {/* Traffic sources filter */}
+                  <Grid item xs={12} sm={6}>
+                    <Typography
+                      variant="body2"
+                      fontWeight={600}
+                      sx={{ mb: 0.5, fontSize: "0.875rem" }}
+                    >
+                      Traffic Sources
+                    </Typography>
+                    <Autocomplete
+                      multiple
+                      freeSolo
+                      size="small"
+                      options={[
+                        "google",
+                        "bing",
+                        "yahoo",
+                        "duckduckgo.com",
+                        "(direct)",
+                        "facebook.com",
+                        "instagram.com",
+                        "youtube.com",
+                        "linkedin.com",
+                        "twitter.com",
+                        "x.com",
+                        "reddit.com",
+                        "pinterest.com",
+                        "tiktok.com",
+                        "baidu.com",
+                        "yandex.ru",
+                      ]}
+                      value={tempGlobalFilters?.traffic_sources || []}
+                      onChange={(_, newValue) => {
+                        setTempGlobalFilters((prev) => {
+                          const next = { ...(prev || {}) };
+                          const cleaned = (newValue || [])
+                            .map((v) => (typeof v === "string" ? v.trim() : ""))
+                            .filter((v) => v.length > 0);
+                          if (cleaned.length === 0) {
+                            delete next.traffic_sources;
+                          } else {
+                            next.traffic_sources = cleaned;
+                          }
+                          return next;
+                        });
+                      }}
+                      renderTags={(value, getTagProps) =>
+                        value.map((option, index) => (
+                          <Chip
+                            {...getTagProps({ index })}
+                            key={option}
+                            label={option}
+                            size="small"
+                          />
+                        ))
+                      }
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          variant="outlined"
+                          placeholder="Type or select a source"
+                          helperText="Type any GA4 source (e.g. google, bing) or select a suggestion."
+                        />
+                      )}
+                    />
+                  </Grid>
                 </Grid>
               </Box>
 

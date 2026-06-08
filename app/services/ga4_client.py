@@ -719,29 +719,30 @@ class GA4APIClient:
         global_filters: Optional[Dict[str, List[str]]] = None
     ) -> List[Dict]:
         """Get device and platform breakdown with optional global filters"""
-        from app.services.ga4_filter_builder import GA4FilterBuilder
         try:
             if not start_date:
                 start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
             if not end_date:
                 end_date = datetime.now().strftime("%Y-%m-%d")
-            
+
             client = self._get_data_client()
-            
-            request = RunReportRequest(
-                property=f"properties/{property_id}",
-                date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
-                dimensions=[
+
+            request_params = {
+                "property": f"properties/{property_id}",
+                "date_ranges": [DateRange(start_date=start_date, end_date=end_date)],
+                "dimensions": [
                     Dimension(name="deviceCategory"),
                     Dimension(name="operatingSystem"),
                 ],
-                metrics=[
+                "metrics": [
                     Metric(name="activeUsers"),
                     Metric(name="sessions"),
                     Metric(name="bounceRate"),
                 ],
-            )
-            
+            }
+
+            request_params = self._apply_filters_to_request(request_params, global_filters)
+            request = RunReportRequest(**request_params)
             response = client.run_report(request)
             
             devices = []
