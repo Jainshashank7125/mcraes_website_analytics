@@ -24,15 +24,21 @@ export const WebSocketProvider = ({ children }) => {
   const messageHandlersRef = useRef(new Set())
 
   const getWebSocketUrl = useCallback(() => {
-    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
-    const wsProtocol = API_BASE_URL.startsWith('https') ? 'wss' : 'ws'
-    const wsBaseUrl = API_BASE_URL.replace(/^https?/, wsProtocol)
+    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+    let wsBaseUrl
+    if (API_BASE_URL) {
+      const wsProtocol = API_BASE_URL.startsWith('https') ? 'wss' : 'ws'
+      wsBaseUrl = API_BASE_URL.replace(/^https?/, wsProtocol)
+    } else {
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+      wsBaseUrl = `${wsProtocol}://${window.location.host}`
+    }
     const token = localStorage.getItem('access_token')
-    
+
     if (!token) {
       throw new Error('No authentication token available')
     }
-    
+
     return `${wsBaseUrl}/api/v1/ws?token=${encodeURIComponent(token)}`
   }, [])
 

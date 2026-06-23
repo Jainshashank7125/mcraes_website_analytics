@@ -1099,49 +1099,94 @@ async def get_reporting_dashboard(
         if chart_ga4_property_id:
             try:
                 property_id = chart_ga4_property_id
-                
-                # FIX: Use GA4 API directly for accurate totals (avoids double-counting from daily aggregation)
-                # This ensures chart data matches table data and GA4 dashboard
-                logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
-                
-                # Use GA4 API directly to avoid aggregation issues
-                # IMPORTANT: Pass global_filters so charts stay consistent with KPI filters
-                top_pages = await ga4_client.get_top_pages(
-                    property_id,
-                    start_date,
-                    end_date,
-                    limit=10,
-                    global_filters=global_filters,
-                )
-                traffic_sources = await ga4_client.get_traffic_sources(
-                    property_id,
-                    start_date,
-                    end_date,
-                    global_filters=global_filters,
-                )
-                geographic = await ga4_client.get_geographic_breakdown(
-                    property_id,
-                    start_date,
-                    end_date,
-                    limit=10,
-                    include_daily_breakdown=False,
-                    global_filters=global_filters,
-                )
-                devices = await ga4_client.get_device_breakdown(
-                    property_id,
-                    start_date,
-                    end_date,
-                    global_filters=global_filters,
-                )
-                
-                chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
-                chart_data["top_pages"] = top_pages if top_pages else []
-                # Filter out blank or "(not set)" country names
-                geographic_filtered = [g for g in (geographic or []) if g.get("country") and g.get("country").strip() and g.get("country").strip().lower() not in ['(not set)', 'not set', '']]
-                chart_data["geographic_breakdown"] = geographic_filtered
-                chart_data["device_breakdown"] = devices if devices else []
-                
-                logger.info(f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} (filtered from {len(geographic or [])}), devices: {len(devices)}")
+
+                # Section A: Live GA4 API calls — isolated in their own try/except so a 504 timeout
+                # cannot block the DB-based daily comparison charts that come after this block.
+                try:
+                    logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
+                    top_pages = await ga4_client.get_top_pages(
+                        property_id,
+                        start_date,
+                        end_date,
+                        limit=10,
+                        global_filters=global_filters,
+                    )
+                    traffic_sources = await ga4_client.get_traffic_sources(
+                        property_id,
+                        start_date,
+                        end_date,
+                        global_filters=global_filters,
+                    )
+                    geographic = await ga4_client.get_geographic_breakdown(
+                        property_id,
+                        start_date,
+                        end_date,
+                        limit=10,
+                        include_daily_breakdown=False,
+                        global_filters=global_filters,
+                    )
+                    devices = await ga4_client.get_device_breakdown(
+                        property_id,
+                        start_date,
+                        end_date,
+                        global_filters=global_filters,
+                    )
+                    chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
+                    chart_data["top_pages"] = top_pages if top_pages else []
+                    geographic_filtered = [g for g in (geographic or []) if g.get("country") and g.get("country").strip() and g.get("country").strip().lower() not in ['(not set)', 'not set', '']]
+                    chart_data["geographic_breakdown"] = geographic_filtered
+                    chart_data["device_breakdown"] = devices if devices else []
+                    logger.info(f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} (filtered from {len(geographic or [])}), devices: {len(devices)}")
+                except Exception as _live_api_err:
+                    logger.warning(f"[GA4 API DIRECT] Live chart fetch failed ({_live_api_err}), falling back to stored DB data")
+                    try:
+                        from sqlalchemy import text as _sa_text
+                        _sd = datetime.strptime(start_date, "%Y-%m-%d").date()
+                        _ed = datetime.strptime(end_date, "%Y-%m-%d").date()
+                        _pid = property_id
+                        _cid = client_id  # may be None for brand-based calls
+
+                        _tp = db.execute(_sa_text("""
+                            SELECT page_path, SUM(views) AS views, SUM(users) AS users
+                            FROM ga4_top_pages
+                            WHERE property_id = :pid AND date >= :sd AND date <= :ed
+                              AND (CAST(:cid AS INTEGER) IS NULL OR client_id = :cid)
+                            GROUP BY page_path ORDER BY views DESC LIMIT 10
+                        """), {"pid": _pid, "sd": _sd, "ed": _ed, "cid": _cid}).fetchall()
+                        chart_data["top_pages"] = [{"pagePath": r[0], "views": int(r[1] or 0), "users": int(r[2] or 0), "avgSessionDuration": 0} for r in _tp]
+
+                        _ts = db.execute(_sa_text("""
+                            SELECT source AS channel, SUM(sessions) AS sessions, SUM(users) AS users,
+                                   AVG(bounce_rate) AS bounce_rate, SUM(conversions) AS conversions
+                            FROM ga4_traffic_sources
+                            WHERE property_id = :pid AND date >= :sd AND date <= :ed
+                              AND (CAST(:cid AS INTEGER) IS NULL OR client_id = :cid)
+                            GROUP BY source ORDER BY sessions DESC
+                        """), {"pid": _pid, "sd": _sd, "ed": _ed, "cid": _cid}).fetchall()
+                        chart_data["traffic_sources"] = [{"source": r[0], "channel": r[0], "sessions": int(r[1] or 0), "users": int(r[2] or 0), "bounceRate": float(r[3] or 0), "conversions": float(r[4] or 0), "conversionRate": 0} for r in _ts]
+
+                        _geo = db.execute(_sa_text("""
+                            SELECT country, SUM(sessions) AS sessions, SUM(users) AS users
+                            FROM ga4_geographic
+                            WHERE property_id = :pid AND date >= :sd AND date <= :ed
+                              AND (CAST(:cid AS INTEGER) IS NULL OR client_id = :cid)
+                              AND country IS NOT NULL AND country != '' AND country NOT IN ('(not set)', 'not set')
+                            GROUP BY country ORDER BY sessions DESC LIMIT 10
+                        """), {"pid": _pid, "sd": _sd, "ed": _ed, "cid": _cid}).fetchall()
+                        chart_data["geographic_breakdown"] = [{"country": r[0], "sessions": int(r[1] or 0), "users": int(r[2] or 0), "engagementRate": 0} for r in _geo]
+
+                        _dev = db.execute(_sa_text("""
+                            SELECT device_category, operating_system, SUM(sessions) AS sessions, SUM(users) AS users
+                            FROM ga4_devices
+                            WHERE property_id = :pid AND date >= :sd AND date <= :ed
+                              AND (CAST(:cid AS INTEGER) IS NULL OR client_id = :cid)
+                            GROUP BY device_category, operating_system ORDER BY sessions DESC LIMIT 10
+                        """), {"pid": _pid, "sd": _sd, "ed": _ed, "cid": _cid}).fetchall()
+                        chart_data["device_breakdown"] = [{"deviceCategory": r[0], "operatingSystem": r[1], "sessions": int(r[2] or 0), "users": int(r[3] or 0), "bounceRate": 0} for r in _dev]
+
+                        logger.info(f"[GA4 DB FALLBACK] top_pages={len(chart_data['top_pages'])}, traffic_sources={len(chart_data['traffic_sources'])}, geographic={len(chart_data['geographic_breakdown'])}, devices={len(chart_data['device_breakdown'])}")
+                    except Exception as _db_err:
+                        logger.warning(f"[GA4 DB FALLBACK] Failed: {_db_err}")
                 
                 # Get GA4 traffic overview for detailed metrics from stored data
                 query_brand_id = scrunch_brand_id if client_id else brand_id

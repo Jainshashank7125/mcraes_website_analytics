@@ -230,7 +230,7 @@ class GA4APIClient:
             if dimension_filter:
                 totals_request_params["dimension_filter"] = dimension_filter
 
-            totals_response = client.run_report(RunReportRequest(**totals_request_params))
+            totals_response = client.run_report(RunReportRequest(**totals_request_params), timeout=12)
 
             totals = {
                 "users": 0, "sessions": 0, "newUsers": 0,
@@ -279,7 +279,7 @@ class GA4APIClient:
                 daily_request_params["dimension_filter"] = dimension_filter
 
             daily_request  = RunReportRequest(**daily_request_params)
-            daily_response = client.run_report(daily_request)
+            daily_response = client.run_report(daily_request, timeout=12)
 
             # Accumulate weighted sums for current-period rate averages
             weighted_duration   = 0.0
@@ -356,7 +356,7 @@ class GA4APIClient:
                         Metric(name="totalRevenue"),    # index 5  ← NEW
                     ],
                 )
-                prev_totals_response = client.run_report(prev_totals_request)
+                prev_totals_response = client.run_report(prev_totals_request, timeout=12)
 
                 if prev_totals_response.rows:
                     r = prev_totals_response.rows[0]
@@ -387,7 +387,7 @@ class GA4APIClient:
                         Metric(name="bounceRate"),             # index 3  ← NEW (was missing)
                     ],
                 )
-                prev_daily_response = client.run_report(prev_daily_request)
+                prev_daily_response = client.run_report(prev_daily_request, timeout=12)
 
                 prev_weighted_duration   = 0.0
                 prev_weighted_engagement = 0.0
@@ -502,9 +502,9 @@ class GA4APIClient:
             # Apply global filters
             request_params = self._apply_filters_to_request(request_params, global_filters)
             request = RunReportRequest(**request_params)
-            
-            response = client.run_report(request)
-            
+
+            response = client.run_report(request, timeout=12)
+
             pages = []
             for row in response.rows:
                 pages.append({
@@ -558,9 +558,9 @@ class GA4APIClient:
             # Apply global filters
             request_params = self._apply_filters_to_request(request_params, global_filters)
             request = RunReportRequest(**request_params)
-            
-            response = client.run_report(request)
-            
+
+            response = client.run_report(request, timeout=12)
+
             sources = []
             for row in response.rows:
                 sessions = int(row.metric_values[0].value)
@@ -649,7 +649,7 @@ class GA4APIClient:
                     request_params["dimension_filter"] = dimension_filter
 
                 request  = RunReportRequest(**request_params)
-                response = client.run_report(request)
+                response = client.run_report(request, timeout=12)
 
                 daily_data = []
                 for row in response.rows:
@@ -690,8 +690,8 @@ class GA4APIClient:
                     request_params["dimension_filter"] = dimension_filter
                 
                 request = RunReportRequest(**request_params)
-                response = client.run_report(request)
-                
+                response = client.run_report(request, timeout=12)
+
                 countries = []
                 for row in response.rows:
                     country = row.dimension_values[0].value
@@ -739,6 +739,10 @@ class GA4APIClient:
                     Metric(name="sessions"),
                     Metric(name="bounceRate"),
                 ],
+            )
+            
+            response = client.run_report(request, timeout=12)
+
             }
 
             request_params = self._apply_filters_to_request(request_params, global_filters)
@@ -795,8 +799,8 @@ class GA4APIClient:
                 ),
             )
             
-            response = client.run_report(request)
-            
+            response = client.run_report(request, timeout=12)
+
             conversions = []
             for row in response.rows:
                 conversions.append({
