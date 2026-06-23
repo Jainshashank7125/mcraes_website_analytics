@@ -111,7 +111,7 @@ const fetchFromIpapi = async (ip) => {
  */
 const fetchFromIpApi = async (ip) => {
   try {
-    const url = `http://ip-api.com/json/${ip}`;
+    const url = `https://ip-api.com/json/${ip}`;
     const response = await axios.get(url, { timeout: 5000 });
 
     if (response.data.status === "fail") {
