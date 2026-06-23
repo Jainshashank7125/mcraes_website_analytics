@@ -1147,6 +1147,10 @@ class ClientDBMixin(BaseDB):
                         # Include show_change_period if it exists
                         if kpi_dict.get("show_change_period"):
                             kpi_selection_data["show_change_period"] = kpi_dict.get("show_change_period")
+                        # Include global_filters if present (for admin view to restore filter state)
+                        gf = kpi_dict.get("global_filters")
+                        if gf:
+                            kpi_selection_data["global_filters"] = gf
                         kpi_selections_map[link_id] = kpi_selection_data
 
             # Process links and attach related data

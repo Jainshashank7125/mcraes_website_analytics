@@ -280,6 +280,8 @@ async def update_dashboard_link(
         update_data["show_change_period"] = request.show_change_period
     if request.executive_summary is not None:
         update_data["executive_summary"] = request.executive_summary
+    if request.global_filters is not None:
+        update_data["global_filters"] = request.global_filters
     if request.attached_link_ids is not None:
         # Validate all IDs belong to this client and are not self-referential
         client_link_ids = {l["id"] for l in links}

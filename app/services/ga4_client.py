@@ -13,6 +13,7 @@ from google.analytics.data_v1beta.types import (
     Dimension,
     Metric,
     FilterExpression,
+    FilterExpressionList,
     Filter,
     RunRealtimeReportRequest,
     OrderBy,
@@ -618,7 +619,8 @@ class GA4APIClient:
             # IMPORTANT: We do NOT exclude 'countries' here – if the user applies a
             # Countries filter, GA4 should restrict results to those countries.
             # This mirrors GA4 UI behavior (filter on country, then view Top Countries).
-            dimension_filter = GA4FilterBuilder.build_dimension_filter(global_filters)
+            _filter_dict = GA4FilterBuilder.build_dimension_filter(global_filters)
+            dimension_filter = self._dict_to_filter_expression(_filter_dict) if _filter_dict else None
             if dimension_filter and global_filters:
                 logger.info(
                     f"[GA4 FILTER] Applying filters to get_geographic_breakdown: {GA4FilterBuilder.get_filter_summary(global_filters)}"
@@ -717,23 +719,22 @@ class GA4APIClient:
         global_filters: Optional[Dict[str, List[str]]] = None
     ) -> List[Dict]:
         """Get device and platform breakdown with optional global filters"""
-        from app.services.ga4_filter_builder import GA4FilterBuilder
         try:
             if not start_date:
                 start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
             if not end_date:
                 end_date = datetime.now().strftime("%Y-%m-%d")
-            
+
             client = self._get_data_client()
-            
-            request = RunReportRequest(
-                property=f"properties/{property_id}",
-                date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
-                dimensions=[
+
+            request_params = {
+                "property": f"properties/{property_id}",
+                "date_ranges": [DateRange(start_date=start_date, end_date=end_date)],
+                "dimensions": [
                     Dimension(name="deviceCategory"),
                     Dimension(name="operatingSystem"),
                 ],
-                metrics=[
+                "metrics": [
                     Metric(name="activeUsers"),
                     Metric(name="sessions"),
                     Metric(name="bounceRate"),
@@ -742,6 +743,12 @@ class GA4APIClient:
             
             response = client.run_report(request, timeout=12)
 
+            }
+
+            request_params = self._apply_filters_to_request(request_params, global_filters)
+            request = RunReportRequest(**request_params)
+            response = client.run_report(request)
+            
             devices = []
             for row in response.rows:
                 devices.append({

@@ -229,6 +229,8 @@ async def get_reporting_dashboard(
         ga4_kpis = {}
         ga4_errors = []
         prev_traffic_overview = None  # Initialize to avoid scope issues
+        filtered_traffic_overview = None       # preserved when global_filters active; used in chart data section
+        filtered_prev_traffic_overview = None  # preserved when global_filters active; used in chart data section
         
         # Get GA4 property ID from client (primary) or brand (fallback)
         # CRITICAL: Must use the same property ID that has the data in GA4 UI
@@ -310,6 +312,7 @@ async def get_reporting_dashboard(
                             end_date=end_date,
                             global_filters=global_filters,
                         )
+                        filtered_traffic_overview = traffic_overview  # preserve for chart data section
 
                         # Build KPI objects directly from filtered traffic_overview
                         if traffic_overview:
@@ -339,6 +342,7 @@ async def get_reporting_dashboard(
                                     end_date=prev_end,
                                     global_filters=global_filters,
                                 )
+                                filtered_prev_traffic_overview = prev_traffic_overview  # preserve for chart data section
                             except Exception as prev_err:
                                 logger.warning(f"Could not fetch previous period with filters for comparison: {str(prev_err)}")
                             
@@ -433,66 +437,10 @@ async def get_reporting_dashboard(
                             )
                             section_times["ga4"] = time.time() - ga4_start
                         else:
-                            # Even if traffic_overview is None or empty, create KPIs with zero values
-                            # This ensures the section stays visible even when filters return no data
-                            # IMPORTANT: Include ALL KPIs to prevent them from disappearing in the UI
-                            logger.warning(
-                                "[GA4 KPI] No traffic_overview returned when global_filters applied; creating KPIs with zero values"
-                            )
-                            ga4_kpis = {
-                                "users": {
-                                    "value": 0,
-                                    "change": 0.0,
-                                    "source": "GA4",
-                                    "label": "Total Users",
-                                    "icon": "People",
-                                },
-                                "sessions": {
-                                    "value": 0,
-                                    "change": 0.0,
-                                    "source": "GA4",
-                                    "label": "Sessions",
-                                    "icon": "BarChart",
-                                },
-                                "new_users": {
-                                    "value": 0,
-                                    "change": 0.0,
-                                    "source": "GA4",
-                                    "label": "New Users",
-                                    "icon": "PersonAdd",
-                                },
-                                "engaged_sessions": {
-                                    "value": 0,
-                                    "change": 0.0,
-                                    "source": "GA4",
-                                    "label": "Engaged Sessions",
-                                    "icon": "People",
-                                },
-                                "bounce_rate": {
-                                    "value": 0.0,
-                                    "change": 0.0,
-                                    "source": "GA4",
-                                    "label": "Bounce Rate",
-                                    "icon": "TrendingDown",
-                                    "format": "percentage",
-                                },
-                                "avg_session_duration": {
-                                    "value": 0.0,
-                                    "change": 0.0,
-                                    "source": "GA4",
-                                    "label": "Avg Session Duration",
-                                    "icon": "AccessTime",
-                                    "format": "duration",
-                                },
-                                "ga4_engagement_rate": {
-                                    "value": 0.0,
-                                    "change": 0.0,
-                                    "source": "GA4",
-                                    "label": "Engagement Rate",
-                                    "icon": "TrendingUp",
-                                    "format": "percentage",
-                                },
-                            }
+                            # GA4 returned no data for this filter — leave ga4_kpis empty so
+                            # the frontend hides the KPI cards cleanly (no fake zeros shown).
+                            logger.warning("[GA4 KPI] No traffic_overview for applied filter; skipping KPI cards.")
+                            ga4_kpis = {}
                             section_times["ga4"] = time.time() - ga4_start
                     except Exception as filter_err:
                         logger.error(
@@ -500,62 +448,8 @@ async def get_reporting_dashboard(
                             exc_info=True
                         )
                         ga4_errors.append(f"Error with global_filters: {str(filter_err)}")
-                        # Create KPIs with zero values even on error, so section stays visible
-                        # IMPORTANT: Include ALL KPIs to prevent them from disappearing in the UI
-                        ga4_kpis = {
-                            "users": {
-                                "value": 0,
-                                "change": 0.0,
-                                "source": "GA4",
-                                "label": "Total Users",
-                                "icon": "People",
-                            },
-                            "sessions": {
-                                "value": 0,
-                                "change": 0.0,
-                                "source": "GA4",
-                                "label": "Sessions",
-                                "icon": "BarChart",
-                            },
-                            "new_users": {
-                                "value": 0,
-                                "change": 0.0,
-                                "source": "GA4",
-                                "label": "New Users",
-                                "icon": "PersonAdd",
-                            },
-                            "engaged_sessions": {
-                                "value": 0,
-                                "change": 0.0,
-                                "source": "GA4",
-                                "label": "Engaged Sessions",
-                                "icon": "People",
-                            },
-                            "bounce_rate": {
-                                "value": 0.0,
-                                "change": 0.0,
-                                "source": "GA4",
-                                "label": "Bounce Rate",
-                                "icon": "TrendingDown",
-                                "format": "percentage",
-                            },
-                            "avg_session_duration": {
-                                "value": 0.0,
-                                "change": 0.0,
-                                "source": "GA4",
-                                "label": "Avg Session Duration",
-                                "icon": "AccessTime",
-                                "format": "duration",
-                            },
-                            "ga4_engagement_rate": {
-                                "value": 0.0,
-                                "change": 0.0,
-                                "source": "GA4",
-                                "label": "Engagement Rate",
-                                "icon": "TrendingUp",
-                                "format": "percentage",
-                            },
-                        }
+                        # API error — leave ga4_kpis empty so no invalid zeros are shown.
+                        ga4_kpis = {}
                         section_times["ga4"] = time.time() - ga4_start
 
                 elif use_stored_snapshot:
@@ -667,14 +561,32 @@ async def get_reporting_dashboard(
                         prev_total_conversions = prev_traffic_overview.get("conversions", 0) if prev_traffic_overview else 0
                         prev_revenue = prev_traffic_overview.get("revenue", 0) if prev_traffic_overview else 0
                     else:
-                        # No stored data available - return empty KPIs (data should be synced first)
-                        logger.warning(f"[GA4 STORED DATA] No stored data found for date range {start_date} to {end_date}. Please sync GA4 data first.")
-                        traffic_overview = None
-                        prev_traffic_overview = None
-                        total_conversions = 0
-                        revenue = 0
-                        prev_total_conversions = 0
-                        prev_revenue = 0
+                        # No stored data available — fall back to live GA4 API (handles recent/short date ranges)
+                        logger.warning(f"[GA4 STORED DATA] No stored data found for {start_date} to {end_date}. Falling back to live GA4 API.")
+                        try:
+                            traffic_overview = await ga4_client.get_traffic_overview(
+                                property_id, start_date=start_date, end_date=end_date
+                            )
+                            if traffic_overview:
+                                logger.info(f"[GA4 LIVE FALLBACK] Live API returned users={traffic_overview.get('users')} sessions={traffic_overview.get('sessions')}")
+                                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                                end_dt   = datetime.strptime(end_date,   "%Y-%m-%d")
+                                period_duration = (end_dt - start_dt).days + 1
+                                prev_end   = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                                prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                                prev_traffic_overview = await ga4_client.get_traffic_overview(
+                                    property_id, start_date=prev_start, end_date=prev_end
+                                )
+                            else:
+                                prev_traffic_overview = None
+                        except Exception as live_err:
+                            logger.warning(f"[GA4 LIVE FALLBACK] Live API also failed: {live_err}")
+                            traffic_overview = None
+                            prev_traffic_overview = None
+                        total_conversions = traffic_overview.get("conversions", 0) if traffic_overview else 0
+                        revenue           = traffic_overview.get("revenue",      0) if traffic_overview else 0
+                        prev_total_conversions = prev_traffic_overview.get("conversions", 0) if prev_traffic_overview else 0
+                        prev_revenue           = prev_traffic_overview.get("revenue",      0) if prev_traffic_overview else 0
                     
                     users_change = 0
                     # NOTE: sessionsChange from API uses 60-day lookback, but we recalculate using same-duration period
@@ -1916,7 +1828,7 @@ async def get_reporting_dashboard(
                     logger.warning(f"[GA4 DAILY DATA] Generated zero-filled chart data due to error: {len(ga4_daily_comparison)} entries")
             except Exception as e:
                 logger.warning(f"Error fetching GA4 chart data: {str(e)}")
-        
+
         # Get impressions vs clicks and top campaigns (Agency Analytics) using SQLAlchemy Core
         # NOTE: Do NOT overwrite campaign_links here - it's already set correctly above (client-based if client_id, brand-based otherwise)
         # The campaign_links variable is already populated in the Agency Analytics KPIs section above
@@ -2234,6 +2146,7 @@ async def get_reporting_dashboard(
                     start_date,
                     end_date,
                     limit=10,
+                    global_filters=global_filters,
                 )
                 traffic_sources = await ga4_client.get_traffic_sources(
                     property_id,
@@ -2253,6 +2166,7 @@ async def get_reporting_dashboard(
                     property_id,
                     start_date,
                     end_date,
+                    global_filters=global_filters,
                 )
                 
                 chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
@@ -2890,7 +2804,7 @@ async def get_reporting_dashboard(
                     chart_data["users_over_time"] = users_over_time
             except Exception as e:
                 logger.warning(f"Error fetching GA4 chart data: {str(e)}")
-        
+
         # For chart data, reuse campaign_links derived above (client campaigns if client_id; brand links otherwise)
         if campaign_links:
             try:
@@ -2993,6 +2907,57 @@ async def get_reporting_dashboard(
                 percentage = (duration / total_time * 100) if total_time > 0 else 0
                 logger.info(f"[PERFORMANCE]   - {section}: {duration:.2f}s ({percentage:.1f}%)")
         
+        # When a country/global filter is active, override ga4_traffic_overview and
+        # ga4_daily_comparison with filtered live data from the KPI API call.
+        # This block runs OUTSIDE all chart-section try/except blocks so it executes
+        # even when the GA4 API calls above threw (e.g. traffic_sources with a filter
+        # can raise, which aborted the entire inner try before we could override).
+        if global_filters and filtered_traffic_overview:
+            try:
+                chart_data["ga4_traffic_overview"] = {
+                    "sessions":                filtered_traffic_overview.get("sessions", 0),
+                    "sessionsChange":           filtered_traffic_overview.get("sessionsChange", 0),
+                    "engagedSessions":          filtered_traffic_overview.get("engagedSessions", 0),
+                    "engagedSessionsChange":    filtered_traffic_overview.get("engagedSessionsChange", 0),
+                    "averageSessionDuration":   filtered_traffic_overview.get("averageSessionDuration", 0),
+                    "avgSessionDurationChange": filtered_traffic_overview.get("avgSessionDurationChange", 0),
+                    "engagementRate":           filtered_traffic_overview.get("engagementRate", 0),
+                    "engagementRateChange":     filtered_traffic_overview.get("engagementRateChange", 0),
+                }
+                current_daily_f = {d["date"]: d for d in (filtered_traffic_overview.get("daily_data") or [])}
+                prev_daily_f    = {d["date"]: d for d in ((filtered_prev_traffic_overview or {}).get("daily_data") or [])}
+                start_dt_f = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt_f   = datetime.strptime(end_date,   "%Y-%m-%d")
+                period_dur_f = (end_dt_f - start_dt_f).days + 1
+                ga4_daily_comparison_f = []
+                cur_f = start_dt_f
+                while cur_f <= end_dt_f:
+                    cur_fmt  = cur_f.strftime("%Y%m%d")
+                    prev_fmt = (cur_f - timedelta(days=period_dur_f)).strftime("%Y%m%d")
+                    c = current_daily_f.get(cur_fmt, {})
+                    p = prev_daily_f.get(prev_fmt, {})
+                    ga4_daily_comparison_f.append({
+                        "date":                cur_fmt,
+                        "current_users":       c.get("users",    0),
+                        "previous_users":      p.get("users",    0),
+                        "current_sessions":    c.get("sessions", 0),
+                        "previous_sessions":   p.get("sessions", 0),
+                        "current_new_users":   c.get("newUsers", 0),
+                        "previous_new_users":  p.get("newUsers", 0),
+                        "current_conversions": int(c.get("conversions", 0)),
+                        "previous_conversions":int(p.get("conversions", 0)),
+                        "current_revenue":     float(c.get("revenue", 0)),
+                        "previous_revenue":    float(p.get("revenue", 0)),
+                    })
+                    cur_f += timedelta(days=1)
+                chart_data["ga4_daily_comparison"] = ga4_daily_comparison_f
+                logger.info(
+                    f"[GA4 FILTER] Built filtered chart data from live API: "
+                    f"ga4_traffic_overview set, ga4_daily_comparison={len(ga4_daily_comparison_f)} entries"
+                )
+            except Exception as filter_chart_err:
+                logger.warning(f"[GA4 FILTER] Could not build filtered chart data: {str(filter_chart_err)}")
+
         # Determine brand_name and ga4_configured based on client or brand
         if client:
             brand_name = client.get("company_name") or client.get("name")
