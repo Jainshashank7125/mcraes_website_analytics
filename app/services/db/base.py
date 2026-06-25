@@ -7,12 +7,16 @@ from app.db.models import Brand, Prompt, Response, Citation, AuditLog, Client, D
 from app.core.database import get_supabase_client
 import logging
 import re
+import threading
 import unicodedata
 import uuid
 from urllib.parse import urlparse
 from datetime import datetime, timedelta, date
 
 logger = logging.getLogger(__name__)
+
+_GLOBAL_TABLE_CACHE: dict = {}
+_TABLE_CACHE_LOCK = threading.Lock()
 
 
 class BaseDB:
@@ -31,7 +35,6 @@ class BaseDB:
             self.db = db
             self._close_db = False
         self._supabase_client = None  # Lazy-loaded for backward compatibility
-        self._table_cache = {}  # Cache table metadata to avoid repeated reflection
 
     @property
     def client(self):
@@ -65,13 +68,14 @@ class BaseDB:
         return self.db.execute(text(query), params or {})
 
     def _get_table(self, table_name: str) -> Table:
-        """Get table object using reflection (with caching for performance)"""
-        # Use cache to avoid repeated reflection
-        if table_name not in self._table_cache:
-            metadata = MetaData()
-            metadata.reflect(bind=self.db.bind, only=[table_name])
-            self._table_cache[table_name] = metadata.tables[table_name]
-        return self._table_cache[table_name]
+        """Get table object using reflection (process-level cache; reflects once per table per process)"""
+        if table_name not in _GLOBAL_TABLE_CACHE:
+            with _TABLE_CACHE_LOCK:
+                if table_name not in _GLOBAL_TABLE_CACHE:
+                    metadata = MetaData()
+                    metadata.reflect(bind=self.db.bind, only=[table_name])
+                    _GLOBAL_TABLE_CACHE[table_name] = metadata.tables[table_name]
+        return _GLOBAL_TABLE_CACHE[table_name]
 
     def _table_select(self, table_name: str, filters: Optional[Dict] = None, limit: Optional[int] = None, offset: Optional[int] = None, order_by: Optional[str] = None, desc: bool = False) -> List[Dict]:
         """Helper method to select from any table using SQLAlchemy Core"""

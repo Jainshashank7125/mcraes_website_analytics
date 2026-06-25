@@ -3031,20 +3031,14 @@ function ReportingDashboard({
           filters: linkFilters,
           filtersChanged
         });
-        // Reload dashboard data to apply filters if they changed
-        if (filtersChanged) {
-          setTimeout(async () => {
-            await loadDashboardData();
-          }, 200);
-        }
+          // useEffect([globalFilters]) at line 1020 detects the setGlobalFilters() call above
+        // and fires loadDashboardData automatically — no explicit reload needed here.
       } else {
         // Clear filters if link doesn't have any
         if (globalFilters) {
           setGlobalFilters(null);
           debugLog("Clearing global filters - link has no filters");
-          setTimeout(async () => {
-            await loadDashboardData();
-          }, 200);
+          // useEffect([globalFilters]) fires loadDashboardData automatically on null change.
         }
       }
 

@@ -56,17 +56,10 @@ class GA4TokenService:
     
     @staticmethod
     def get_access_token() -> Optional[str]:
-        """Get access token from database or file (in that order)"""
-        # Try database first
-        token = GA4TokenService.get_token_from_db()
-        if token:
-            return token
-        
-        # Try file
+        """Get access token from file (DB path removed — always failed at runtime)."""
         token = GA4TokenService.get_token_from_file()
         if token:
             return token
-        
-        logger.warning("No valid access token found. Run generate_ga4_token.py to generate one.")
+        logger.warning("No valid GA4 access token found. Run generate_ga4_token.py to regenerate.")
         return None
 
