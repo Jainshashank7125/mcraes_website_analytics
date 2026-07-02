@@ -476,6 +476,7 @@ async def generate_overall_overview(
         visible_sections: Optional[set] = None
         link_has_config = False
 
+        dashboard_link = None  # kept in outer scope for write-once save after generation
         if request.dashboard_link_slug:
             try:
                 from app.services.supabase_service import SupabaseService
@@ -957,7 +958,24 @@ Requirements:
             # Add metadata
             executive_summary_data["generated_at"] = datetime.now().isoformat()
             logger.info(f"[Executive Summary] Executive summary generated successfully at {executive_summary_data['generated_at']}")
-            
+
+            # Write-once: if called with a slug and the link has no stored summary yet, persist it now.
+            # This covers the public-view case where the frontend cannot save (requires auth).
+            # Only saves when there is no existing summary to avoid overwriting admin-approved content.
+            if request.dashboard_link_slug and dashboard_link and not dashboard_link.get("executive_summary"):
+                try:
+                    from app.services.supabase_service import SupabaseService
+                    _svc = SupabaseService(db=db)
+                    _link_id = dashboard_link.get("id")
+                    if _link_id:
+                        _svc.update_dashboard_link(
+                            link_id=_link_id,
+                            updates={"executive_summary": executive_summary_data},
+                        )
+                        logger.info(f"[Executive Summary] Auto-saved summary to dashboard link {_link_id} (write-once, no prior summary)")
+                except Exception as _save_err:
+                    logger.warning(f"[Executive Summary] Could not auto-save summary to dashboard link: {str(_save_err)}")
+
         except json.JSONDecodeError as e:
             logger.error(f"[Executive Summary] Failed to parse OpenAI response as JSON: {str(e)}")
             logger.error(f"[Executive Summary] Response text (first 500 chars): {response_text[:500]}")
