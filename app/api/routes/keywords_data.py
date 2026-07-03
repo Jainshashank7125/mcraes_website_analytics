@@ -108,7 +108,11 @@ async def get_client_keywords(
         campaigns_table = supabase._get_table("agency_analytics_campaigns")
         rankings_table = supabase._get_table("agency_analytics_keyword_rankings")
         
-        # Averages from rankings within the date range
+        # Averages from rankings within the date range.
+        # Scoped to this client's campaigns via the indexed campaign_id column —
+        # without this, the aggregate ran over every client's rankings in the date
+        # range (millions of rows) even though only ~this client's rows are ever
+        # joined back in below; the extra work was always discarded.
         averages_subquery = (
             select(
                 rankings_table.c.keyword_id.label("avg_keyword_id"),
@@ -117,6 +121,7 @@ async def get_client_keywords(
             )
             .where(
                 and_(
+                    rankings_table.c.campaign_id.in_(campaign_ids),
                     rankings_table.c.date >= start_date,
                     rankings_table.c.date <= end_date,
                 )
@@ -165,25 +170,38 @@ async def get_client_keywords(
             if 'company' in kw_dict:
                 kw_dict['agency_analytics_campaigns'] = {'company': kw_dict.pop('company')}
             keywords_data.append(kw_dict)
-        
-        # Process and filter by summary fields (volume, rankings, competition) - using latest ranking per keyword within range
-        filtered_keywords = []
-        for kw in keywords_data:
-            # Latest ranking in range
-            ranking_row = supabase.db.execute(
+
+        # Bulk-fetch the latest ranking row per keyword in one query (Postgres DISTINCT ON),
+        # instead of one query per keyword. Every call site below that needs "the latest
+        # ranking in range for keyword X" reads from this dict rather than re-querying.
+        keyword_ids_in_scope = [kw.get("id") for kw in keywords_data if kw.get("id") is not None]
+        latest_ranking_by_keyword: Dict[int, Dict[str, Any]] = {}
+        if keyword_ids_in_scope:
+            latest_ranking_query = (
                 select(rankings_table)
                 .where(
                     and_(
-                        rankings_table.c.keyword_id == kw.get("id"),
+                        rankings_table.c.keyword_id.in_(keyword_ids_in_scope),
                         rankings_table.c.date >= start_date,
                         rankings_table.c.date <= end_date,
                     )
                 )
-                .order_by(rankings_table.c.date.desc())
-                .limit(1)
-            ).fetchone()
-            summary = dict(ranking_row._mapping) if ranking_row else {}
-            
+                .distinct(rankings_table.c.keyword_id)
+                .order_by(rankings_table.c.keyword_id, rankings_table.c.date.desc())
+            )
+            for row in db.execute(latest_ranking_query):
+                row_dict = dict(row._mapping)
+                latest_ranking_by_keyword[row_dict["keyword_id"]] = row_dict
+
+        def get_latest_ranking(keyword_id):
+            return latest_ranking_by_keyword.get(keyword_id, {})
+
+        # Process and filter by summary fields (volume, rankings, competition) - using latest ranking per keyword within range
+        filtered_keywords = []
+        for kw in keywords_data:
+            # Latest ranking in range
+            summary = get_latest_ranking(kw.get("id"))
+
             # Apply summary-based filters
             volume = summary.get("volume", 0) or 0
             # Require volume > 0 and not null unless include_zero_volume (e.g. for report view)
@@ -220,59 +238,29 @@ async def get_client_keywords(
             
             filtered_keywords.append(kw)
         
-        # Sort keywords (use latest ranking fetched above)
+        # Sort keywords (use latest ranking fetched above).
+        # Every key includes keyword id as a tiebreaker so pagination is stable and
+        # reproducible across requests when multiple keywords share the same value
+        # (previously unordered ties could shift between pages on repeat requests).
         reverse_order = sort_order.lower() == "desc"
         if sort_by == "volume":
             filtered_keywords.sort(
-                key=lambda x: supabase.db.execute(
-                    select(rankings_table.c.volume)
-                    .where(
-                        and_(
-                            rankings_table.c.keyword_id == x.get("id"),
-                            rankings_table.c.date >= start_date,
-                            rankings_table.c.date <= end_date,
-                        )
-                    )
-                    .order_by(rankings_table.c.date.desc())
-                    .limit(1)
-                ).scalar() or 0,
+                key=lambda x: (get_latest_ranking(x.get("id")).get("volume") or 0, x.get("id")),
                 reverse=reverse_order
             )
         elif sort_by == "google_ranking":
             filtered_keywords.sort(
-                key=lambda x: supabase.db.execute(
-                    select(rankings_table.c.google_ranking)
-                    .where(
-                        and_(
-                            rankings_table.c.keyword_id == x.get("id"),
-                            rankings_table.c.date >= start_date,
-                            rankings_table.c.date <= end_date,
-                        )
-                    )
-                    .order_by(rankings_table.c.date.desc())
-                    .limit(1)
-                ).scalar() or 999,
+                key=lambda x: (get_latest_ranking(x.get("id")).get("google_ranking") or 999, x.get("id")),
                 reverse=not reverse_order  # Lower ranking is better, so reverse logic
             )
         elif sort_by == "bing_ranking":
             filtered_keywords.sort(
-                key=lambda x: supabase.db.execute(
-                    select(rankings_table.c.bing_ranking)
-                    .where(
-                        and_(
-                            rankings_table.c.keyword_id == x.get("id"),
-                            rankings_table.c.date >= start_date,
-                            rankings_table.c.date <= end_date,
-                        )
-                    )
-                    .order_by(rankings_table.c.date.desc())
-                    .limit(1)
-                ).scalar() or 999,
+                key=lambda x: (get_latest_ranking(x.get("id")).get("bing_ranking") or 999, x.get("id")),
                 reverse=not reverse_order
             )
         elif sort_by == "keyword_phrase":
             filtered_keywords.sort(
-                key=lambda x: (x.get("keyword_phrase", "") or "").lower(),
+                key=lambda x: ((x.get("keyword_phrase", "") or "").lower(), x.get("id")),
                 reverse=reverse_order
             )
         
@@ -288,19 +276,7 @@ async def get_client_keywords(
         
         for kw in filtered_keywords:
             # Latest ranking in range
-            ranking_row = supabase.db.execute(
-                select(rankings_table)
-                .where(
-                    and_(
-                        rankings_table.c.keyword_id == kw.get("id"),
-                        rankings_table.c.date >= start_date,
-                        rankings_table.c.date <= end_date,
-                    )
-                )
-                .order_by(rankings_table.c.date.desc())
-                .limit(1)
-            ).fetchone()
-            summary = dict(ranking_row._mapping) if ranking_row else {}
+            summary = get_latest_ranking(kw.get("id"))
             volume = summary.get("volume", 0) or 0
             loc = kw.get("search_location_formatted_name") or kw.get("search_location") or kw.get("search_location_country_code")
             if loc:
@@ -332,20 +308,7 @@ async def get_client_keywords(
         formatted_keywords = []
         for kw in paginated_keywords:
             # Get the LATEST ranking within the date range (not average)
-            # This query orders by date DESC and limits to 1 to get the most recent ranking
-            ranking_row = supabase.db.execute(
-                select(rankings_table)
-                .where(
-                    and_(
-                        rankings_table.c.keyword_id == kw.get("id"),
-                        rankings_table.c.date >= start_date,
-                        rankings_table.c.date <= end_date,
-                    )
-                )
-                .order_by(rankings_table.c.date.desc())
-                .limit(1)
-            ).fetchone()
-            summary = dict(ranking_row._mapping) if ranking_row else {}
+            summary = get_latest_ranking(kw.get("id"))
             volume = summary.get("volume", 0) or 0
             
             campaign = kw.get("agency_analytics_campaigns")

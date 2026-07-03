@@ -3103,19 +3103,22 @@ function ReportingDashboard({
         const linkFilters = link.kpi_selection.global_filters;
         const filtersChanged = JSON.stringify(globalFilters) !== JSON.stringify(linkFilters);
         setGlobalFilters(linkFilters);
-        debugLog("Loaded global filters from dashboard link", { 
-          linkId: link.id, 
+        // The manualLoadTrigger bump below already reloads everything for this link
+        // (dates + filters + KPI selection together). Sync the ref the [globalFilters]
+        // effect (line ~1020) compares against so it doesn't also fire a second,
+        // redundant reload for the same filter change.
+        prevGlobalFiltersRef.current = linkFilters;
+        debugLog("Loaded global filters from dashboard link", {
+          linkId: link.id,
           filters: linkFilters,
           filtersChanged
         });
-          // useEffect([globalFilters]) at line 1020 detects the setGlobalFilters() call above
-        // and fires loadDashboardData automatically — no explicit reload needed here.
       } else {
         // Clear filters if link doesn't have any
         if (globalFilters) {
           setGlobalFilters(null);
+          prevGlobalFiltersRef.current = null;
           debugLog("Clearing global filters - link has no filters");
-          // useEffect([globalFilters]) fires loadDashboardData automatically on null change.
         }
       }
 
@@ -3200,6 +3203,10 @@ function ReportingDashboard({
           startDate: formattedStartDate,
           endDate: formattedEndDate,
         });
+        // Date-only changes don't auto-reload (see the loadAllData effect's
+        // shouldLoad gate) — force a reload so the selected link's period
+        // actually loads instead of leaving stale data on screen.
+        setManualLoadTrigger((prev) => prev + 1);
       }
     }
     

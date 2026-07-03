@@ -2091,50 +2091,12 @@ async def get_reporting_dashboard(
         if chart_ga4_property_id:
             try:
                 property_id = chart_ga4_property_id
-                
-                # FIX: Use GA4 API directly for accurate totals (avoids double-counting from daily aggregation)
-                # This ensures chart data matches table data and GA4 dashboard
-                logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
-                
-                # Use GA4 API directly to avoid aggregation issues
-                # IMPORTANT: Pass global_filters so charts stay consistent with KPI filters
-                top_pages = await ga4_client.get_top_pages(
-                    property_id,
-                    start_date,
-                    end_date,
-                    limit=10,
-                    global_filters=global_filters,
-                )
-                traffic_sources = await ga4_client.get_traffic_sources(
-                    property_id,
-                    start_date,
-                    end_date,
-                    global_filters=global_filters,
-                )
-                geographic = await ga4_client.get_geographic_breakdown(
-                    property_id,
-                    start_date,
-                    end_date,
-                    limit=10,
-                    include_daily_breakdown=False,
-                    global_filters=global_filters,
-                )
-                devices = await ga4_client.get_device_breakdown(
-                    property_id,
-                    start_date,
-                    end_date,
-                    global_filters=global_filters,
-                )
-                
-                chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
-                chart_data["top_pages"] = top_pages if top_pages else []
-                # Filter out blank or "(not set)" country names
-                geographic_filtered = [g for g in (geographic or []) if g.get("country") and g.get("country").strip() and g.get("country").strip().lower() not in ['(not set)', 'not set', '']]
-                chart_data["geographic_breakdown"] = geographic_filtered
-                chart_data["device_breakdown"] = devices if devices else []
-                
-                logger.info(f"[GA4 API DIRECT] Chart data loaded - top_pages: {len(top_pages)}, traffic_sources: {len(traffic_sources)}, geographic: {len(geographic_filtered)} (filtered from {len(geographic or [])}), devices: {len(devices)}")
-                
+
+                # NOTE: top_pages/traffic_sources/geographic_breakdown/device_breakdown are already
+                # fetched and set into chart_data above (see the asyncio.gather block earlier in this
+                # function) — this used to re-fetch the same 4 GA4 reports a second time, sequentially,
+                # which only added duplicate latency without changing the result.
+
                 # Get GA4 traffic overview for detailed metrics from stored data
                 query_brand_id = scrunch_brand_id if client_id else brand_id
                 traffic_overview = supabase.get_ga4_traffic_overview_by_date_range(query_brand_id, property_id, start_date, end_date, client_id=client_id)
