@@ -210,6 +210,8 @@ class OverallOverviewRequest(BaseModel):
     selected_kpis: Optional[List[str]] = Field(None, description="Current KPI selection when no link (e.g. from main dashboard)")
     selected_charts: Optional[List[str]] = Field(None, description="Current chart selection when no link")
     visible_sections: Optional[List[str]] = Field(None, description="Current visible sections when no link")
+    existing_summary: Optional[Dict] = Field(None, description="Existing summary JSON for surgical edit mode — only modify what changed")
+    changes: Optional[Dict] = Field(None, description="Human-readable diff: {removed: [...label strings], added: [...label strings]}")
 
 @router.post("/openai/metrics/review")
 @handle_api_errors(context="generating metric review")
@@ -882,29 +884,71 @@ Requirements:
 - When citing numbers, use whole numbers only — no decimal places (e.g. 47 not 46.77, 89% not 89.1%). Never output decimals.
 - Return ONLY valid JSON, no markdown, no code blocks."""
         
-        # Generate overview using OpenAI
-        messages = [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_prompt
-            }
-        ]
-        
+        # ===== SURGICAL EDIT MODE vs FULL REGENERATION =====
+        # When the caller provides an existing summary and a human-readable diff of what
+        # changed (removed/added KPIs, charts, or sections), use a minimal-edit prompt so
+        # only the affected references change and the rest of the text stays word-for-word.
+        # Full regeneration is used when no prior summary exists or the underlying data changed.
         _model_name = "gpt-5.1-2025-11-13"
-        logger.info(
-            f"[Executive Summary] Sending request to OpenAI\n"
-            f"  Model       : {_model_name}\n"
-            f"  Client      : {client_name} (client_id={client_id}, brand_id={brand_id})\n"
-            f"  Period      : {reporting_period}\n"
-            f"  KPIs in prompt: {len(all_metrics)} | Sections: {list(structured_data.keys())}\n"
-            f"  System prompt ({len(system_prompt)} chars):\n{system_prompt}\n"
-            f"  User prompt ({len(user_prompt)} chars):\n{user_prompt}"
+
+        use_edit_mode = (
+            request.existing_summary is not None
+            and isinstance(request.existing_summary, dict)
+            and request.changes is not None
         )
-        
+
+        if use_edit_mode:
+            removed_items = request.changes.get("removed", [])
+            added_items = request.changes.get("added", [])
+            logger.info(
+                f"[Executive Summary] EDIT MODE — removed: {removed_items} | added: {added_items}"
+            )
+
+            edit_user_prompt = f"""You are editing an existing Executive Performance Brief. Make MINIMAL changes only.
+
+EXISTING REPORT JSON:
+{json.dumps(request.existing_summary, indent=2)}
+
+CHANGES TO THE REPORT SELECTION:
+Items REMOVED from this report: {", ".join(removed_items) if removed_items else "None"}
+Items ADDED to this report: {", ".join(added_items) if added_items else "None"}
+
+UPDATED REPORT DATA (reflects the new selection):
+{structured_data_text}
+
+STRICT EDITING RULES — follow exactly:
+1. Copy ALL existing text EXACTLY, word-for-word, for anything not related to the removed or added items.
+2. REMOVED items: Remove any sentence or bullet that ONLY mentions a removed item. If a sentence mentions both a removed item and kept items, keep the sentence but remove only the reference to the removed item.
+3. ADDED items: Add one short sentence or bullet in the most relevant section, using data from the updated report above.
+4. Do NOT rephrase, restructure, or rewrite any content beyond what was directly affected by the changes above.
+5. Maintain the exact same JSON structure. Return ONLY valid JSON, no markdown, no code blocks.
+6. Keep all positive framing and executive tone. No invented numbers — only use values from the updated data above."""
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": edit_user_prompt},
+            ]
+            logger.info(
+                f"[Executive Summary] Sending EDIT MODE request to OpenAI\n"
+                f"  Model       : {_model_name}\n"
+                f"  Client      : {client_name}\n"
+                f"  Period      : {reporting_period}\n"
+                f"  Edit prompt ({len(edit_user_prompt)} chars)"
+            )
+        else:
+            # Full regeneration (default behaviour)
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            logger.info(
+                f"[Executive Summary] Sending FULL REGEN request to OpenAI\n"
+                f"  Model       : {_model_name}\n"
+                f"  Client      : {client_name} (client_id={client_id}, brand_id={brand_id})\n"
+                f"  Period      : {reporting_period}\n"
+                f"  KPIs in prompt: {len(all_metrics)} | Sections: {list(structured_data.keys())}"
+            )
+
         result = await openai_client.create_chat_completion(
             messages=messages,
             model=_model_name,

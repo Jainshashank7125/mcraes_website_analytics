@@ -2756,12 +2756,64 @@ function ReportingDashboard({
       startDate &&
       endDate
     ) {
-      // Selections changed or no summary exists — clear stale state and regenerate
-      setExecutiveSummary(null);
-      setOverviewData(null);
-      setOverviewCacheKey(null);
-      setExecutiveSummaryCacheKey(null);
+      // ===== SURGICAL EDIT vs FULL REGEN =====
+      // When a summary already exists and only the KPI/chart/section selection changed
+      // (not the underlying data), send the existing summary + a diff so the AI makes
+      // minimal changes instead of rewriting the whole thing from scratch.
+      // Full regen is used when: no existing summary, or global filters changed (data changed).
+      const AI_SECTION_LABELS = {
+        ga4: "Google Analytics 4 (Web Analytics)",
+        agency_analytics: "Agency Analytics (SEO Rankings)",
+        scrunch_ai: "Scrunch AI (Brand Mentions & Sentiment)",
+      };
+      const chartLabelLookup = {};
+      ["ga4", "agency_analytics", "scrunch_ai", "all_performance_metrics"].forEach((sk) => {
+        getDashboardSectionCharts(sk).forEach((c) => { chartLabelLookup[c.key] = c.label; });
+      });
+
+      const removedKPILabels = [...selectedKPIs]
+        .filter((k) => !tempSelectedKPIs.has(k))
+        .map((k) => dashboardData?.kpis?.[k]?.label || k);
+      const addedKPILabels = [...tempSelectedKPIs]
+        .filter((k) => !selectedKPIs.has(k))
+        .map((k) => dashboardData?.kpis?.[k]?.label || k);
+      const removedChartLabels = [...effectiveSelectedCharts]
+        .filter((k) => !tempSelectedCharts.has(k))
+        .map((k) => chartLabelLookup[k] || k);
+      const addedChartLabels = [...tempSelectedCharts]
+        .filter((k) => !effectiveSelectedCharts.has(k))
+        .map((k) => chartLabelLookup[k] || k);
+      const removedSectionLabels = [...visibleSections]
+        .filter((k) => !tempVisibleSections.has(k) && AI_SECTION_LABELS[k])
+        .map((k) => AI_SECTION_LABELS[k]);
+      const addedSectionLabels = [...tempVisibleSections]
+        .filter((k) => !visibleSections.has(k) && AI_SECTION_LABELS[k])
+        .map((k) => AI_SECTION_LABELS[k]);
+
+      const changes = {
+        removed: [...removedKPILabels, ...removedChartLabels, ...removedSectionLabels],
+        added: [...addedKPILabels, ...addedChartLabels, ...addedSectionLabels],
+      };
+
+      // Use surgical edit when: existing summary present AND underlying data didn't change
+      const useEditMode = !!executiveSummary && !filtersChanged;
+
+      debugLog("AI overview update mode", {
+        useEditMode,
+        changes,
+        filtersChanged,
+        hasExistingSummary: !!executiveSummary,
+      });
+
+      // In edit mode we keep existing state visible while the edit loads; in full regen we clear it
+      if (!useEditMode) {
+        setExecutiveSummary(null);
+        setOverviewData(null);
+        setOverviewCacheKey(null);
+        setExecutiveSummaryCacheKey(null);
+      }
       setLoadingOverview(true);
+
       let dashboardLinkSlug = null;
       if (editingLink?.slug && editingLink?.client_id === selectedClientId &&
           editingLink.start_date === startDate && editingLink.end_date === endDate) {
@@ -2785,7 +2837,9 @@ function ReportingDashboard({
           dashboardLinkSlug || undefined,
           Array.from(tempSelectedKPIs),
           Array.from(tempSelectedCharts),
-          Array.from(tempVisibleSections)
+          Array.from(tempVisibleSections),
+          useEditMode ? executiveSummary : null,
+          useEditMode ? changes : null
         );
         setOverviewData(overview);
         setOverviewCacheKey(cacheKey);
@@ -2800,13 +2854,14 @@ function ReportingDashboard({
           setExecutiveSummary(null);
           setExecutiveSummaryCacheKey(null);
         }
-        debugLog("AI overview regenerated after config save", {
+        debugLog("AI overview updated after config save", {
+          mode: useEditMode ? "surgical-edit" : "full-regen",
           selectedKpisCount: tempSelectedKPIs.size,
           cacheKey,
-          aiSelectionsChanged,
+          changes,
         });
       } catch (overviewErr) {
-        debugError("Failed to regenerate AI overview after config save:", overviewErr);
+        debugError("Failed to update AI overview after config save:", overviewErr);
         setExecutiveSummary(null);
         setOverviewData(null);
         setOverviewCacheKey(null);
