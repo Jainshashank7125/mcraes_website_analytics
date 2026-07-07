@@ -1024,22 +1024,82 @@ class ClientDBMixin(BaseDB):
                 .order_by(table.c.created_at.desc())
             )
             result = self.db.execute(query)
-            links = []
-            for row in result:
-                link_dict = dict(row._mapping)
-                link_id = link_dict.get("id")
+            links = [dict(row._mapping) for row in result]
+            if not links:
+                return links
 
-                # Fetch KPI selections for this link
-                if link_id:
-                    kpi_selection = self.get_dashboard_link_kpi_selection(link_id)
-                    if kpi_selection:
-                        link_dict["kpi_selection"] = kpi_selection
-
-                links.append(link_dict)
+            # Batch-fetch ALL KPI selections in ONE query (fixes N+1: was 1 query per link)
+            link_ids = [lnk["id"] for lnk in links if lnk.get("id")]
+            kpi_map = self._get_kpi_selections_batch(link_ids)
+            for lnk in links:
+                kpi = kpi_map.get(lnk.get("id"))
+                if kpi:
+                    lnk["kpi_selection"] = kpi
             return links
         except Exception as e:
             logger.error(f"Error listing dashboard links for client {client_id}: {str(e)}")
             return []
+
+    def _get_kpi_selections_batch(self, link_ids: List[int]) -> Dict:
+        """Fetch KPI selections for multiple dashboard links in a single IN-query.
+        Returns dict mapping link_id → kpi_selection dict (same shape as get_dashboard_link_kpi_selection)."""
+        if not link_ids:
+            return {}
+        try:
+            kpi_table = self._get_table("dashboard_link_kpi_selections")
+            rows = self.db.execute(
+                select(kpi_table).where(kpi_table.c.dashboard_link_id.in_(link_ids))
+            ).fetchall()
+        except Exception as e:
+            logger.error(f"Error batch-fetching KPI selections: {e}")
+            return {}
+
+        result: Dict[int, Dict] = {}
+        for row in rows:
+            link_id = row._mapping.get("dashboard_link_id")
+            if link_id is None:
+                continue
+
+            entry: Dict = {
+                "dashboard_link_id": link_id,
+                "selected_kpis":    row.selected_kpis or [],
+                "visible_sections": row.visible_sections or [],
+                "selected_charts":  row.selected_charts or [],
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+
+            if hasattr(row, "selected_performance_metrics_kpis"):
+                entry["selected_performance_metrics_kpis"] = (
+                    row.selected_performance_metrics_kpis or []
+                )
+
+            # visible_highlights — same defensive logic as get_dashboard_link_kpi_selection
+            try:
+                vh = getattr(row, "visible_highlights", None)
+                if vh is None and hasattr(row, "_mapping"):
+                    vh = row._mapping.get("visible_highlights")
+                if vh is not None:
+                    entry["visible_highlights"] = list(vh) if isinstance(vh, (list, tuple)) else ([vh] if vh else [])
+                else:
+                    entry["visible_highlights"] = []
+            except AttributeError:
+                entry["visible_highlights"] = []
+
+            # global_filters
+            try:
+                gf = getattr(row, "global_filters", None)
+                if gf is None and hasattr(row, "_mapping"):
+                    gf = row._mapping.get("global_filters")
+                entry["global_filters"] = gf if isinstance(gf, dict) else (gf if gf is not None else {})
+            except AttributeError:
+                entry["global_filters"] = {}
+
+            if hasattr(row, "show_change_period") and row.show_change_period:
+                entry["show_change_period"] = row.show_change_period
+
+            result[link_id] = entry
+        return result
 
     def get_dashboard_link_by_slug(self, slug: str) -> Optional[Dict]:
         """Get a dashboard link by slug, including KPI selections and executive summary"""

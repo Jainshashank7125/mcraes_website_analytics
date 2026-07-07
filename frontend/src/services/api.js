@@ -1246,7 +1246,9 @@ export const openaiAPI = {
     dashboardLinkSlug = null,
     selectedKPIs = null,
     selectedCharts = null,
-    visibleSections = null
+    visibleSections = null,
+    existingSummary = null,
+    changes = null
   ) => {
     const payload = {
       client_id: clientId,
@@ -1258,6 +1260,8 @@ export const openaiAPI = {
     if (selectedKPIs != null) payload.selected_kpis = Array.isArray(selectedKPIs) ? selectedKPIs : Array.from(selectedKPIs)
     if (selectedCharts != null) payload.selected_charts = Array.isArray(selectedCharts) ? selectedCharts : Array.from(selectedCharts)
     if (visibleSections != null) payload.visible_sections = Array.isArray(visibleSections) ? visibleSections : Array.from(visibleSections)
+    if (existingSummary != null) payload.existing_summary = existingSummary
+    if (changes != null) payload.changes = changes
     const response = await api.post('/api/v1/openai/metrics/overview', payload)
     return response.data
   },

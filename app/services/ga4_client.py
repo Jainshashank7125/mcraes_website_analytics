@@ -2,6 +2,7 @@
 Google Analytics 4 API Client
 Handles all GA4 API interactions for multi-property reporting
 """
+import asyncio
 import httpx
 import logging
 from typing import Dict, List, Optional, Any
@@ -230,7 +231,7 @@ class GA4APIClient:
             if dimension_filter:
                 totals_request_params["dimension_filter"] = dimension_filter
 
-            totals_response = client.run_report(RunReportRequest(**totals_request_params), timeout=12)
+            totals_response = await asyncio.to_thread(client.run_report, RunReportRequest(**totals_request_params), timeout=12)
 
             totals = {
                 "users": 0, "sessions": 0, "newUsers": 0,
@@ -279,7 +280,7 @@ class GA4APIClient:
                 daily_request_params["dimension_filter"] = dimension_filter
 
             daily_request  = RunReportRequest(**daily_request_params)
-            daily_response = client.run_report(daily_request, timeout=12)
+            daily_response = await asyncio.to_thread(client.run_report, daily_request, timeout=12)
 
             # Accumulate weighted sums for current-period rate averages
             weighted_duration   = 0.0
@@ -344,19 +345,22 @@ class GA4APIClient:
             try:
                 logger.info(f"[GA4 CLIENT] Fetching previous-period totals {prev_start}→{prev_end}")
 
-                prev_totals_request = RunReportRequest(
-                    property=f"properties/{property_id}",
-                    date_ranges=[DateRange(start_date=prev_start, end_date=prev_end)],
-                    metrics=[
+                prev_totals_params = {
+                    "property":    f"properties/{property_id}",
+                    "date_ranges": [DateRange(start_date=prev_start, end_date=prev_end)],
+                    "metrics": [
                         Metric(name="totalUsers"),    # index 0
                         Metric(name="sessions"),       # index 1
-                        Metric(name="newUsers"),        # index 2  ← NEW
+                        Metric(name="newUsers"),        # index 2
                         Metric(name="engagedSessions"), # index 3
-                        Metric(name="conversions"),     # index 4  ← NEW
-                        Metric(name="totalRevenue"),    # index 5  ← NEW
+                        Metric(name="conversions"),     # index 4
+                        Metric(name="totalRevenue"),    # index 5
                     ],
-                )
-                prev_totals_response = client.run_report(prev_totals_request, timeout=12)
+                }
+                if dimension_filter:
+                    prev_totals_params["dimension_filter"] = dimension_filter
+                prev_totals_request = RunReportRequest(**prev_totals_params)
+                prev_totals_response = await asyncio.to_thread(client.run_report, prev_totals_request, timeout=12)
 
                 if prev_totals_response.rows:
                     r = prev_totals_response.rows[0]
@@ -376,18 +380,21 @@ class GA4APIClient:
                 # Used ONLY for computing weighted-average rates.
                 # session counts come from Request 3 (authoritative).
                 # ============================================================
-                prev_daily_request = RunReportRequest(
-                    property=f"properties/{property_id}",
-                    date_ranges=[DateRange(start_date=prev_start, end_date=prev_end)],
-                    dimensions=[Dimension(name="date")],
-                    metrics=[
+                prev_daily_params = {
+                    "property":    f"properties/{property_id}",
+                    "date_ranges": [DateRange(start_date=prev_start, end_date=prev_end)],
+                    "dimensions":  [Dimension(name="date")],
+                    "metrics": [
                         Metric(name="sessions"),              # index 0  (weight only, NOT re-summed)
                         Metric(name="averageSessionDuration"), # index 1
                         Metric(name="engagementRate"),         # index 2
-                        Metric(name="bounceRate"),             # index 3  ← NEW (was missing)
+                        Metric(name="bounceRate"),             # index 3
                     ],
-                )
-                prev_daily_response = client.run_report(prev_daily_request, timeout=12)
+                }
+                if dimension_filter:
+                    prev_daily_params["dimension_filter"] = dimension_filter
+                prev_daily_request = RunReportRequest(**prev_daily_params)
+                prev_daily_response = await asyncio.to_thread(client.run_report, prev_daily_request, timeout=12)
 
                 prev_weighted_duration   = 0.0
                 prev_weighted_engagement = 0.0
@@ -503,7 +510,7 @@ class GA4APIClient:
             request_params = self._apply_filters_to_request(request_params, global_filters)
             request = RunReportRequest(**request_params)
 
-            response = client.run_report(request, timeout=12)
+            response = await asyncio.to_thread(client.run_report, request, timeout=12)
 
             pages = []
             for row in response.rows:
@@ -559,7 +566,7 @@ class GA4APIClient:
             request_params = self._apply_filters_to_request(request_params, global_filters)
             request = RunReportRequest(**request_params)
 
-            response = client.run_report(request, timeout=12)
+            response = await asyncio.to_thread(client.run_report, request, timeout=12)
 
             sources = []
             for row in response.rows:
@@ -649,7 +656,7 @@ class GA4APIClient:
                     request_params["dimension_filter"] = dimension_filter
 
                 request  = RunReportRequest(**request_params)
-                response = client.run_report(request, timeout=12)
+                response = await asyncio.to_thread(client.run_report, request, timeout=12)
 
                 daily_data = []
                 for row in response.rows:
@@ -690,7 +697,7 @@ class GA4APIClient:
                     request_params["dimension_filter"] = dimension_filter
                 
                 request = RunReportRequest(**request_params)
-                response = client.run_report(request, timeout=12)
+                response = await asyncio.to_thread(client.run_report, request, timeout=12)
 
                 countries = []
                 for row in response.rows:
@@ -739,16 +746,12 @@ class GA4APIClient:
                     Metric(name="sessions"),
                     Metric(name="bounceRate"),
                 ],
-            )
-            
-            response = client.run_report(request, timeout=12)
-
             }
 
             request_params = self._apply_filters_to_request(request_params, global_filters)
             request = RunReportRequest(**request_params)
-            response = client.run_report(request)
-            
+            response = await asyncio.to_thread(client.run_report, request, timeout=12)
+
             devices = []
             for row in response.rows:
                 devices.append({
@@ -799,7 +802,7 @@ class GA4APIClient:
                 ),
             )
             
-            response = client.run_report(request, timeout=12)
+            response = await asyncio.to_thread(client.run_report, request, timeout=12)
 
             conversions = []
             for row in response.rows:
@@ -829,16 +832,16 @@ class GA4APIClient:
                 ],
             )
             
-            response = client.run_realtime_report(request)
-            
+            response = await asyncio.to_thread(client.run_realtime_report, request)
+
             active_users = 0
             active_pages = []
-            
+
             # Get total active users
             if response.rows:
                 for row in response.rows:
                     active_users += int(row.metric_values[0].value)
-            
+
             # Try to get active pages with a different approach (using pageTitle or screenClass)
             try:
                 page_request = RunRealtimeReportRequest(
@@ -847,7 +850,7 @@ class GA4APIClient:
                     metrics=[Metric(name="activeUsers")],
                     limit=10
                 )
-                page_response = client.run_realtime_report(page_request)
+                page_response = await asyncio.to_thread(client.run_realtime_report, page_request)
                 
                 for row in page_response.rows:
                     if row.dimension_values[0].value:

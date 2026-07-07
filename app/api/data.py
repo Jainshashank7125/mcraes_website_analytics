@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query, HTTPException, Depends, UploadFile, File, 
 from typing import Optional, List, Dict, Any
 import logging
 import time
+import asyncio
 from datetime import datetime, timedelta, date as date_type, timezone
 import base64
 import uuid
@@ -1508,17 +1509,17 @@ async def get_reporting_dashboard(
                             prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
                             prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
                             
-                            # Get previous period with same filters for comparison
-                            prev_traffic_overview = None
-                            try:
-                                prev_traffic_overview = await ga4_client.get_traffic_overview(
-                                    property_id,
-                                    start_date=prev_start,
-                                    end_date=prev_end,
-                                    global_filters=global_filters,
-                                )
-                            except Exception as prev_err:
-                                logger.warning(f"Could not fetch previous period with filters for comparison: {str(prev_err)}")
+                            # Previous-period data is already in traffic_overview (prev_* keys).
+                            # get_traffic_overview now applies the same global_filters to all 4 GA4 requests.
+                            prev_traffic_overview = {
+                                "users":                  traffic_overview.get("prev_users", 0),
+                                "sessions":               traffic_overview.get("prev_sessions", 0),
+                                "newUsers":               traffic_overview.get("prev_new_users", 0),
+                                "bounceRate":             traffic_overview.get("prev_bounce_rate", 0),
+                                "averageSessionDuration": traffic_overview.get("prev_avg_session_duration", 0),
+                                "engagementRate":         traffic_overview.get("prev_engagement_rate", 0),
+                                "engagedSessions":        traffic_overview.get("prev_engaged_sessions", 0),
+                            }
                             
                             # Calculate changes if previous period data available
                             users_change = 0.0
@@ -2041,30 +2042,44 @@ async def get_reporting_dashboard(
                 rankings_table = supabase._get_table("agency_analytics_keyword_rankings")
                 keywords_table = supabase._get_table("agency_analytics_keywords")
                 
-                # Build conditions for current period with date range filtering
-                ranking_conditions = [
-                    rankings_table.c.date >= start_date,
-                    rankings_table.c.date <= end_date,
-                    rankings_table.c.campaign_id.in_(campaign_ids),
-                    rankings_table.c.google_ranking != None,
-                    rankings_table.c.google_ranking > 0,
-                    rankings_table.c.google_ranking <= 100,  # Only top 100
-                    rankings_table.c.volume != None,
-                    rankings_table.c.volume > 0
-                ]
-                
-                # Aggregate rankings and volumes for current period
-                rankings_agg_query = (
+                # Pre-compute previous period dates so we can run ONE combined query
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                period_duration = (end_dt - start_dt).days + 1
+                prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
+                logger.info(f"[Agency Analytics KPI] Previous period: {prev_start} to {prev_end} (same duration: {period_duration} days)")
+
+                # Single combined query for both periods — same filters, same aggregation, halves DB round-trips
+                _period_expr = case(
+                    (and_(rankings_table.c.date >= start_date, rankings_table.c.date <= end_date), 'current'),
+                    else_='previous'
+                )
+                _combined_rankings_query = (
                     select(
                         rankings_table.c.keyword_id.label("keyword_id"),
+                        _period_expr.label("period"),
                         func.avg(rankings_table.c.google_ranking).label("avg_ranking"),
                         func.avg(rankings_table.c.volume).label("avg_volume"),
                         func.count(rankings_table.c.id).label("row_count")
                     )
-                    .where(and_(*ranking_conditions))
-                    .group_by(rankings_table.c.keyword_id)
+                    .where(and_(
+                        rankings_table.c.campaign_id.in_(campaign_ids),
+                        rankings_table.c.google_ranking != None,
+                        rankings_table.c.google_ranking > 0,
+                        rankings_table.c.google_ranking <= 100,
+                        rankings_table.c.volume != None,
+                        rankings_table.c.volume > 0,
+                        or_(
+                            and_(rankings_table.c.date >= start_date, rankings_table.c.date <= end_date),
+                            and_(rankings_table.c.date >= prev_start, rankings_table.c.date <= prev_end)
+                        )
+                    ))
+                    .group_by(rankings_table.c.keyword_id, _period_expr)
                 )
-                rankings_agg = [dict(row._mapping) for row in db.execute(rankings_agg_query)]
+                _both_periods     = [dict(row._mapping) for row in db.execute(_combined_rankings_query)]
+                rankings_agg      = [r for r in _both_periods if r.get("period") == "current"]
+                prev_rankings_agg = [r for r in _both_periods if r.get("period") == "previous"]
                 
                 # Calculate totals for current period
                 total_rankings = 0
@@ -2095,40 +2110,6 @@ async def get_reporting_dashboard(
                 avg_keyword_rank = (ranking_sum / total_rankings) if total_rankings > 0 else 0
                 
                 logger.info(f"[Agency Analytics KPI] Current period ({start_date} to {end_date}): total_rankings={total_rankings}, avg_keyword_rank={avg_keyword_rank}, total_search_volume={total_search_volume}")
-                
-                # Calculate previous period (same duration as current period)
-                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-                period_duration = (end_dt - start_dt).days + 1
-                prev_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-                prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
-                
-                logger.info(f"[Agency Analytics KPI] Previous period: {prev_start} to {prev_end} (same duration: {period_duration} days)")
-                
-                # Build conditions for previous period
-                prev_ranking_conditions = [
-                    rankings_table.c.date >= prev_start,
-                    rankings_table.c.date <= prev_end,
-                    rankings_table.c.campaign_id.in_(campaign_ids),
-                    rankings_table.c.google_ranking != None,
-                    rankings_table.c.google_ranking > 0,
-                    rankings_table.c.google_ranking <= 100,
-                    rankings_table.c.volume != None,
-                    rankings_table.c.volume > 0
-                ]
-                
-                # Aggregate rankings for previous period
-                prev_rankings_agg_query = (
-                    select(
-                        rankings_table.c.keyword_id.label("keyword_id"),
-                        func.avg(rankings_table.c.google_ranking).label("avg_ranking"),
-                        func.avg(rankings_table.c.volume).label("avg_volume"),
-                        func.count(rankings_table.c.id).label("row_count")
-                    )
-                    .where(and_(*prev_ranking_conditions))
-                    .group_by(rankings_table.c.keyword_id)
-                )
-                prev_rankings_agg = [dict(row._mapping) for row in db.execute(prev_rankings_agg_query)]
                 
                 # Calculate totals for previous period
                 prev_total_rankings = 0
@@ -2370,35 +2351,19 @@ async def get_reporting_dashboard(
                 # This ensures chart data matches table data and GA4 dashboard
                 logger.info(f"[GA4 API DIRECT] Fetching chart data from GA4 API for date range: {start_date} to {end_date}")
                 
-                # Use GA4 API directly to avoid aggregation issues
                 # IMPORTANT: Pass global_filters so charts stay consistent with KPI filters
-                top_pages = await ga4_client.get_top_pages(
-                    property_id,
-                    start_date,
-                    end_date,
-                    limit=10,
-                    global_filters=global_filters,
+                # Run all 4 chart calls concurrently — they are fully independent
+                _chart_results = await asyncio.gather(
+                    ga4_client.get_top_pages(property_id, start_date, end_date, limit=10, global_filters=global_filters),
+                    ga4_client.get_traffic_sources(property_id, start_date, end_date, global_filters=global_filters),
+                    ga4_client.get_geographic_breakdown(property_id, start_date, end_date, limit=10, include_daily_breakdown=False, global_filters=global_filters),
+                    ga4_client.get_device_breakdown(property_id, start_date, end_date, global_filters=global_filters),
+                    return_exceptions=True,
                 )
-                traffic_sources = await ga4_client.get_traffic_sources(
-                    property_id,
-                    start_date,
-                    end_date,
-                    global_filters=global_filters,
-                )
-                geographic = await ga4_client.get_geographic_breakdown(
-                    property_id,
-                    start_date,
-                    end_date,
-                    limit=10,
-                    include_daily_breakdown=False,
-                    global_filters=global_filters,
-                )
-                devices = await ga4_client.get_device_breakdown(
-                    property_id,
-                    start_date,
-                    end_date,
-                    global_filters=global_filters,
-                )
+                top_pages       = _chart_results[0] if not isinstance(_chart_results[0], Exception) else []
+                traffic_sources = _chart_results[1] if not isinstance(_chart_results[1], Exception) else []
+                geographic      = _chart_results[2] if not isinstance(_chart_results[2], Exception) else []
+                devices         = _chart_results[3] if not isinstance(_chart_results[3], Exception) else []
                 
                 chart_data["traffic_sources"] = traffic_sources if traffic_sources else []
                 chart_data["top_pages"] = top_pages if top_pages else []

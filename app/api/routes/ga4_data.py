@@ -36,13 +36,10 @@ async def get_brand_ga4_analytics(
     try:
         # Get brand from database using SQLAlchemy
         supabase = SupabaseService(db=db)
-        brands_result = supabase.get_brands(limit=1, offset=0, search=None)
-        brands = [b for b in brands_result.get("items", []) if b.get("id") == brand_id]
-        
-        if not brands:
+        brand = supabase.get_brand_by_id(brand_id)
+
+        if not brand:
             raise HTTPException(status_code=404, detail="Brand not found")
-        
-        brand = brands[0]
         
         if not brand.get("ga4_property_id"):
             return {

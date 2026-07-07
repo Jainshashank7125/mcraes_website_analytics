@@ -1096,6 +1096,8 @@ function ReportingDashboard({
     overviewData,
     overviewCacheKey,
     loadingOverview,
+    dashboardLinks,
+    loadingLinks,
   ]);
 
   const loadClients = async (searchTerm = "", autoSelectFirst = false) => {
@@ -1497,30 +1499,71 @@ function ReportingDashboard({
       return;
     }
 
-    // Set loading state
+    // If dashboard links are still being fetched and we don't have any yet, wait rather than
+    // racing ahead to OpenAI — the links list (and any stored summary on it) may simply not have
+    // arrived yet, e.g. right after switching clients. The auto-trigger effect depends on
+    // dashboardLinks/loadingLinks and will re-run this function once links finish loading.
+    if (loadingLinks && (!dashboardLinks || dashboardLinks.length === 0) && effectiveClientId) {
+      debugLog("Dashboard links still loading, deferring overview generation", { cacheKey });
+      return;
+    }
+
+    // Before calling OpenAI, check if a stored summary already exists in a matching dashboard link.
+    // This prevents redundant API calls on every page load, client switch, and date range change.
+    // Uses normalized date comparison to handle both date-only and datetime strings from the DB.
+    let dashboardLinkSlug = null;
+    if (effectiveClientId && startDate && endDate && dashboardLinks && dashboardLinks.length > 0) {
+      const matchingLink = dashboardLinks.find((link) => {
+        if (link.client_id !== effectiveClientId) return false;
+        const linkStart = link.start_date
+          ? new Date(link.start_date).toISOString().split("T")[0]
+          : null;
+        const linkEnd = link.end_date
+          ? new Date(link.end_date).toISOString().split("T")[0]
+          : null;
+        return linkStart === startDate && linkEnd === endDate;
+      });
+      if (matchingLink) {
+        if (matchingLink.slug) dashboardLinkSlug = matchingLink.slug;
+        if (matchingLink.executive_summary) {
+          // Stored summary found — load from DB and skip the OpenAI call entirely
+          debugLog("DB cache hit: loading executive summary from dashboard link (skipping OpenAI)", {
+            linkId: matchingLink.id,
+            cacheKey,
+          });
+          const storedSummary = matchingLink.executive_summary;
+          setExecutiveSummary(storedSummary);
+          setExecutiveSummaryCacheKey(cacheKey);
+          setOverviewData({
+            executive_summary: storedSummary,
+            date_range: { start_date: startDate, end_date: endDate },
+            total_metrics_analyzed: dataToUse.kpis
+              ? Object.keys(dataToUse.kpis).length
+              : 0,
+            metrics_by_source: {
+              GA4: Object.values(dataToUse.kpis || {}).filter(
+                (k) => k.source === "GA4"
+              ).length,
+              AgencyAnalytics: Object.values(dataToUse.kpis || {}).filter(
+                (k) => k.source === "AgencyAnalytics"
+              ).length,
+              Scrunch: Object.values(dataToUse.kpis || {}).filter(
+                (k) => k.source === "Scrunch"
+              ).length,
+            },
+          });
+          setOverviewCacheKey(cacheKey);
+          setExpandedMetricsSources(new Set());
+          return;
+        }
+      }
+    }
+
+    // No stored summary found — call OpenAI to generate one
     setLoadingOverview(true);
 
     try {
-      // Try to find matching dashboard link to get slug for filtering
-      // This ensures AI summary only uses selected KPIs/charts/sections
-      let dashboardLinkSlug = null;
-      if (effectiveClientId && startDate && endDate && dashboardLinks && dashboardLinks.length > 0) {
-        // Find matching link by date range and client
-        const matchingLink = dashboardLinks.find(
-          (link) =>
-            link.client_id === effectiveClientId &&
-            link.start_date === startDate &&
-            link.end_date === endDate
-        );
-        if (matchingLink && matchingLink.slug) {
-          dashboardLinkSlug = matchingLink.slug;
-          debugLog("Found matching dashboard link for AI summary filtering", {
-            slug: dashboardLinkSlug,
-            linkId: matchingLink.id,
-          });
-        }
-      }
-
+      // dashboardLinkSlug is resolved above; pass it so the summary uses only selected KPIs/charts/sections
       // Pass current KPI/chart/section selection so summary uses only selected metrics (e.g. only Total Users)
       const overview = await openaiAPI.getOverallOverview(
         effectiveClientId,
@@ -2646,8 +2689,12 @@ function ReportingDashboard({
       tempGlobalFilters && Object.keys(tempGlobalFilters).length > 0
         ? tempGlobalFilters
         : null;
-    // Update global filters state
-    const filtersChanged = JSON.stringify(globalFilters) !== JSON.stringify(nextGlobalFilters);
+    // Normalize current filters the same way (an empty object and null both mean "no filters")
+    // before comparing — otherwise a link stored with global_filters: {} always looks "changed"
+    // even when nothing was touched, since JSON.stringify({}) !== JSON.stringify(null).
+    const normalizedCurrentFilters =
+      globalFilters && Object.keys(globalFilters).length > 0 ? globalFilters : null;
+    const filtersChanged = JSON.stringify(normalizedCurrentFilters) !== JSON.stringify(nextGlobalFilters);
     setGlobalFilters(nextGlobalFilters);
     setShowKPISelector(false);
     setError(null); // Clear any previous errors
@@ -2661,36 +2708,112 @@ function ReportingDashboard({
       globalFilters: nextGlobalFilters,
       filtersChanged,
     });
-    
+
     // Reload dashboard data to apply filters immediately if they changed
     // Use setTimeout to ensure state is updated before calling loadDashboardData
     if (filtersChanged) {
-      debugLog("Global filters changed, will reload dashboard data", { 
+      debugLog("Global filters changed, will reload dashboard data", {
         oldFilters: globalFilters,
-        newFilters: nextGlobalFilters 
+        newFilters: nextGlobalFilters
       });
       setTimeout(async () => {
         await loadDashboardData();
       }, 200);
     }
 
-    // When user saves config: clear in-memory and cache for overview so "AI Overview" never shows stale.
-    // Then regenerate with the new KPI/section/chart selection for this client and date range.
+    // React batches state updates, so selectedKPIs/selectedCharts/visibleSections still hold
+    // their pre-save values here — safe to diff against temp (the incoming new values).
+    // NOTE: handleOpenKPISelector defaults tempSelectedCharts to "all available charts" when
+    // selectedCharts is empty (see line ~2804). Mirror that same fallback here, otherwise a
+    // link saved with no explicit chart selection always looks "changed" and false-triggers
+    // a regeneration even when the user touched nothing.
+    const setsEqual = (a, b) => a.size === b.size && [...a].every((v) => b.has(v));
+    const effectiveSelectedCharts =
+      selectedCharts.size > 0
+        ? selectedCharts
+        : (() => {
+            const allCharts = new Set();
+            ["ga4", "agency_analytics", "scrunch_ai", "all_performance_metrics"].forEach((sectionKey) => {
+              getDashboardSectionCharts(sectionKey).forEach((chart) => {
+                allCharts.add(chart.key);
+              });
+            });
+            return allCharts;
+          })();
+    const aiSelectionsChanged =
+      !setsEqual(tempSelectedKPIs, selectedKPIs) ||
+      !setsEqual(tempSelectedCharts, effectiveSelectedCharts) ||
+      !setsEqual(tempVisibleSections, visibleSections);
+
     const cacheKey = `${selectedClientId || selectedBrandId}-${startDate}-${endDate}`;
-    setExecutiveSummary(null);
-    setOverviewData(null);
-    setOverviewCacheKey(null);
-    setExecutiveSummaryCacheKey(null);
 
     if (
       tempVisibleSections.has("ai_overview") &&
+      (aiSelectionsChanged || !executiveSummary) &&
       dashboardData?.kpis &&
       Object.keys(dashboardData.kpis).length > 0 &&
       (selectedClientId || selectedBrandId) &&
       startDate &&
       endDate
     ) {
+      // ===== SURGICAL EDIT vs FULL REGEN =====
+      // When a summary already exists and only the KPI/chart/section selection changed
+      // (not the underlying data), send the existing summary + a diff so the AI makes
+      // minimal changes instead of rewriting the whole thing from scratch.
+      // Full regen is used when: no existing summary, or global filters changed (data changed).
+      const AI_SECTION_LABELS = {
+        ga4: "Google Analytics 4 (Web Analytics)",
+        agency_analytics: "Agency Analytics (SEO Rankings)",
+        scrunch_ai: "Scrunch AI (Brand Mentions & Sentiment)",
+      };
+      const chartLabelLookup = {};
+      ["ga4", "agency_analytics", "scrunch_ai", "all_performance_metrics"].forEach((sk) => {
+        getDashboardSectionCharts(sk).forEach((c) => { chartLabelLookup[c.key] = c.label; });
+      });
+
+      const removedKPILabels = [...selectedKPIs]
+        .filter((k) => !tempSelectedKPIs.has(k))
+        .map((k) => dashboardData?.kpis?.[k]?.label || k);
+      const addedKPILabels = [...tempSelectedKPIs]
+        .filter((k) => !selectedKPIs.has(k))
+        .map((k) => dashboardData?.kpis?.[k]?.label || k);
+      const removedChartLabels = [...effectiveSelectedCharts]
+        .filter((k) => !tempSelectedCharts.has(k))
+        .map((k) => chartLabelLookup[k] || k);
+      const addedChartLabels = [...tempSelectedCharts]
+        .filter((k) => !effectiveSelectedCharts.has(k))
+        .map((k) => chartLabelLookup[k] || k);
+      const removedSectionLabels = [...visibleSections]
+        .filter((k) => !tempVisibleSections.has(k) && AI_SECTION_LABELS[k])
+        .map((k) => AI_SECTION_LABELS[k]);
+      const addedSectionLabels = [...tempVisibleSections]
+        .filter((k) => !visibleSections.has(k) && AI_SECTION_LABELS[k])
+        .map((k) => AI_SECTION_LABELS[k]);
+
+      const changes = {
+        removed: [...removedKPILabels, ...removedChartLabels, ...removedSectionLabels],
+        added: [...addedKPILabels, ...addedChartLabels, ...addedSectionLabels],
+      };
+
+      // Use surgical edit when: existing summary present AND underlying data didn't change
+      const useEditMode = !!executiveSummary && !filtersChanged;
+
+      debugLog("AI overview update mode", {
+        useEditMode,
+        changes,
+        filtersChanged,
+        hasExistingSummary: !!executiveSummary,
+      });
+
+      // In edit mode we keep existing state visible while the edit loads; in full regen we clear it
+      if (!useEditMode) {
+        setExecutiveSummary(null);
+        setOverviewData(null);
+        setOverviewCacheKey(null);
+        setExecutiveSummaryCacheKey(null);
+      }
       setLoadingOverview(true);
+
       let dashboardLinkSlug = null;
       if (editingLink?.slug && editingLink?.client_id === selectedClientId &&
           editingLink.start_date === startDate && editingLink.end_date === endDate) {
@@ -2714,7 +2837,9 @@ function ReportingDashboard({
           dashboardLinkSlug || undefined,
           Array.from(tempSelectedKPIs),
           Array.from(tempSelectedCharts),
-          Array.from(tempVisibleSections)
+          Array.from(tempVisibleSections),
+          useEditMode ? executiveSummary : null,
+          useEditMode ? changes : null
         );
         setOverviewData(overview);
         setOverviewCacheKey(cacheKey);
@@ -2729,12 +2854,14 @@ function ReportingDashboard({
           setExecutiveSummary(null);
           setExecutiveSummaryCacheKey(null);
         }
-        debugLog("AI overview regenerated after config save", {
+        debugLog("AI overview updated after config save", {
+          mode: useEditMode ? "surgical-edit" : "full-regen",
           selectedKpisCount: tempSelectedKPIs.size,
           cacheKey,
+          changes,
         });
       } catch (overviewErr) {
-        debugError("Failed to regenerate AI overview after config save:", overviewErr);
+        debugError("Failed to update AI overview after config save:", overviewErr);
         setExecutiveSummary(null);
         setOverviewData(null);
         setOverviewCacheKey(null);
@@ -2742,6 +2869,11 @@ function ReportingDashboard({
       } finally {
         setLoadingOverview(false);
       }
+    } else {
+      debugLog("Config saved — AI selections unchanged and summary exists, skipping regeneration", {
+        aiSelectionsChanged,
+        hasExistingSummary: !!executiveSummary,
+      });
     }
   };
 
@@ -3026,25 +3158,22 @@ function ReportingDashboard({
         const linkFilters = link.kpi_selection.global_filters;
         const filtersChanged = JSON.stringify(globalFilters) !== JSON.stringify(linkFilters);
         setGlobalFilters(linkFilters);
-        debugLog("Loaded global filters from dashboard link", { 
-          linkId: link.id, 
+        // The manualLoadTrigger bump below already reloads everything for this link
+        // (dates + filters + KPI selection together). Sync the ref the [globalFilters]
+        // effect (line ~1020) compares against so it doesn't also fire a second,
+        // redundant reload for the same filter change.
+        prevGlobalFiltersRef.current = linkFilters;
+        debugLog("Loaded global filters from dashboard link", {
+          linkId: link.id,
           filters: linkFilters,
           filtersChanged
         });
-        // Reload dashboard data to apply filters if they changed
-        if (filtersChanged) {
-          setTimeout(async () => {
-            await loadDashboardData();
-          }, 200);
-        }
       } else {
         // Clear filters if link doesn't have any
         if (globalFilters) {
           setGlobalFilters(null);
+          prevGlobalFiltersRef.current = null;
           debugLog("Clearing global filters - link has no filters");
-          setTimeout(async () => {
-            await loadDashboardData();
-          }, 200);
         }
       }
 
@@ -3129,6 +3258,10 @@ function ReportingDashboard({
           startDate: formattedStartDate,
           endDate: formattedEndDate,
         });
+        // Date-only changes don't auto-reload (see the loadAllData effect's
+        // shouldLoad gate) — force a reload so the selected link's period
+        // actually loads instead of leaving stale data on screen.
+        setManualLoadTrigger((prev) => prev + 1);
       }
     }
     

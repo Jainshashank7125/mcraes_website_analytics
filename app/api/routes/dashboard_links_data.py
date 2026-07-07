@@ -186,9 +186,18 @@ async def upsert_dashboard_link_for_client(
     if not link:
         raise HTTPException(status_code=500, detail="Unable to save dashboard link")
 
-    # Only generate AI Overview when client did NOT send executive_summary.
-    # When client sends it (from reporting dashboard), use that as the link's overview so edits are preserved.
-    if request.executive_summary is None or (isinstance(request.executive_summary, dict) and not request.executive_summary):
+    # Generate AI Overview only when:
+    # (1) client did NOT send executive_summary, AND
+    # (2) ai_overview is in visible_sections (or visible_sections not specified — default to generating).
+    # Skipping when ai_overview is hidden avoids wasted API calls for links that won't show it.
+    _no_exec_summary = request.executive_summary is None or (isinstance(request.executive_summary, dict) and not request.executive_summary)
+    _ai_overview_visible = request.visible_sections is None or "ai_overview" in (request.visible_sections or [])
+
+    if not _no_exec_summary:
+        logger.info(f"Using client-provided executive summary for new dashboard link {link.get('id')} (no regeneration)")
+    elif not _ai_overview_visible:
+        logger.info(f"Skipping AI Overview generation for new dashboard link {link.get('id')} - ai_overview not in visible_sections")
+    else:
         try:
             from app.api.openai import generate_overall_overview, OverallOverviewRequest
 
@@ -219,8 +228,6 @@ async def upsert_dashboard_link_for_client(
                     logger.warning(f"No executive summary in AI Overview response for dashboard link {link.get('id')}")
         except Exception as e:
             logger.error(f"Error generating AI Overview for dashboard link {link.get('id')}: {str(e)}", exc_info=True)
-    else:
-        logger.info(f"Using client-provided executive summary for new dashboard link {link.get('id')} (no regeneration)")
 
     return {
         "status": "success",
