@@ -52,6 +52,10 @@ services:
       # Mount service key if needed for GA4
       - ./service-key.json:/app/service-key.json:ro
       - ./ga4_token.json:/app/ga4_token.json
+      # Persist cron/app logs across container recreation and rebuilds
+      # (previously logs/ was baked into the image and wiped on every recreate,
+      # which is why no logs survived a ~10-day sync outage)
+      - backend_logs:/app/logs
     networks:
       - mcraes-network
     depends_on:
@@ -155,3 +159,4 @@ networks:
 volumes:
   postgres_data:
   pgadmin_data:
+  backend_logs:

@@ -13,6 +13,12 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# How far back to look when a caller doesn't specify start_date. Must be long enough
+# that any realistic sync outage self-heals on the next successful run, regardless of
+# calendar month boundaries (previously this defaulted to "first of the current
+# month", so an outage discovered in the following month could never be backfilled).
+DEFAULT_SYNC_LOOKBACK_DAYS = 60
+
 class AgencyAnalyticsClient:
     """Client for interacting with Agency Analytics API"""
     
@@ -218,23 +224,24 @@ class AgencyAnalyticsClient:
     ) -> List[Dict]:
         """
         Get campaign rankings data.
-        
+
         Args:
             campaign_id: Campaign ID
-            start_date: Optional start date (YYYY-MM-DD). If not provided, defaults to first day of current month.
+            start_date: Optional start date (YYYY-MM-DD). If not provided, defaults to
+                DEFAULT_SYNC_LOOKBACK_DAYS days before end_date (a rolling window, not
+                the current calendar month), so a missed sync self-heals on retry.
             end_date: Optional end date (YYYY-MM-DD). If not provided, defaults to today.
-        
+
         Returns:
             List of campaign ranking records
         """
         try:
-            # Default to current month if dates not provided
+            # Default to a rolling lookback window if dates not provided
             if not end_date:
                 end_date = datetime.now().strftime("%Y-%m-%d")
             if not start_date:
-                # First day of current month
-                start_date = datetime.now().replace(day=1).strftime("%Y-%m-%d")
-            
+                start_date = (datetime.now() - timedelta(days=DEFAULT_SYNC_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+
             filters = [
                 {"campaign_id": {"$equals_comparison": campaign_id}},
                 {"end_date": {"$lessthanorequal_comparison": end_date}},
@@ -500,23 +507,24 @@ class AgencyAnalyticsClient:
     ) -> List[Dict]:
         """
         Get keyword rankings data.
-        
+
         Args:
             keyword_id: Keyword ID
-            start_date: Optional start date (YYYY-MM-DD). If not provided, defaults to first day of current month.
+            start_date: Optional start date (YYYY-MM-DD). If not provided, defaults to
+                DEFAULT_SYNC_LOOKBACK_DAYS days before end_date (a rolling window, not
+                the current calendar month), so a missed sync self-heals on retry.
             end_date: Optional end date (YYYY-MM-DD). If not provided, defaults to today.
-        
+
         Returns:
             List of keyword ranking records
         """
         try:
-            # Default to current month if dates not provided
+            # Default to a rolling lookback window if dates not provided
             if not end_date:
                 end_date = datetime.now().strftime("%Y-%m-%d")
             if not start_date:
-                # First day of current month
-                start_date = datetime.now().replace(day=1).strftime("%Y-%m-%d")
-            
+                start_date = (datetime.now() - timedelta(days=DEFAULT_SYNC_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+
             filters = [
                 {"keyword_id": {"$equals_comparison": keyword_id}},
                 {"end_date": {"$lessthanorequal_comparison": end_date}},

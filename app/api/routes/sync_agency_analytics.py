@@ -18,8 +18,8 @@ async def sync_agency_analytics(
     sync_mode: str = Query("complete", description="Sync mode: 'new' (only missing campaigns) or 'complete' (all campaigns)"),
     campaign_id: Optional[int] = Query(None, description="Sync specific campaign (if not provided, syncs all campaigns)"),
     auto_match_brands: bool = Query(True, description="Automatically match campaigns to brands by URL"),
-    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD) for syncing keyword rankings. If not provided, syncs all historical data."),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD) for syncing keyword rankings. If not provided, syncs all historical data."),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD) for syncing keyword rankings. If not provided, defaults to a rolling lookback window (see DEFAULT_SYNC_LOOKBACK_DAYS in AgencyAnalyticsClient), not all historical data."),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD) for syncing keyword rankings. If not provided, defaults to today."),
     cron: bool = Query(False, description="Set to true for cron jobs to bypass authentication"),
     request: Request = None,
     current_user: dict = Depends(get_user_for_sync),
@@ -32,9 +32,9 @@ async def sync_agency_analytics(
     - **sync_mode**: 'new' (only missing campaigns) or 'complete' (all campaigns)
     - **campaign_id**: Optional specific campaign ID to sync. If not provided, syncs all campaigns.
     - **auto_match_brands**: Automatically match campaigns to brands by URL
-    - **start_date**: Optional start date (YYYY-MM-DD) for filtering keyword rankings. If not provided, syncs all historical data.
-    - **end_date**: Optional end date (YYYY-MM-DD) for filtering keyword rankings. If not provided, syncs all historical data.
-    
+    - **start_date**: Optional start date (YYYY-MM-DD) for filtering keyword rankings. If not provided, defaults to a rolling lookback window (currently DEFAULT_SYNC_LOOKBACK_DAYS days), not all historical data.
+    - **end_date**: Optional end date (YYYY-MM-DD) for filtering keyword rankings. If not provided, defaults to today.
+
     Note: Date parameters only apply to keyword rankings sync. Campaigns and campaign links are always synced completely.
     """
     if sync_mode not in ["new", "complete"]:

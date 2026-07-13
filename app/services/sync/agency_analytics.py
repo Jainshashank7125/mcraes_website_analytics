@@ -1,8 +1,10 @@
 """
 Background sync for Agency Analytics (campaigns, keywords, rankings)
 """
+import json
 import logging
 from typing import Optional
+from sqlalchemy import text
 from app.services.agency_analytics_client import AgencyAnalyticsClient
 from app.services.supabase_service import SupabaseService
 from app.services.sync_job_service import SyncJobService
@@ -11,6 +13,80 @@ from app.db.models import AuditLogAction
 from app.db.database import SessionLocal
 
 logger = logging.getLogger(__name__)
+
+# A campaign's synced keyword count dropping by more than this fraction since the
+# last successful sync gets flagged loudly instead of silently reshaping historical
+# charts (this is exactly what happened with the Air Doctors campaign: 140 -> 69).
+KEYWORD_DROP_ALERT_THRESHOLD = 0.15
+# Ignore drops on very small campaigns, where normal churn can easily exceed 15%.
+KEYWORD_DROP_MIN_PREVIOUS_COUNT = 10
+
+
+async def _check_keyword_count_drops(db, job_id, user_id, user_email, campaign_results, request):
+    """
+    Compare this run's per-campaign keyword counts against the previous successful
+    sync's counts and loudly flag any sharp drop, via logs + the existing audit log
+    (there's no Slack/email integration in this codebase to push a real alert to).
+    """
+    query = text("""
+        SELECT result FROM sync_jobs
+        WHERE sync_type = 'sync_agency_analytics'
+          AND status = 'completed'
+          AND job_id != :job_id
+          AND result IS NOT NULL
+        ORDER BY completed_at DESC NULLS LAST, created_at DESC
+        LIMIT 1
+    """)
+    row = db.execute(query, {"job_id": job_id}).first()
+    if not row or not row[0]:
+        return  # No prior run to compare against (e.g. first sync ever)
+
+    previous_result = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+    previous_counts = {
+        c.get("campaign_id"): c.get("keyword_count")
+        for c in previous_result.get("campaign_results", [])
+        if c.get("status") == "success" and c.get("keyword_count") is not None
+    }
+
+    for current in campaign_results:
+        if current.get("status") != "success":
+            continue
+        campaign_id_val = current.get("campaign_id")
+        current_count = current.get("keyword_count")
+        previous_count = previous_counts.get(campaign_id_val)
+        if (
+            previous_count is None
+            or current_count is None
+            or previous_count < KEYWORD_DROP_MIN_PREVIOUS_COUNT
+        ):
+            continue
+
+        drop_fraction = (previous_count - current_count) / previous_count
+        if drop_fraction > KEYWORD_DROP_ALERT_THRESHOLD:
+            company_name = current.get("company", "Unknown")
+            message = (
+                f"Campaign {campaign_id_val} ({company_name}) tracked keyword count "
+                f"dropped from {previous_count} to {current_count} "
+                f"({drop_fraction:.0%}) since the last successful sync."
+            )
+            logger.warning(f"[Job {job_id}] SYNC HEALTH ALERT: {message}")
+            await audit_logger.log(
+                action=AuditLogAction.SYNC_AGENCY_ANALYTICS,
+                user_id=user_id,
+                user_email=user_email,
+                status="partial",
+                details={
+                    "alert": "keyword_count_drop",
+                    "campaign_id": campaign_id_val,
+                    "company": company_name,
+                    "previous_keyword_count": previous_count,
+                    "current_keyword_count": current_count,
+                    "drop_fraction": round(drop_fraction, 3),
+                    "job_id": job_id
+                },
+                request=request,
+                db=db
+            )
 
 
 async def sync_agency_analytics_background(
@@ -362,7 +438,8 @@ async def sync_agency_analytics_background(
                 campaign_results.append({
                     "campaign_id": campaign_id_val,
                     "company": company_name,
-                    "status": "success"
+                    "status": "success",
+                    "keyword_count": len(campaign_data_batch["keywords"])
                 })
 
             except Exception as campaign_error:
@@ -377,6 +454,15 @@ async def sync_agency_analytics_background(
                     "error": str(campaign_error)
                 })
                 continue
+
+        # Health check: flag campaigns whose synced keyword count dropped sharply
+        # since the last successful sync. This is what would have caught the Air
+        # Doctors incident (140 -> 69 tracked keywords) as it happened instead of
+        # only being noticed later by the client-facing dashboard.
+        try:
+            await _check_keyword_count_drops(db, job_id, user_id, user_email, campaign_results, request)
+        except Exception as health_check_error:
+            logger.warning(f"[Job {job_id}] Sync health check failed (non-fatal): {str(health_check_error)}")
 
         # Step 5: Auto-match campaigns to brands
         if auto_match_brands:

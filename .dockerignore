@@ -41,5 +41,6 @@ docker-compose*.yml
 
 # Other
 *.log
+logs/
 .DS_Store
 
