@@ -167,8 +167,12 @@ async def get_campaign_keywords(
         supabase = SupabaseService(db=db)
         
         # Build query using SQLAlchemy Core
+        # Exclude keywords deleted on the Agency Analytics platform (is_active=False)
         table = supabase._get_table("agency_analytics_keywords")
-        query = select(table).where(table.c.campaign_id == campaign_id)
+        query = select(table).where(and_(
+            table.c.campaign_id == campaign_id,
+            table.c.is_active == True
+        ))
         query = query.order_by(table.c.id.desc()).limit(limit)
         
         result = supabase.db.execute(query)
@@ -194,12 +198,13 @@ async def get_all_keywords(
         supabase = SupabaseService(db=db)
         
         # Build query using SQLAlchemy Core
+        # Exclude keywords deleted on the Agency Analytics platform (is_active=False)
         table = supabase._get_table("agency_analytics_keywords")
-        query = select(table)
-        
+        query = select(table).where(table.c.is_active == True)
+
         if campaign_id:
             query = query.where(table.c.campaign_id == campaign_id)
-        
+
         query = query.order_by(table.c.id.desc()).limit(limit)
         result = supabase.db.execute(query)
         keywords = [dict(row._mapping) for row in result]

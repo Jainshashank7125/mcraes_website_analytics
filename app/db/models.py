@@ -668,9 +668,14 @@ class AgencyAnalyticsKeyword(Base):
     tags = Column(Text, nullable=True)
     date_created = Column(DateTime(timezone=True), nullable=True)
     date_modified = Column(DateTime(timezone=True), nullable=True)
+    # Soft-delete flag. Keywords removed on the Agency Analytics platform are marked
+    # inactive during sync reconciliation so they stop appearing in charts/counts
+    # (Agency Analytics purges deleted keywords from all history; we mirror that).
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    deactivated_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    
+
     def __repr__(self):
         return f"<AgencyAnalyticsKeyword(id={self.id}, keyword_phrase='{self.keyword_phrase}')>"
 

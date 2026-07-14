@@ -2050,6 +2050,16 @@ async def get_reporting_dashboard(
                 prev_start = (start_dt - timedelta(days=period_duration)).strftime("%Y-%m-%d")
                 logger.info(f"[Agency Analytics KPI] Previous period: {prev_start} to {prev_end} (same duration: {period_duration} days)")
 
+                # Only count keywords still present on the Agency Analytics platform
+                # (is_active); deleted keywords are excluded so KPIs match the charts.
+                active_keyword_ids_subq = (
+                    select(keywords_table.c.id)
+                    .where(and_(
+                        keywords_table.c.campaign_id.in_(campaign_ids),
+                        keywords_table.c.is_active == True
+                    ))
+                )
+
                 # Single combined query for both periods — same filters, same aggregation, halves DB round-trips
                 _period_expr = case(
                     (and_(rankings_table.c.date >= start_date, rankings_table.c.date <= end_date), 'current'),
@@ -2065,6 +2075,7 @@ async def get_reporting_dashboard(
                     )
                     .where(and_(
                         rankings_table.c.campaign_id.in_(campaign_ids),
+                        rankings_table.c.keyword_id.in_(active_keyword_ids_subq),
                         rankings_table.c.google_ranking != None,
                         rankings_table.c.google_ranking > 0,
                         rankings_table.c.google_ranking <= 100,
@@ -4027,6 +4038,15 @@ async def get_reporting_dashboard(
                 # Include zero-volume keywords in agency analytics report chart
                 if campaign_ids:
                     ranking_conditions.append(rankings_table.c.campaign_id.in_(campaign_ids))
+                    # Exclude keywords deleted on the Agency Analytics platform (is_active=False)
+                    chart_active_keyword_ids_subq = (
+                        select(keywords_table.c.id)
+                        .where(and_(
+                            keywords_table.c.campaign_id.in_(campaign_ids),
+                            keywords_table.c.is_active == True
+                        ))
+                    )
+                    ranking_conditions.append(rankings_table.c.keyword_id.in_(chart_active_keyword_ids_subq))
 
                 rankings_agg_query = (
                     select(

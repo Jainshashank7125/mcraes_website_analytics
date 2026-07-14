@@ -131,7 +131,11 @@ async def get_client_keywords(
         )
         
         # Build conditions
-        conditions = [keywords_table.c.campaign_id.in_(campaign_ids)]
+        # Exclude keywords deleted on the Agency Analytics platform (is_active=False)
+        conditions = [
+            keywords_table.c.campaign_id.in_(campaign_ids),
+            keywords_table.c.is_active == True
+        ]
         if campaign_id:
             conditions.append(keywords_table.c.campaign_id == campaign_id)
         if location_country:
@@ -426,8 +430,13 @@ async def get_client_keyword_rankings_over_time(
             return {"data": []}
         
         # Get keyword IDs for filtering using SQLAlchemy Core
+        # Exclude keywords deleted on the Agency Analytics platform (is_active=False)
+        # so their historical rankings don't inflate the chart before the deletion date.
         keywords_table = supabase._get_table("agency_analytics_keywords")
-        keyword_conditions = [keywords_table.c.campaign_id.in_(campaign_ids)]
+        keyword_conditions = [
+            keywords_table.c.campaign_id.in_(campaign_ids),
+            keywords_table.c.is_active == True
+        ]
         if campaign_id:
             keyword_conditions.append(keywords_table.c.campaign_id == campaign_id)
         if location_country:
@@ -710,12 +719,16 @@ async def get_client_keyword_summary(
         keywords_table = supabase._get_table("agency_analytics_keywords")
         rankings_table = supabase._get_table("agency_analytics_keyword_rankings")
         
-        conditions = [keywords_table.c.campaign_id.in_(campaign_ids)]
+        # Exclude keywords deleted on the Agency Analytics platform (is_active=False)
+        conditions = [
+            keywords_table.c.campaign_id.in_(campaign_ids),
+            keywords_table.c.is_active == True
+        ]
         if campaign_id:
             conditions.append(keywords_table.c.campaign_id == campaign_id)
         if location_country:
             conditions.append(keywords_table.c.search_location_country_code == location_country)
-        
+
         # Get keyword ids
         keyword_query = select(keywords_table.c.id).where(and_(*conditions))
         keyword_rows = db.execute(keyword_query)

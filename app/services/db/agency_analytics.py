@@ -274,6 +274,8 @@ class AgencyAnalyticsDBMixin(BaseDB):
                         "tags": record.get("tags"),
                         "date_created": self._parse_datetime(record.get("date_created")),
                         "date_modified": self._parse_datetime(record.get("date_modified")),
+                        # Any keyword present in the API response is (re)activated
+                        "is_active": True,
                         "updated_at": now
                     }
                     # Remove None values
@@ -299,6 +301,9 @@ class AgencyAnalyticsDBMixin(BaseDB):
                             'tags': insert_stmt.excluded.tags,
                             'date_created': insert_stmt.excluded.date_created,
                             'date_modified': insert_stmt.excluded.date_modified,
+                            # A keyword reappearing in the API response is reactivated
+                            'is_active': True,
+                            'deactivated_at': None,
                             'updated_at': insert_stmt.excluded.updated_at
                         }
                     )
@@ -313,6 +318,47 @@ class AgencyAnalyticsDBMixin(BaseDB):
         except Exception as e:
             self.db.rollback()
             logger.error(f"Error upserting keywords: {str(e)}")
+            raise
+
+    def deactivate_missing_keywords(self, campaign_id: int, live_ids: List[int]) -> int:
+        """
+        Soft-delete keywords that no longer exist on the Agency Analytics platform.
+
+        Marks is_active=False for keywords belonging to `campaign_id` whose id is NOT
+        in `live_ids` (the set currently returned by the API). Keeps our charts/counts
+        in sync with Agency Analytics, which purges deleted keywords from all history.
+
+        Guard: callers must only invoke this with a NON-EMPTY live_ids list, so a
+        failed/empty API response can never mass-deactivate an entire campaign.
+        """
+        if not campaign_id or not live_ids:
+            return 0
+
+        try:
+            table = self._get_table("agency_analytics_keywords")
+            update_stmt = (
+                update(table)
+                .where(
+                    and_(
+                        table.c.campaign_id == campaign_id,
+                        table.c.is_active == True,  # noqa: E712 (SQL boolean, not Python identity)
+                        table.c.id.notin_(live_ids)
+                    )
+                )
+                .values(is_active=False, deactivated_at=datetime.now())
+            )
+            result = self.db.execute(update_stmt)
+            self.db.commit()
+            deactivated = result.rowcount or 0
+            if deactivated:
+                logger.info(
+                    f"Deactivated {deactivated} keyword(s) for campaign {campaign_id} "
+                    f"no longer present in Agency Analytics ({len(live_ids)} live keywords)"
+                )
+            return deactivated
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error deactivating missing keywords for campaign {campaign_id}: {str(e)}")
             raise
 
     def upsert_agency_analytics_keyword_rankings(self, rankings: List[Dict]) -> int:

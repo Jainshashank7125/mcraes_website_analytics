@@ -419,6 +419,17 @@ async def sync_agency_analytics_background(
                     count = supabase.upsert_agency_analytics_keywords(campaign_data_batch["keywords"])
                     total_synced["keywords"] += count
 
+                    # Reconcile: mark keywords no longer returned by the API as
+                    # inactive so deleted keywords stop appearing in charts/counts
+                    # (mirrors Agency Analytics, which purges deleted keywords from
+                    # all history). Guarded by the non-empty keyword list above, so a
+                    # failed/empty API response never mass-deactivates a campaign.
+                    live_ids = [k.get("id") for k in campaign_data_batch["keywords"] if k.get("id")]
+                    if live_ids:
+                        deactivated = supabase.deactivate_missing_keywords(campaign_id_val, live_ids)
+                        if deactivated:
+                            logger.info(f"[Job {job_id}] Deactivated {deactivated} removed keyword(s) for campaign {campaign_id_val} ({company_name})")
+
                 if campaign_data_batch["keyword_rankings"]:
                     logger.info(f"[Job {job_id}] Upserting {len(campaign_data_batch['keyword_rankings'])} keyword ranking records for campaign {campaign_id_val}")
                     count = supabase.upsert_agency_analytics_keyword_rankings(campaign_data_batch["keyword_rankings"])
