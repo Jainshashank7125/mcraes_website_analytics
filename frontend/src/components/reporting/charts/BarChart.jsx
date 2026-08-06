@@ -1,6 +1,7 @@
 import { BarChart as RechartsBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { useTheme, useMediaQuery } from '@mui/material'
 import { CHART_COLORS, CHART_CONFIG } from '../constants'
+import WrappedCategoryTick from './AxisTick'
 
 /**
  * Enhanced Reusable Bar Chart Component with responsive design
@@ -18,6 +19,8 @@ import { CHART_COLORS, CHART_CONFIG } from '../constants'
  * @param {Function} props.xAxisFormatter - X-axis label formatter
  * @param {boolean} props.showGrid - Show grid (default: true)
  * @param {boolean} props.showLegend - Show legend (default: true)
+ * @param {number} props.yAxisMaxLines - Max wrapped lines per category label on horizontal charts (default: 2)
+ * @param {number} props.yAxisWidth - Category axis width on horizontal charts, desktop/tablet (default: 150)
  */
 export default function BarChart({
   data = [],
@@ -33,6 +36,8 @@ export default function BarChart({
   margin,
   showGrid = true,
   showLegend = true,
+  yAxisMaxLines = 2,
+  yAxisWidth = 150,
   ...props
 }) {
   const theme = useTheme()
@@ -131,14 +136,18 @@ export default function BarChart({
               }} 
               stroke={CHART_CONFIG.axis.stroke}
             />
-            <YAxis 
+            <YAxis
               dataKey={dataKey}
-              type="category" 
-              width={isMobile ? 100 : 150}
-              tick={{ 
-                fontSize: isMobile ? 10 : 11,
-                fill: CHART_CONFIG.axis.stroke
-              }}
+              type="category"
+              width={isMobile ? 100 : yAxisWidth}
+              interval={0}
+              tick={
+                <WrappedCategoryTick
+                  fontSize={isMobile ? 10 : 11}
+                  fill={CHART_CONFIG.axis.stroke}
+                  maxLines={yAxisMaxLines}
+                />
+              }
               stroke={CHART_CONFIG.axis.stroke}
             />
           </>
@@ -166,8 +175,15 @@ export default function BarChart({
             />
           </>
         )}
-        <Tooltip 
-          contentStyle={CHART_CONFIG.tooltip}
+        <Tooltip
+          contentStyle={{
+            ...CHART_CONFIG.tooltip,
+            // Category labels can be long URLs - wrap them instead of
+            // stretching the tooltip off screen
+            maxWidth: 340,
+            whiteSpace: 'normal',
+            wordBreak: 'break-word',
+          }}
           formatter={tooltipFormatter}
           labelFormatter={tooltipLabelFormatter}
           cursor={{ fill: 'rgba(0, 0, 0, 0.05)' }}

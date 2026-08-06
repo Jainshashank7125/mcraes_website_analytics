@@ -6350,7 +6350,7 @@ function ReportingDashboard({
                           title="Top Performing Pages"
                           badge="Analytics"
                           badgeColor={CHART_COLORS.ga4.primary}
-                          height={500}
+                          height={620}
                           animationDelay={0.9}
                           chartKey="ga4_top_pages"
                           showCheckbox={false}
@@ -6375,13 +6375,17 @@ function ReportingDashboard({
                             value.toLocaleString(),
                             "Views",
                           ]}
+                          // Page paths can be very long - give the labels enough
+                          // room/lines to show the whole URL instead of clipping it
+                          yAxisWidth={230}
+                          yAxisMaxLines={3}
                           margin={{
                             top: 5,
                             right: 30,
-                            left: 150,
+                            left: 160,
                             bottom: 5,
                           }}
-                          height={400}
+                          height={520}
                         />
                       </ChartCard>
                       </Box>
