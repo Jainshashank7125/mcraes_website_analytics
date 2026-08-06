@@ -8312,7 +8312,9 @@ async def get_client_keyword_rankings_over_time(
         )
         
         # Main query to get the latest ranking per keyword per date
-        # Filter by volume > 0 to match the keywords table logic
+        # NOTE: deliberately NOT filtered on volume — see the comment on the live copy of this
+        # handler in app/api/routes/keywords_data.py. Agency Analytics counts every tracked
+        # keyword regardless of search volume, and returns no volume at all for many keywords.
         # Also need keyword_id to ensure we're counting unique keywords per date
         rankings_query = select(
             rankings_table.c.keyword_id,
@@ -8327,11 +8329,6 @@ async def get_client_keyword_rankings_over_time(
                 rankings_table.c.date == latest_ids_subquery.c.date,
                 rankings_table.c.id == latest_ids_subquery.c.max_id
             )
-        ).where(
-            and_(
-                rankings_table.c.volume != None,
-                rankings_table.c.volume > 0
-            )
         ).order_by(rankings_table.c.date.asc(), rankings_table.c.keyword_id.asc())
         
         rankings_result = db.execute(rankings_query)
@@ -8345,16 +8342,15 @@ async def get_client_keyword_rankings_over_time(
             for idx, ranking in enumerate(rankings_data[:10]):
                 logger.info(f"[Rankings Over Time API]   [{idx+1}] Date: {ranking.get('date')}, Google: {ranking.get('google_ranking')}, Bing: {ranking.get('bing_ranking')}")
             
-            # Count by bucket from raw data (after volume filter)
-            filtered_rankings = [r for r in rankings_data if (r.get("volume", 0) or 0) > 0]
-            raw_not_found = sum(1 for r in filtered_rankings if r.get("google_ranking") is None or r.get("google_ranking") == 0)
-            raw_1_3 = sum(1 for r in filtered_rankings if r.get("google_ranking") and 1 <= r.get("google_ranking") <= 3)
-            raw_4_10 = sum(1 for r in filtered_rankings if r.get("google_ranking") and 4 <= r.get("google_ranking") <= 10)
-            raw_11_20 = sum(1 for r in filtered_rankings if r.get("google_ranking") and 11 <= r.get("google_ranking") <= 20)
-            raw_21_50 = sum(1 for r in filtered_rankings if r.get("google_ranking") and 21 <= r.get("google_ranking") <= 50)
-            raw_51_plus = sum(1 for r in filtered_rankings if r.get("google_ranking") and r.get("google_ranking") > 50)
-            logger.info(f"[Rankings Over Time API] Raw data bucket counts (after volume filter) - Not Found: {raw_not_found}, 1-3: {raw_1_3}, 4-10: {raw_4_10}, 11-20: {raw_11_20}, 21-50: {raw_21_50}, 51+: {raw_51_plus}")
-            logger.info(f"[Rankings Over Time API] Total records: {len(rankings_data)}, After volume filter: {len(filtered_rankings)}")
+            # Count by bucket from the raw data that is actually charted (no volume filter)
+            raw_not_found = sum(1 for r in rankings_data if r.get("google_ranking") is None or r.get("google_ranking") == 0)
+            raw_1_3 = sum(1 for r in rankings_data if r.get("google_ranking") and 1 <= r.get("google_ranking") <= 3)
+            raw_4_10 = sum(1 for r in rankings_data if r.get("google_ranking") and 4 <= r.get("google_ranking") <= 10)
+            raw_11_20 = sum(1 for r in rankings_data if r.get("google_ranking") and 11 <= r.get("google_ranking") <= 20)
+            raw_21_50 = sum(1 for r in rankings_data if r.get("google_ranking") and 21 <= r.get("google_ranking") <= 50)
+            raw_51_plus = sum(1 for r in rankings_data if r.get("google_ranking") and r.get("google_ranking") > 50)
+            logger.info(f"[Rankings Over Time API] Raw data bucket counts - Not Found: {raw_not_found}, 1-3: {raw_1_3}, 4-10: {raw_4_10}, 11-20: {raw_11_20}, 21-50: {raw_21_50}, 51+: {raw_51_plus}")
+            logger.info(f"[Rankings Over Time API] Total records: {len(rankings_data)}")
         
         # Group by date and calculate position buckets
         # Track unique keywords per date to ensure we don't double-count
@@ -8404,11 +8400,6 @@ async def get_client_keyword_rankings_over_time(
             # Skip if we've already counted this keyword for this date (avoid duplicates)
             if keyword_id in date_keyword_tracker[date_key]:
                 continue
-            
-            # Check volume filter (matches table filter: volume > 0)
-            volume = ranking.get("volume", 0) or 0
-            if volume <= 0:
-                continue  # Skip this ranking record if volume is 0 or null
             
             # Mark this keyword as counted for this date
             date_keyword_tracker[date_key].add(keyword_id)

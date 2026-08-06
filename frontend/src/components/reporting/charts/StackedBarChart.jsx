@@ -159,13 +159,16 @@ export default function StackedBarChart({
           interval="preserveStartEnd"
           tickFormatter={formatDate}
         />
-        <YAxis 
-          tick={{ 
+        <YAxis
+          tick={{
             fontSize: isMobile ? 10 : isTablet ? 11 : 12,
             fill: CHART_CONFIG.axis.stroke
-          }} 
+          }}
           stroke={CHART_CONFIG.axis.stroke}
           width={isMobile ? 40 : undefined}
+          // Keyword counts are whole numbers; without this a max stack of 3 auto-ticks
+          // as 0.75 / 1.5 / 2.25 / 3
+          allowDecimals={false}
           label={{ 
             value: 'Keywords', 
             angle: -90, 

@@ -8,7 +8,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-})  s
+})
 
 // Helper function to get token from appropriate storage
 const getTokenFromStorage = () => {
