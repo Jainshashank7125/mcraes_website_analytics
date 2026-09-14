@@ -1310,8 +1310,68 @@ export const auditAPI = {
     const params = new URLSearchParams()
     if (userEmail) params.append('user_email', userEmail)
     params.append('limit', limit)
-    
+
     const response = await api.get(`/api/v1/audit/user-activity?${params.toString()}`)
+    return response.data
+  },
+}
+
+export const userAPI = {
+  // Get all users with pagination, search, and active filter (admin only)
+  getUsers: async (page = 1, pageSize = 25, search = '', active = 'active') => {
+    const params = new URLSearchParams()
+    params.append('page', page)
+    params.append('page_size', pageSize)
+    if (search && search.trim()) {
+      params.append('search', search.trim())
+    }
+    params.append('active', active)
+
+    const response = await api.get(`/api/v1/data/users?${params.toString()}`)
+    return response.data
+  },
+
+  // Get a single user by ID (admin only)
+  getUser: async (userId) => {
+    const response = await api.get(`/api/v1/data/users/${userId}`)
+    return response.data
+  },
+
+  // Create a new user (admin only)
+  createUser: async ({ email, password, fullName = null, role = 'user' }) => {
+    const response = await api.post('/api/v1/data/users', {
+      email,
+      password,
+      full_name: fullName,
+      role,
+    })
+    return response.data
+  },
+
+  // Update a user's full name and/or email (admin only)
+  updateUser: async (userId, { email, fullName } = {}) => {
+    const payload = {}
+    if (email !== undefined) payload.email = email
+    if (fullName !== undefined) payload.full_name = fullName
+    const response = await api.patch(`/api/v1/data/users/${userId}`, payload)
+    return response.data
+  },
+
+  // Change a user's role (admin only)
+  setUserRole: async (userId, role) => {
+    const response = await api.patch(`/api/v1/data/users/${userId}/role`, { role })
+    return response.data
+  },
+
+  // Activate or deactivate a user (admin only)
+  setUserActive: async (userId, isActive) => {
+    const response = await api.patch(`/api/v1/data/users/${userId}/status`, { is_active: isActive })
+    return response.data
+  },
+
+  // Reset a user's password (admin only)
+  resetPassword: async (userId, newPassword) => {
+    const response = await api.post(`/api/v1/data/users/${userId}/reset-password`, { new_password: newPassword })
     return response.data
   },
 }

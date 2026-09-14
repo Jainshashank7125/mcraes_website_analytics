@@ -1,9 +1,10 @@
 import { Navigate } from 'react-router-dom'
 import { Box, CircularProgress } from '@mui/material'
 import { useAuth } from '../contexts/AuthContext'
+import { isAdmin } from '../utils/roleUtils'
 
-function ProtectedRoute({ children }) {
-  const { isAuthenticated, loading } = useAuth()
+function ProtectedRoute({ children, adminOnly = false }) {
+  const { isAuthenticated, loading, user } = useAuth()
 
   if (loading) {
     return (
@@ -22,6 +23,10 @@ function ProtectedRoute({ children }) {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
+  }
+
+  if (adminOnly && !isAdmin(user)) {
+    return <Navigate to="/" replace />
   }
 
   return children

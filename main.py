@@ -9,6 +9,7 @@ from app.api.routes import (
     scrunch_data, ga4_data, agency_analytics_data,
     reporting_data, clients_data, dashboard_links_data, keywords_data,
     sync_shared, sync_scrunch, sync_ga4, sync_agency_analytics,
+    users_admin,
 )
 from app.db.database import init_db, check_db_connection
 from app.core.logging_config import setup_logging
@@ -119,6 +120,7 @@ app.include_router(reporting_data.router, prefix="/api/v1", tags=["data"])
 app.include_router(clients_data.router, prefix="/api/v1", tags=["data"])
 app.include_router(dashboard_links_data.router, prefix="/api/v1", tags=["data"])
 app.include_router(keywords_data.router, prefix="/api/v1", tags=["data"])
+app.include_router(users_admin.router, prefix="/api/v1", tags=["data"])
 
 # Sync routers
 app.include_router(sync_scrunch.router, prefix="/api/v1", tags=["sync"])

@@ -70,6 +70,19 @@ class AuthenticationException(BaseAPIException):
         )
 
 
+class AuthorizationException(BaseAPIException):
+    """Authorization errors (authenticated but not permitted)"""
+
+    def __init__(self, user_message: str, technical_message: Optional[str] = None, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            user_message=user_message,
+            technical_message=technical_message,
+            error_code="AUTHORIZATION_ERROR",
+            details=details
+        )
+
+
 class ValidationException(BaseAPIException):
     """Validation errors"""
     

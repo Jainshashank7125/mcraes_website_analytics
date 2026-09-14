@@ -59,6 +59,8 @@ class UserResponseV2(BaseModel):
     id: int
     email: str
     full_name: Optional[str] = None
+    role: str
+    is_active: bool
     created_at: str
 
 
@@ -96,11 +98,19 @@ async def get_current_user_v2(
                 user_message="Your session has expired. Please sign in again.",
                 technical_message=f"User {user_id} not found in database"
             )
-        
+
+        if not user.is_active:
+            raise AuthenticationException(
+                user_message="Your account has been deactivated. Please contact an administrator.",
+                technical_message=f"User {user_id} is deactivated"
+            )
+
         return {
             "id": user.id,
             "email": user.email,
-            "full_name": user.full_name
+            "full_name": user.full_name,
+            "role": user.role,
+            "is_active": user.is_active
         }
     except AuthenticationException:
         raise
@@ -215,7 +225,26 @@ async def signin_v2(
                 user_message="The email or password you entered is incorrect.",
                 technical_message="Authentication failed: invalid credentials"
             )
-        
+
+        if not user.is_active:
+            # Log rejected login for deactivated account
+            try:
+                await audit_logger.log_login(
+                    user_id=str(user.id),
+                    user_email=user.email,
+                    status="error",
+                    error_message="Account deactivated",
+                    request=http_request,
+                    db=db
+                )
+            except Exception:
+                pass
+
+            raise AuthenticationException(
+                user_message="Your account has been deactivated. Please contact an administrator.",
+                technical_message=f"User {user.id} is deactivated"
+            )
+
         # Generate access token (3 hours)
         access_token = create_access_token(user_id=user.id, email=user.email)
         
@@ -243,7 +272,9 @@ async def signin_v2(
             "user": {
                 "id": user.id,
                 "email": user.email,
-                "full_name": user.full_name
+                "full_name": user.full_name,
+                "role": user.role,
+                "is_active": user.is_active
             },
             "expires_in": expires_in
         }
@@ -345,7 +376,9 @@ async def refresh_token_v2(
             "user": {
                 "id": user.id,
                 "email": user.email,
-                "full_name": user.full_name
+                "full_name": user.full_name,
+                "role": user.role,
+                "is_active": user.is_active
             },
             "expires_in": expires_in
         }
@@ -409,6 +442,8 @@ async def get_current_user_info_v2(
             id=user.id,
             email=user.email,
             full_name=user.full_name,
+            role=user.role,
+            is_active=user.is_active,
             created_at=user.created_at.isoformat() if user.created_at else ""
         )
     except AuthenticationException:

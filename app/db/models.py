@@ -14,6 +14,11 @@ class AuditLogAction(str, enum.Enum):
     LOGIN = "login"
     LOGOUT = "logout"
     USER_CREATED = "user_created"
+    USER_UPDATED = "user_updated"
+    USER_ROLE_CHANGED = "user_role_changed"
+    USER_DEACTIVATED = "user_deactivated"
+    USER_REACTIVATED = "user_reactivated"
+    USER_PASSWORD_RESET_BY_ADMIN = "user_password_reset_by_admin"
     SYNC_BRANDS = "sync_brands"
     SYNC_PROMPTS = "sync_prompts"
     SYNC_RESPONSES = "sync_responses"
@@ -135,9 +140,11 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     full_name = Column(String(255), nullable=True)
+    role = Column(String(20), nullable=False, default='user')
+    is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    
+
     # Relationship to refresh tokens
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
     

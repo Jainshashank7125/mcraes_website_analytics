@@ -57,6 +57,15 @@ export const queryKeys = {
     campaigns: (id) => [...queryKeys.clients.detail(id), 'campaigns'],
   },
 
+  // Users (admin)
+  users: {
+    all: ['users'],
+    lists: () => [...queryKeys.users.all, 'list'],
+    list: (filters) => [...queryKeys.users.lists(), { filters }],
+    details: () => [...queryKeys.users.all, 'detail'],
+    detail: (id) => [...queryKeys.users.details(), id],
+  },
+
   // Keywords
   keywords: {
     all: ['keywords'],

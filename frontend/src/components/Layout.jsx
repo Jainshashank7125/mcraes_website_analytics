@@ -33,6 +33,7 @@ import {
   PersonAdd as PersonAddIcon,
   History as HistoryIcon,
   Link as LinkIcon,
+  ManageAccounts as ManageAccountsIcon,
 } from '@mui/icons-material'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
@@ -54,6 +55,7 @@ const menuItems = [
   { text: 'Sync Data', icon: SyncIcon, path: '/sync', adminOnly: false },
   { text: 'Scrunch Data', icon: StorageIcon, path: '/data', adminOnly: false },
   { text: 'Audit Logs', icon: HistoryIcon, path: '/audit-logs', adminOnly: true },
+  { text: 'Users', icon: ManageAccountsIcon, path: '/users', adminOnly: true },
 ]
 
 const itemVariants = {
@@ -139,15 +141,17 @@ function Layout({ children }) {
       <Box sx={{ flex: 1, overflow: 'auto', py: 1.5 }}>
         <List sx={{ px: 1.5 }}>
           {menuItems
+            .filter((item) => !item.adminOnly || isAdmin(user))
             .map((item, index) => {
-            const isActive = location.pathname === item.path || 
+            const isActive = location.pathname === item.path ||
                             (item.path === '/' && location.pathname === '/') ||
                             // (item.path === '/brands' && location.pathname.startsWith('/brands')) ||
                             (item.path === '/clients' && location.pathname.startsWith('/clients')) ||
                             // (item.path === '/agency-analytics' && location.pathname === '/agency-analytics') ||
                             (item.path === '/reporting' && location.pathname === '/reporting') ||
                             (item.path === '/dashboard-links' && location.pathname === '/dashboard-links') ||
-                            (item.path === '/audit-logs' && location.pathname === '/audit-logs')
+                            (item.path === '/audit-logs' && location.pathname === '/audit-logs') ||
+                            (item.path === '/users' && location.pathname.startsWith('/users'))
             const IconComponent = item.icon
             
             return (
