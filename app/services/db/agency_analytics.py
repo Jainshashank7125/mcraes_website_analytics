@@ -375,6 +375,11 @@ class AgencyAnalyticsDBMixin(BaseDB):
             if not valid_rankings:
                 return 0
 
+            # One row per keyword per day: if the same keyword_id_date appears twice in one
+            # payload keep the last one (Postgres rejects an ON CONFLICT statement that
+            # would update the same row twice).
+            valid_rankings = list({r["keyword_id_date"]: r for r in valid_rankings}.values())
+
             # Process in larger batches for better performance
             batch_size = 1000  # Increased from 500
             total_upserted = 0
@@ -422,7 +427,10 @@ class AgencyAnalyticsDBMixin(BaseDB):
                     # Actually, it's safer to include all fields and let SQLAlchemy handle None values
                     records.append(clean_record)
 
-                # Bulk insert all records at once (no unique constraint, so just insert)
+                # Bulk upsert: keyword_id_date is unique (v34), so re-syncing a day updates
+                # that day's row in place with whatever Agency Analytics returns now. Agency
+                # Analytics revises recent days after the fact, and None values are written
+                # too so a day it later reports as "not found" is stored as such.
                 if records:
                     try:
                         # Ensure all records have the same keys by explicitly setting None for missing keys
@@ -439,8 +447,28 @@ class AgencyAnalyticsDBMixin(BaseDB):
                                 normalized_rec[key] = rec.get(key)  # Will be None if key doesn't exist
                             normalized_records.append(normalized_rec)
 
-                        insert_stmt = insert(table).values(normalized_records)
-                        result = self.db.execute(insert_stmt)
+                        insert_stmt = pg_insert(table).values(normalized_records)
+                        insert_stmt = insert_stmt.on_conflict_do_update(
+                            index_elements=['keyword_id_date'],
+                            set_={
+                                'keyword_id': insert_stmt.excluded.keyword_id,
+                                'campaign_id': insert_stmt.excluded.campaign_id,
+                                'date': insert_stmt.excluded.date,
+                                'google_ranking': insert_stmt.excluded.google_ranking,
+                                'google_ranking_url': insert_stmt.excluded.google_ranking_url,
+                                'google_mobile_ranking': insert_stmt.excluded.google_mobile_ranking,
+                                'google_mobile_ranking_url': insert_stmt.excluded.google_mobile_ranking_url,
+                                'google_local_ranking': insert_stmt.excluded.google_local_ranking,
+                                'bing_ranking': insert_stmt.excluded.bing_ranking,
+                                'bing_ranking_url': insert_stmt.excluded.bing_ranking_url,
+                                'results': insert_stmt.excluded.results,
+                                'volume': insert_stmt.excluded.volume,
+                                'competition': insert_stmt.excluded.competition,
+                                'field_status': insert_stmt.excluded.field_status,
+                                'updated_at': insert_stmt.excluded.updated_at
+                            }
+                        )
+                        self.db.execute(insert_stmt)
                         self.db.commit()
                         logger.debug(f"Upserted batch {i//batch_size + 1}: {len(batch)} keyword ranking records")
                     except Exception as batch_error:

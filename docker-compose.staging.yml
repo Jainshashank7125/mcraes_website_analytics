@@ -5,10 +5,11 @@ services:
       - "8200:8000"
     environment:
       - OTEL_DEPLOYMENT_ENVIRONMENT=staging
-      - SUPABASE_DB_HOST=mcraes-postgres
-    networks: !override
-      - mcraes-network
-      - mcraes-production-network
+      # Staging uses its own postgres service (mcraes-postgres-staging) via the base
+      # compose default (SUPABASE_DB_HOST=postgres). It must NOT join the production
+      # network or point at mcraes-postgres: that made nightly syncs write into the
+      # prod database with staging code, and put a second container with the alias
+      # "backend" on the prod network, so the prod frontend was proxied to staging.
 
   frontend:
     container_name: mcraes-frontend-staging
@@ -27,8 +28,3 @@ services:
     container_name: mcraes-pgadmin-staging
     ports: !override
       - "5150:80"
-
-networks:
-  mcraes-production-network:
-    external: true
-    name: mcraes_website_analytics_mcraes-network

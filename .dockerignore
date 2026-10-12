@@ -44,3 +44,8 @@ docker-compose*.yml
 logs/
 .DS_Store
 
+
+# Database backups live on the host (scripts/*_backup.sh); never bake them into the image
+dumps/
+*.dump
+*.dump.gz

@@ -12,7 +12,10 @@ from datetime import datetime
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-API_BASE = "http://localhost:8200/api/v1"
+# The cron runs inside the backend container, where uvicorn listens on PORT (8000).
+# (8200 is only the host-side port published for the staging backend, so using it
+# here made every nightly sync fail with "Cannot connect to API server".)
+API_BASE = os.environ.get("SYNC_API_BASE", f"http://localhost:{os.environ.get('PORT', '8000')}/api/v1")
 
 def sync_scrunch_data():
     """Sync Scrunch AI data (brands, prompts, responses) - Complete mode"""

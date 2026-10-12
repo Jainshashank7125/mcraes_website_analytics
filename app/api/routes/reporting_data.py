@@ -17,6 +17,39 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 ga4_client = GA4APIClient()
 
+
+def count_keywords_ranking_in_period(db: Session, rankings_table, keywords_table, campaign_ids, period_start, period_end) -> int:
+    """
+    Number of active keywords that rank on Google at the END of the period.
+
+    This is Agency Analytics' own "Google Rankings" number: for each keyword take its
+    latest ranking in [period_start, period_end] (newest date, then newest row) and
+    count the ones with google_ranking > 0. Any position counts (51+ included) and no
+    volume filter is applied. Counting rows instead would multiply this by the number of
+    days in the period (and previously by the number of syncs too).
+    """
+    latest = (
+        select(rankings_table.c.keyword_id, rankings_table.c.google_ranking)
+        .where(and_(
+            rankings_table.c.campaign_id.in_(campaign_ids),
+            rankings_table.c.keyword_id.in_(
+                select(keywords_table.c.id).where(and_(
+                    keywords_table.c.campaign_id.in_(campaign_ids),
+                    keywords_table.c.is_active == True
+                ))
+            ),
+            rankings_table.c.date >= period_start,
+            rankings_table.c.date <= period_end,
+        ))
+        .distinct(rankings_table.c.keyword_id)
+        .order_by(rankings_table.c.keyword_id, rankings_table.c.date.desc(), rankings_table.c.id.desc())
+        .subquery()
+    )
+    return db.execute(
+        select(func.count()).select_from(latest).where(latest.c.google_ranking > 0)
+    ).scalar() or 0
+
+
 class KPISelectionRequest(BaseModel):
     selected_kpis: List[str]
     visible_sections: Optional[List[str]] = None  # Optional for backward compatibility
@@ -901,7 +934,14 @@ async def get_reporting_dashboard(
                 # Calculate changes for 100% accurate source data KPIs only
                 avg_rank_change = calculate_change(avg_keyword_rank, prev_avg_rank)
                 search_volume_change = calculate_change(total_search_volume, prev_total_search_volume)
-                ranking_count_change = calculate_change(total_rankings, prev_total_rankings)
+                # "Google Ranking Count" = keywords ranking at the end of each period, which is
+                # what Agency Analytics reports (total_rankings above is a keyword-day row
+                # count and stays only as the weight for the average rank)
+                ranked_keywords_count = count_keywords_ranking_in_period(
+                    db, rankings_table, keywords_table, campaign_ids, start_date, end_date)
+                prev_ranked_keywords_count = count_keywords_ranking_in_period(
+                    db, rankings_table, keywords_table, campaign_ids, prev_start, prev_end)
+                ranking_count_change = calculate_change(ranked_keywords_count, prev_ranked_keywords_count)
                 ranking_change_change = calculate_change(avg_ranking_change, 0) if ranking_change_count > 0 else 0
                 
                 logger.info(f"[Agency Analytics KPI] Changes: avg_rank_change={avg_rank_change}%, search_volume_change={search_volume_change}%, ranking_count_change={ranking_count_change}%")
@@ -969,13 +1009,13 @@ async def get_reporting_dashboard(
                         },
                         # New/Updated Google Ranking KPIs
                         "google_ranking_count": {
-                            "value": total_rankings,
+                            "value": ranked_keywords_count,
                             "change": ranking_count_change,
                             "source": "AgencyAnalytics",
                             "label": "Google Ranking Count",
                             "icon": "Search",
                             "format": "number",
-                            "display": f"Total keywords ranking: {total_rankings}"
+                            "display": f"Total keywords ranking: {ranked_keywords_count}"
                         },
                         "google_ranking": {
                             "value": round(avg_keyword_rank, 1),
@@ -1008,7 +1048,7 @@ async def get_reporting_dashboard(
                             "value": {
                                 "avg_ranking_change": round(avg_ranking_change, 1),
                                 "total_search_volume": int(total_search_volume),
-                                "keywords_count": total_rankings
+                                "keywords_count": ranked_keywords_count
                             },
                             "change": {
                                 "ranking_change": ranking_change_change,
@@ -2826,7 +2866,11 @@ async def get_reporting_dashboard(
                 chart_all_keywords_rankings.sort(key=lambda x: x["average_ranking"] if x["average_ranking"] is not None else 999)
                 chart_data["all_keywords_ranking"] = chart_all_keywords_rankings[:10]
                 chart_data["keyword_rankings_performance"] = {
-                    "google_rankings": chart_total_rankings,
+                    # keywords ranking at the end of the period (Agency Analytics' number),
+                    # not the sum of keyword-day rows
+                    "google_rankings": count_keywords_ranking_in_period(
+                        db, rankings_table, keywords_table, campaign_ids, start_date, end_date
+                    ) if campaign_ids else 0,
                     "google_rankings_change": 0,  # Would need historical comparison in chart section
                     "volume": chart_total_search_volume,
                     "volume_change": 0  # Would need historical comparison in chart section

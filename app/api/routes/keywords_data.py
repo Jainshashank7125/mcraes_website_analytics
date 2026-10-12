@@ -191,7 +191,9 @@ async def get_client_keywords(
                     )
                 )
                 .distinct(rankings_table.c.keyword_id)
-                .order_by(rankings_table.c.keyword_id, rankings_table.c.date.desc())
+                # id desc is a deterministic tiebreak (newest row wins), so the "latest
+                # ranking" can never flip between requests if two rows share a date
+                .order_by(rankings_table.c.keyword_id, rankings_table.c.date.desc(), rankings_table.c.id.desc())
             )
             for row in db.execute(latest_ranking_query):
                 row_dict = dict(row._mapping)

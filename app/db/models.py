@@ -694,7 +694,7 @@ class AgencyAnalyticsKeywordRanking(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     keyword_id = Column(BigInteger, ForeignKey("agency_analytics_keywords.id", ondelete="CASCADE"), nullable=False, index=True)  # Changed to BIGINT
     campaign_id = Column(BigInteger, ForeignKey("agency_analytics_campaigns.id", ondelete="CASCADE"), nullable=False, index=True)  # Changed to BIGINT
-    keyword_id_date = Column(String, nullable=False, index=True)  # Unique constraint removed - allows multiple entries per keyword per date
+    keyword_id_date = Column(String, unique=True, nullable=False, index=True)  # One row per keyword per day (unique restored in v34); the sync upserts on this
     date = Column(Date, nullable=False, index=True)
     google_ranking = Column(Integer, nullable=True)
     google_ranking_url = Column(Text, nullable=True)
