@@ -2,6 +2,7 @@
 Agency Analytics API Client
 Fetches campaigns and campaign rankings data
 """
+import asyncio
 import httpx
 import logging
 import json
@@ -13,11 +14,51 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# How far back to look when a caller doesn't specify start_date. Must be long enough
-# that any realistic sync outage self-heals on the next successful run, regardless of
-# calendar month boundaries (previously this defaulted to "first of the current
-# month", so an outage discovered in the following month could never be backfilled).
-DEFAULT_SYNC_LOOKBACK_DAYS = 60
+# Agency Analytics returns DAILY ranking rows only for date ranges of up to about a month.
+# For longer ranges it silently switches to one MONTHLY summary row per month (date
+# "YYYY-MM"); those used to be stored as the 1st of the month, overwriting the real daily
+# value, while every other day went unfetched. Longer ranges are therefore always
+# requested in chunks of at most this many days (inclusive). Verified: 31 days -> daily,
+# 40+ days -> monthly.
+MAX_DAILY_RANGE_DAYS = 31
+
+# How far back to look when a caller doesn't specify start_date. A rolling window (not the
+# calendar month), so the last days of a month keep being re-fetched after it ends (Agency
+# Analytics revises recent days after the fact) and a missed sync self-heals on the next
+# run. Kept within MAX_DAILY_RANGE_DAYS so the nightly sync is a single request per keyword.
+DEFAULT_SYNC_LOOKBACK_DAYS = MAX_DAILY_RANGE_DAYS
+
+# Agency Analytics rate-limits ("Too many requests", code 429). Retry with exponential
+# backoff instead of skipping the keyword: skipped keywords previously left days missing
+# or stale while the sync still reported success.
+RATE_LIMIT_MAX_RETRIES = 5
+RATE_LIMIT_BASE_DELAY_SECONDS = 2
+
+
+class AgencyAnalyticsRateLimited(Exception):
+    """Agency Analytics answered 'Too many requests' (or an unparseable, transient response)."""
+
+
+def daily_date_chunks(start_date: str, end_date: str) -> List[Tuple[str, str]]:
+    """Split [start_date, end_date] (YYYY-MM-DD, inclusive) into ranges of at most
+    MAX_DAILY_RANGE_DAYS days, so Agency Analytics always answers with daily rows."""
+    start = datetime.strptime(start_date, "%Y-%m-%d").date()
+    end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    chunks = []
+    while start <= end:
+        chunk_end = min(start + timedelta(days=MAX_DAILY_RANGE_DAYS - 1), end)
+        chunks.append((start.isoformat(), chunk_end.isoformat()))
+        start = chunk_end + timedelta(days=1)
+    return chunks
+
+
+def _keep_daily_rows(rows: List[Dict], what: str) -> List[Dict]:
+    """Drop monthly summary rows ("YYYY-MM") so they can never overwrite a real day."""
+    daily = [r for r in rows if len(str(r.get("date", ""))) == 10]
+    if len(daily) != len(rows):
+        logger.warning(f"[Agency Analytics] Dropped {len(rows) - len(daily)} non-daily row(s) for {what}")
+    return daily
+
 
 class AgencyAnalyticsClient:
     """Client for interacting with Agency Analytics API"""
@@ -45,7 +86,20 @@ class AgencyAnalyticsClient:
         }
     
     async def _request(self, body: Dict) -> Dict:
-        """Make HTTP request to Agency Analytics API"""
+        """Make HTTP request to Agency Analytics API, retrying with backoff when rate limited"""
+        for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
+            try:
+                return await self._request_once(body)
+            except AgencyAnalyticsRateLimited as e:
+                if attempt == RATE_LIMIT_MAX_RETRIES:
+                    logger.error(f"[Agency Analytics] Still rate limited after {RATE_LIMIT_MAX_RETRIES} retries: {e}")
+                    raise
+                delay = RATE_LIMIT_BASE_DELAY_SECONDS * (2 ** attempt)
+                logger.warning(f"[Agency Analytics] {e} - retry {attempt + 1}/{RATE_LIMIT_MAX_RETRIES} in {delay}s")
+                await asyncio.sleep(delay)
+
+    async def _request_once(self, body: Dict) -> Dict:
+        """Make a single HTTP request to Agency Analytics API"""
         try:
             logger.debug(f"[Agency Analytics] Making API request to {self.base_url}")
             async with httpx.AsyncClient(timeout=60.0) as client:
@@ -58,22 +112,28 @@ class AgencyAnalyticsClient:
                 logger.debug(f"[Agency Analytics] API response status: {response.status_code}")
                 
                 # API always returns 200, but check response status field
+                if response.status_code == 429:
+                    raise AgencyAnalyticsRateLimited("HTTP 429 Too many requests")
+
                 try:
                     response_data = response.json()
                 except Exception as json_error:
-                    logger.error(f"[Agency Analytics] Failed to parse JSON response: {str(json_error)}")
-                    logger.error(f"[Agency Analytics] Response text: {response.text[:500]}")
-                    raise Exception(f"Invalid JSON response from Agency Analytics API: {str(json_error)}")
-                
+                    # Seen alongside rate limiting; treat as transient so it is retried
+                    raise AgencyAnalyticsRateLimited(
+                        f"Invalid JSON response from Agency Analytics API: {str(json_error)} ({response.text[:120]!r})")
+
                 # Check for errors in response
                 if response_data.get("status") == "error":
                     error_code = response_data.get("code", 0)
                     error_messages = response_data.get("results", {}).get("messages", {})
-                    
+
                     error_msg = f"Agency Analytics API error (code {error_code})"
                     if error_messages:
                         error_msg += f": {json.dumps(error_messages)}"
-                    
+
+                    if str(error_code) == "429":
+                        raise AgencyAnalyticsRateLimited(error_msg)
+
                     logger.error(f"[Agency Analytics] {error_msg}")
                     raise Exception(error_msg)
                 
@@ -88,6 +148,8 @@ class AgencyAnalyticsClient:
                 logger.debug(f"[Agency Analytics] Response contains {len(rows)} rows")
                 
                 return response_data
+        except AgencyAnalyticsRateLimited:
+            raise  # retried by _request; not logged as an error on every attempt
         except httpx.HTTPStatusError as e:
             logger.error(f"[Agency Analytics] HTTP error: {e.response.status_code} - {e.response.text[:500]}")
             raise
@@ -233,50 +295,55 @@ class AgencyAnalyticsClient:
             end_date: Optional end date (YYYY-MM-DD). If not provided, defaults to today.
 
         Returns:
-            List of campaign ranking records
+            List of daily campaign ranking records (ranges longer than MAX_DAILY_RANGE_DAYS
+            are fetched in chunks so Agency Analytics never switches to monthly rows)
         """
         try:
-            # Default to a rolling lookback window if dates not provided
+            # Default to a rolling lookback window if dates not provided (inclusive, so the
+            # default is exactly one daily-granularity request)
             if not end_date:
                 end_date = datetime.now().strftime("%Y-%m-%d")
             if not start_date:
-                start_date = (datetime.now() - timedelta(days=DEFAULT_SYNC_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+                start_date = (datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=DEFAULT_SYNC_LOOKBACK_DAYS - 1)).strftime("%Y-%m-%d")
 
-            filters = [
-                {"campaign_id": {"$equals_comparison": campaign_id}},
-                {"end_date": {"$lessthanorequal_comparison": end_date}},
-                {"start_date": {"$greaterthanorequal_comparison": start_date}}
-            ]
-            
-            body = {
-                "provider": "agency-analytics-v2",
-                "asset": "campaign-rankings",
-                "operation": "read",
-                "fields": [
-                    "date",
-                    "google_ranking_change",
-                    "google_ranking_count",
-                    "google_local_ranking_change",
-                    "google_local_ranking_count",
-                    "google_mobile_ranking_change",
-                    "google_mobile_ranking_count",
-                    "bing_ranking_change",
-                    "bing_ranking_count",
-                    "ranking_average",
-                    "results",
-                    "volume",
-                    "competition",
-                    "field_status"
-                ],
-                "filters": filters,
-                "group_by": ["date"],
-                "sort": {"date": "asc"},
-                "offset": 0,
-                "limit": 9999
-            }
-            
-            response = await self._request(body)
-            return response.get("results", {}).get("rows", [])
+            rows = []
+            for chunk_start, chunk_end in daily_date_chunks(start_date, end_date):
+                filters = [
+                    {"campaign_id": {"$equals_comparison": campaign_id}},
+                    {"end_date": {"$lessthanorequal_comparison": chunk_end}},
+                    {"start_date": {"$greaterthanorequal_comparison": chunk_start}}
+                ]
+
+                body = {
+                    "provider": "agency-analytics-v2",
+                    "asset": "campaign-rankings",
+                    "operation": "read",
+                    "fields": [
+                        "date",
+                        "google_ranking_change",
+                        "google_ranking_count",
+                        "google_local_ranking_change",
+                        "google_local_ranking_count",
+                        "google_mobile_ranking_change",
+                        "google_mobile_ranking_count",
+                        "bing_ranking_change",
+                        "bing_ranking_count",
+                        "ranking_average",
+                        "results",
+                        "volume",
+                        "competition",
+                        "field_status"
+                    ],
+                    "filters": filters,
+                    "group_by": ["date"],
+                    "sort": {"date": "asc"},
+                    "offset": 0,
+                    "limit": 9999
+                }
+
+                response = await self._request(body)
+                rows.extend(response.get("results", {}).get("rows", []))
+            return _keep_daily_rows(rows, f"campaign {campaign_id}")
         except Exception as e:
             logger.error(f"Error fetching campaign rankings for {campaign_id}: {str(e)}")
             raise
@@ -336,9 +403,12 @@ class AgencyAnalyticsClient:
                 
                 offset += batch_size
             except Exception as e:
-                logger.error(f"Error fetching keywords batch at offset {offset}: {str(e)}")
-                break
-        
+                # Fail the campaign rather than return a partial list: the sync deactivates
+                # keywords missing from this list, so a partial page would wrongly hide
+                # real keywords from charts and counts.
+                logger.error(f"Error fetching keywords batch at offset {offset} for campaign {campaign_id}: {str(e)}")
+                raise
+
         return all_keywords
     
     def format_keywords_data(self, keywords: List[Dict]) -> List[Dict]:
@@ -516,50 +586,55 @@ class AgencyAnalyticsClient:
             end_date: Optional end date (YYYY-MM-DD). If not provided, defaults to today.
 
         Returns:
-            List of keyword ranking records
+            List of daily keyword ranking records (ranges longer than MAX_DAILY_RANGE_DAYS
+            are fetched in chunks so Agency Analytics never switches to monthly rows)
         """
         try:
-            # Default to a rolling lookback window if dates not provided
+            # Default to a rolling lookback window if dates not provided (inclusive, so the
+            # default is exactly one daily-granularity request)
             if not end_date:
                 end_date = datetime.now().strftime("%Y-%m-%d")
             if not start_date:
-                start_date = (datetime.now() - timedelta(days=DEFAULT_SYNC_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+                start_date = (datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=DEFAULT_SYNC_LOOKBACK_DAYS - 1)).strftime("%Y-%m-%d")
 
-            filters = [
-                {"keyword_id": {"$equals_comparison": keyword_id}},
-                {"end_date": {"$lessthanorequal_comparison": end_date}},
-                {"start_date": {"$greaterthanorequal_comparison": start_date}}
-            ]
-            
-            body = {
-                "provider": "agency-analytics-v2",
-                "asset": "keyword-rankings",
-                "operation": "read",
-                "fields": [
-                    "date",
-                    "google_ranking",
-                    "google_ranking_url",
-                    "google_mobile_ranking",
-                    "google_mobile_ranking_url",
-                    "google_local_ranking",
-                    "bing_ranking",
-                    "bing_ranking_url",
-                    "results",
-                    "volume",
-                    "competition",
-                    "field_status"
-                ],
-                "filters": filters,
-                "group_by": ["date"],
-                "sort": [{"date": "asc"}],  # Use array format to match API playground
-                "offset": 0,
-                "limit": 9999
-            }
-            
-            response = await self._request(body)
-            rows = response.get("results", {}).get("rows", [])
+            rows = []
+            for chunk_start, chunk_end in daily_date_chunks(start_date, end_date):
+                filters = [
+                    {"keyword_id": {"$equals_comparison": keyword_id}},
+                    {"end_date": {"$lessthanorequal_comparison": chunk_end}},
+                    {"start_date": {"$greaterthanorequal_comparison": chunk_start}}
+                ]
+
+                body = {
+                    "provider": "agency-analytics-v2",
+                    "asset": "keyword-rankings",
+                    "operation": "read",
+                    "fields": [
+                        "date",
+                        "google_ranking",
+                        "google_ranking_url",
+                        "google_mobile_ranking",
+                        "google_mobile_ranking_url",
+                        "google_local_ranking",
+                        "bing_ranking",
+                        "bing_ranking_url",
+                        "results",
+                        "volume",
+                        "competition",
+                        "field_status"
+                    ],
+                    "filters": filters,
+                    "group_by": ["date"],
+                    "sort": [{"date": "asc"}],  # Use array format to match API playground
+                    "offset": 0,
+                    "limit": 9999
+                }
+
+                response = await self._request(body)
+                rows.extend(response.get("results", {}).get("rows", []))
+            rows = _keep_daily_rows(rows, f"keyword {keyword_id}")
             if not rows:
-                logger.debug(f"No ranking data returned from API for keyword {keyword_id} (response keys: {list(response.keys())})")
+                logger.debug(f"No ranking data returned from API for keyword {keyword_id} ({start_date}..{end_date})")
             else:
                 logger.debug(f"API returned {len(rows)} ranking records for keyword {keyword_id}")
             return rows

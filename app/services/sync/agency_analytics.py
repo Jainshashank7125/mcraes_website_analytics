@@ -276,6 +276,9 @@ async def sync_agency_analytics_background(
                     "keyword_rankings": [],
                     "keyword_summaries": []
                 }
+                # Keywords whose rankings could not be fetched (even after rate-limit
+                # retries). Reported instead of silently counting the campaign as success.
+                failed_keyword_ids = []
 
                 # Step 3a: Fetch campaign rankings
                 current_step_num += 1
@@ -396,6 +399,7 @@ async def sync_agency_analytics_background(
                             else:
                                 logger.debug(f"[Job {job_id}] No ranking data returned from API for keyword {keyword_id} ({keyword_phrase})")
                         except Exception as keyword_error:
+                            failed_keyword_ids.append(keyword_id)
                             logger.warning(f"[Job {job_id}] Error syncing keyword rankings for keyword {keyword_id} ({keyword_phrase}): {str(keyword_error)}")
                             import traceback
                             logger.debug(f"[Job {job_id}] Traceback: {traceback.format_exc()}")
@@ -446,11 +450,16 @@ async def sync_agency_analytics_background(
                 else:
                     logger.warning(f"[Job {job_id}] No keyword ranking summaries to upsert for campaign {campaign_id_val}")
 
+                if failed_keyword_ids:
+                    logger.error(
+                        f"[Job {job_id}] Campaign {campaign_id_val} ({company_name}): rankings for "
+                        f"{len(failed_keyword_ids)} keyword(s) could not be fetched; those days are missing or stale")
                 campaign_results.append({
                     "campaign_id": campaign_id_val,
                     "company": company_name,
-                    "status": "success",
-                    "keyword_count": len(campaign_data_batch["keywords"])
+                    "status": "partial" if failed_keyword_ids else "success",
+                    "keyword_count": len(campaign_data_batch["keywords"]),
+                    "keyword_rankings_failed": len(failed_keyword_ids)
                 })
 
             except Exception as campaign_error:
